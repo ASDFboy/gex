@@ -70,6 +70,10 @@ keys named `"pad_a"`, `"pad_b"`, `"pad_x"`, `"pad_y"`, `"pad_lb"`, `"pad_rb"`, `
 `"pad_rt"`, `"pad_start"`, `"pad_select"`, `"pad_up"`/`"pad_down"`/`"pad_left"`/`"pad_right"`;
 sticks are `AXIS("left_x")` and friends.
 
+**Input actions.** In File → Project settings, give an action a name and some keys (`jump` =
+`space, w, pad_a`). Then `KEY_DOWN("jump")`, `KEY_PRESSED("jump")` and `on_press_jump()` work
+with any of them, and you can change the keys later without touching scripts.
+
 ## Engine commands
 
 Where a command takes a node, give an id (a number from `self.id`, `NODE`, `SPAWN`...), a path

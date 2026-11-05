@@ -15,6 +15,8 @@ pub struct Input {
     pub mouse_down: HashSet<String>,
     pub mouse_pressed: HashSet<String>,
     pub mouse_released: HashSet<String>,
+    /// Input actions from the project: name → keys (see ProjectConfig::actions).
+    pub actions: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Input {
@@ -39,7 +41,17 @@ impl Input {
         }
     }
     /// Applies one frame of events: what's down now, given what was down before.
-    pub fn next_frame(&mut self, now_down: HashSet<String>, mouse: [f32; 2], mouse_down: HashSet<String>) {
+    pub fn next_frame(&mut self, mut now_down: HashSet<String>, mouse: [f32; 2], mouse_down: HashSet<String>) {
+        // An action is down while any of its keys is, so it gets pressed/released like a key.
+        for (name, keys) in &self.actions {
+            let on = keys.iter().any(|k| match k.strip_prefix("mouse_") {
+                Some(b) => mouse_down.contains(b),
+                None => now_down.contains(k.as_str()),
+            });
+            if on {
+                now_down.insert(name.clone());
+            }
+        }
         self.pressed = now_down.difference(&self.down).cloned().collect();
         self.released = self.down.difference(&now_down).cloned().collect();
         self.mouse_pressed = mouse_down.difference(&self.mouse_down).cloned().collect();
@@ -47,5 +59,24 @@ impl Input {
         self.down = now_down;
         self.mouse = mouse;
         self.mouse_down = mouse_down;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actions_and_mouse_names() {
+        let mut i = Input::default();
+        i.actions.insert("jump".into(), vec!["space".into(), "pad_a".into(), "mouse_right".into()]);
+        i.next_frame(["pad_a".to_string()].into(), [0.0; 2], HashSet::new());
+        assert!(i.key_down("jump") && i.key_pressed("jump"));
+        i.next_frame(["space".to_string()].into(), [0.0; 2], HashSet::new());
+        assert!(i.key_down("jump") && !i.key_pressed("jump"), "still held through another key");
+        i.next_frame(HashSet::new(), [0.0; 2], ["right".to_string()].into());
+        assert!(i.key_down("jump") && i.key_down("mouse_right") && !i.key_down("right"), "the right button isn't the right arrow");
+        i.next_frame(HashSet::new(), [0.0; 2], HashSet::new());
+        assert!(i.key_released("jump") && i.key_released("mouse_right"));
     }
 }

@@ -157,7 +157,7 @@ impl Game {
         commands::register();
         let st = Rc::new(RefCell::new(WorldState {
             tree,
-            input: Input::default(),
+            input: Input { actions: project.config.actions.clone(), ..Default::default() },
             time: 0.0,
             dt: 0.0,
             project: project.clone(),

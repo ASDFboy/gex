@@ -706,6 +706,10 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             }
         }
     });
+    let in_project = st.asset_dir.starts_with("res://");
+    if in_project && st.playing.is_none() {
+        asset_toolbar(ui, st);
+    }
     ui.separator();
     let entries = st.vfs.list(&st.asset_dir);
     let preview_w = 150.0;
@@ -739,6 +743,25 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 }
                 if r.clicked() {
                     st.asset_selected = Some(e.path.clone());
+                }
+                if in_project && st.playing.is_none() {
+                    r.context_menu(|ui| {
+                        if ui.button("Rename…").clicked() {
+                            set_dialog(ui.ctx(), AssetDialog::Rename(e.path.clone(), e.name.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Show in file manager").clicked() {
+                            if let Some(p) = st.project.res_to_path(&e.path) {
+                                crate::files::reveal(&p);
+                            }
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(RichText::new("Delete").color(theme::BAD)).on_hover_text("moves it to the project's hidden .trash folder").clicked() {
+                            set_dialog(ui.ctx(), AssetDialog::Delete(e.path.clone()));
+                            ui.close();
+                        }
+                    });
                 }
                 if r.double_clicked() {
                     if e.is_dir {
@@ -879,4 +902,107 @@ pub fn console(ui: &mut egui::Ui, st: &mut EditorState) {
             }
         }
     }
+}
+
+/// A small window the Assets panel is asking something in.
+#[derive(Clone)]
+enum AssetDialog {
+    Rename(String, String),
+    NewFolder(String),
+    Delete(String),
+}
+
+fn dialog_id() -> egui::Id {
+    egui::Id::new("gex asset dialog")
+}
+
+fn set_dialog(ctx: &egui::Context, d: AssetDialog) {
+    ctx.data_mut(|m| m.insert_temp(dialog_id(), Some(d)));
+}
+
+fn asset_toolbar(ui: &mut egui::Ui, st: &mut EditorState) {
+    ui.horizontal_wrapped(|ui| {
+        let dir = st.asset_dir.clone();
+        if ui.button("+ Folder").clicked() {
+            set_dialog(ui.ctx(), AssetDialog::NewFolder(String::new()));
+        }
+        ui.menu_button("+ Scene", |ui| {
+            for (label, k) in [("2D scene", NodeKind::Node2D), ("3D scene", NodeKind::Node3D), ("UI / menu", NodeKind::Node)] {
+                if ui.button(label).clicked() {
+                    st.new_scene_file(&dir, k);
+                    ui.close();
+                }
+            }
+        });
+        if ui.button("+ Script").clicked() {
+            st.new_script_file(&dir);
+        }
+        #[cfg(windows)]
+        if ui.button("Import…").on_hover_text("copy files into this folder (or drop them on the window)").clicked() {
+            if let Some(files) = rfd::FileDialog::new().pick_files() {
+                st.import_files(&files);
+            }
+        }
+        if ui.button("Open folder").on_hover_text("open this folder in the file manager (drop files on the window to import them)").clicked() {
+            if let Some(p) = st.project.res_to_path(&dir) {
+                crate::files::reveal(&p);
+            }
+        }
+    });
+    // The open dialog, if any.
+    let ctx = ui.ctx().clone();
+    let Some(mut d) = ctx.data(|m| m.get_temp::<Option<AssetDialog>>(dialog_id())).flatten() else { return };
+    let mut open = true;
+    let mut done = false;
+    let title = match &d {
+        AssetDialog::Rename(..) => "Rename",
+        AssetDialog::NewFolder(_) => "New folder",
+        AssetDialog::Delete(_) => "Delete",
+    };
+    egui::Window::new(title).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| match &mut d {
+        AssetDialog::Rename(res, name) => {
+            ui.label(RichText::new(res.as_str()).monospace().small());
+            let r = ui.text_edit_singleline(name);
+            r.request_focus();
+            ui.label(RichText::new("Scenes and scripts that use it are updated too.").small().color(theme::TEXT_DIM));
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Rename").clicked() || enter {
+                match st.rename_asset(res, name) {
+                    Ok(_) => done = true,
+                    Err(e) => st.status = e,
+                }
+            }
+        }
+        AssetDialog::NewFolder(name) => {
+            let r = ui.text_edit_singleline(name);
+            r.request_focus();
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Create").clicked() || enter {
+                match crate::files::new_folder(&st.project, &st.asset_dir, name) {
+                    Ok(r) => {
+                        st.asset_dir = r;
+                        done = true;
+                    }
+                    Err(e) => st.status = e,
+                }
+            }
+        }
+        AssetDialog::Delete(res) => {
+            ui.label(format!("Move {} to the trash?", res));
+            ui.label(RichText::new("It goes to the project's hidden .trash folder, so you can get it back.").small().color(theme::TEXT_DIM));
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new("Delete").color(theme::BAD)).clicked() {
+                    match st.delete_asset(res) {
+                        Ok(()) => done = true,
+                        Err(e) => st.status = e,
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    done = true;
+                }
+            });
+        }
+    });
+    let keep = open && !done;
+    ctx.data_mut(|m| m.insert_temp(dialog_id(), if keep { Some(d) } else { None }));
 }

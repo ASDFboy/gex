@@ -19,11 +19,14 @@ pub struct ProjectConfig {
     pub gravity_2d: [f32; 2],
     /// Gravity for 3D bodies, in metres per second².
     pub gravity_3d: [f32; 3],
+    /// Input actions: a name scripts use ("jump") → the keys and buttons that trigger it
+    /// (["space", "w", "pad_a"]). `KEY_DOWN("jump")` and `on_press_jump()` then work with any.
+    pub actions: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        ProjectConfig { name: "New Game".into(), main_scene: "res://scenes/main.jscene".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: [0.0, 980.0], gravity_3d: [0.0, -9.81, 0.0] }
+        ProjectConfig { name: "New Game".into(), main_scene: "res://scenes/main.jscene".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: [0.0, 980.0], gravity_3d: [0.0, -9.81, 0.0], actions: Default::default() }
     }
 }
 

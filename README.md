@@ -34,7 +34,8 @@ cargo test --workspace                         # everything's tests, including t
   and mesh collision.
 - **UI:** panels, labels, buttons, text inputs, progress bars and images, anchored to the screen.
 - **Sound:** sound effects, music, Sound nodes (wav, ogg, mp3, flac).
-- **Input:** keyboard, mouse and gamepads.
+- **Input:** keyboard, mouse and gamepads, with named input actions set in Project settings.
+- **Particles:** a Particles2D node for sparks, smoke and trails (previewed live in the editor).
 - **Scripting in .jlb.** Any number of scripts per node. A script's outside variables are that
   node's instance variables, `self` is the node, and events are functions with fixed names
   (`on_create`, `on_step(dt)`, `on_collide_start(other)`, `on_press_space`, `on_timer_<name>`,
@@ -46,6 +47,9 @@ cargo test --workspace                         # everything's tests, including t
   `:` command line, optional Vim keys in the script editor, completion, go to definition,
   find/replace, breakpoints with a debugger, Play/Stop with live values in the inspector, and
   scripts that reload while the game runs.
+- **Project files:** the Assets panel makes folders, scenes and scripts, imports files dropped on
+  the window, and renames (fixing every scene and script that uses the file) or deletes (into a
+  hidden `.trash` folder) with a right-click.
 - **Export:** File → Export game makes a folder with the game and a player that runs it.
 - **Half-Life 2 assets**, read in place from your own Steam install (`hl2://`): VPK archives,
   VTF textures, VMT materials, models, maps and sounds. They are never copied into exports.

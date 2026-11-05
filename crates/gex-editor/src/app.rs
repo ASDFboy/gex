@@ -174,6 +174,11 @@ struct SettingsForm {
     hl2_games: String,
     hl2_on: bool,
     message: String,
+    window: [u32; 2],
+    gravity_2d: f32,
+    gravity_3d: f32,
+    /// (action name, keys as "space, w, pad_a").
+    actions: Vec<(String, String)>,
 }
 
 impl EditorApp {
@@ -552,6 +557,10 @@ impl EditorApp {
             f.name = st.project.config.name.clone();
             f.main_scene = st.project.config.main_scene.clone();
             f.message.clear();
+            f.window = st.project.config.window_size;
+            f.gravity_2d = st.project.config.gravity_2d[1];
+            f.gravity_3d = -st.project.config.gravity_3d[1];
+            f.actions = st.project.config.actions.iter().map(|(k, v)| (k.clone(), v.join(", "))).collect();
             f.hl2_on = false;
             f.hl2_games = "ep2, episodic, hl2".into();
             f.hl2_path.clear();
@@ -572,9 +581,55 @@ impl EditorApp {
                 ui.text_edit_singleline(&mut f.name);
                 ui.end_row();
                 ui.label("Main scene");
-                ui.text_edit_singleline(&mut f.main_scene);
+                egui::ComboBox::from_id_salt("main scene").selected_text(f.main_scene.trim_start_matches("res://")).width(300.0).show_ui(ui, |ui| {
+                    for sc in scene_files(&st.project) {
+                        let label = sc.trim_start_matches("res://").to_string();
+                        ui.selectable_value(&mut f.main_scene, sc, label);
+                    }
+                });
+                ui.end_row();
+                ui.label("Window size");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut f.window[0]).range(160..=7680).suffix(" px"));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut f.window[1]).range(120..=4320).suffix(" px"));
+                    for (w, h) in [(1280, 720), (1920, 1080), (640, 360), (320, 180)] {
+                        if ui.small_button(format!("{}×{}", w, h)).clicked() {
+                            f.window = [w, h];
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label("Gravity 2D");
+                ui.add(egui::DragValue::new(&mut f.gravity_2d).speed(10.0).suffix(" px/s² down"));
+                ui.end_row();
+                ui.label("Gravity 3D");
+                ui.add(egui::DragValue::new(&mut f.gravity_3d).speed(0.1).suffix(" m/s² down"));
                 ui.end_row();
             });
+            ui.separator();
+            ui.label(RichText::new("Input actions").strong());
+            ui.label(
+                RichText::new("Name an action once and give it any keys: then KEY_DOWN(\"jump\") and on_press_jump() work with all of them. Keys: a–z, 0–9, space, enter, escape, shift, left, right, up, down, mouse_left, mouse_right, pad_a, pad_b, pad_x, pad_y, pad_left, pad_start…")
+                    .small()
+                    .color(theme::TEXT_DIM),
+            );
+            let mut remove = None;
+            for (i, (name, keys)) in f.actions.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.add_sized([120.0, 20.0], egui::TextEdit::singleline(name).hint_text("jump"));
+                    ui.add_sized([300.0, 20.0], egui::TextEdit::singleline(keys).hint_text("space, w, pad_a"));
+                    if ui.small_button("✖").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                f.actions.remove(i);
+            }
+            if ui.small_button("+ Action").clicked() {
+                f.actions.push((String::new(), String::new()));
+            }
             ui.separator();
             ui.label(RichText::new("Half-Life 2 assets").strong());
             ui.label(
@@ -609,6 +664,15 @@ impl EditorApp {
             if ui.button("Apply").clicked() {
                 st.project.config.name = f.name.clone();
                 st.project.config.main_scene = f.main_scene.clone();
+                st.project.config.window_size = f.window;
+                st.project.config.gravity_2d = [0.0, f.gravity_2d];
+                st.project.config.gravity_3d = [0.0, -f.gravity_3d, 0.0];
+                st.project.config.actions = f
+                    .actions
+                    .iter()
+                    .map(|(n, k)| (n.trim().to_lowercase().replace(' ', "_"), k.split([',', ' ']).map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty()).collect::<Vec<_>>()))
+                    .filter(|(n, k)| !n.is_empty() && !k.is_empty())
+                    .collect();
                 st.project.config.mounts.retain(|m| m.scheme != "hl2");
                 if f.hl2_on && !f.hl2_path.trim().is_empty() {
                     let games = f.hl2_games.split(',').map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).collect();
@@ -752,6 +816,28 @@ fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
     }
 }
 
+/// Every .jscene in the project, as res:// paths.
+fn scene_files(p: &Project) -> Vec<String> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = e.path();
+            if e.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|x| x == "jscene") {
+                out.push(path);
+            }
+        }
+    }
+    let mut v = Vec::new();
+    walk(&p.dir, &mut v);
+    let mut r: Vec<String> = v.iter().filter_map(|x| p.path_to_res(x)).collect();
+    r.sort();
+    r
+}
+
 /// A "Browse…" button with the native folder dialog (Windows; elsewhere, type the path).
 fn browse_button(ui: &mut egui::Ui) -> Option<String> {
     #[cfg(windows)]
@@ -782,6 +868,19 @@ impl eframe::App for EditorApp {
             st.pump_game();
             if st.playing.is_some() {
                 ctx.request_repaint();
+            }
+            // Files dropped on the window go into the project.
+            let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+            if !dropped.is_empty() {
+                st.import_files(&dropped);
+            }
+            // Script tabs whose files were renamed.
+            for (old, new) in std::mem::take(&mut st.renamed_scripts) {
+                for (_, t) in self.dock.iter_all_tabs_mut() {
+                    if *t == Tab::Script(old.clone()) {
+                        *t = Tab::Script(new.clone());
+                    }
+                }
             }
             // Script tabs to open / close.
             for r in std::mem::take(&mut st.open_requests) {

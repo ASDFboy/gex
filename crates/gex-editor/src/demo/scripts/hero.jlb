@@ -8,11 +8,12 @@ vy = 0
 on_floor = FALSE
 
 DEF on_physics(dt) {
+	>> move_left, move_right and jump are input actions (Project settings), so each
+	>> covers the arrows, WASD and a gamepad at once.
 	dx = AXIS("left_x")
-	IF KEY_DOWN("left") OR KEY_DOWN("a") OR KEY_DOWN("pad_left") { dx = -1 }
-	IF KEY_DOWN("right") OR KEY_DOWN("d") OR KEY_DOWN("pad_right") { dx = 1 }
-	wants_jump = KEY_PRESSED("space") OR KEY_PRESSED("w") OR KEY_PRESSED("up") OR KEY_PRESSED("pad_a")
-	IF wants_jump AND on_floor {
+	IF KEY_DOWN("move_left") { dx = -1 }
+	IF KEY_DOWN("move_right") { dx = 1 }
+	IF KEY_PRESSED("jump") AND on_floor {
 		GLOBAL vy = 0 - jump
 		PLAY_SOUND("res://assets/jump.wav")
 	}

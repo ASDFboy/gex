@@ -9,6 +9,7 @@
 
 mod app;
 mod code;
+mod files;
 mod gamepad;
 mod panels;
 mod state;

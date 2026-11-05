@@ -116,6 +116,8 @@ pub struct EditorState {
     /// Particles2D previews in the scene view (not while playing).
     pub preview_particles: HashMap<NodeId, gex_script::particles::Emitter>,
     pub particle_clock: Instant,
+    /// Script tabs whose file was renamed: (old, new), for the dock to follow.
+    pub renamed_scripts: Vec<(String, String)>,
     /// Something asked for the command line to open (":" in Vim normal mode).
     pub open_command: bool,
 }
@@ -156,6 +158,7 @@ impl EditorState {
             breakpoints: HashMap::new(),
             game_breakpoints: Default::default(),
             preview_particles: HashMap::new(),
+            renamed_scripts: Vec::new(),
             particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
             open_command: false,
@@ -493,6 +496,154 @@ impl EditorState {
             node.instance_of = None;
             node.from_instance = false;
         }
+    }
+
+    // ---------- project files ----------
+
+    /// Renames a project file or folder, fixing references to it on disk and in everything open.
+    pub fn rename_asset(&mut self, old: &str, new_name: &str) -> Result<String, String> {
+        if self.playing.is_some() {
+            return Err("stop the game first".into());
+        }
+        let (new, fixed) = crate::files::rename(&self.project, old, new_name)?;
+        let swap = |s: &str| -> Option<String> {
+            if s == old {
+                Some(new.clone())
+            } else {
+                s.strip_prefix(old).filter(|r| r.starts_with('/')).map(|r| format!("{}{}", new, r))
+            }
+        };
+        let fix_tree = |t: &mut SceneTree| {
+            for (_, n) in t.nodes.iter_mut() {
+                for sc in n.scripts.iter_mut() {
+                    if let Some(x) = swap(sc) {
+                        *sc = x;
+                    }
+                }
+                if let Some(x) = n.instance_of.as_deref().and_then(swap) {
+                    n.instance_of = Some(x);
+                }
+                for v in n.props.values_mut() {
+                    match v {
+                        gex_core::Variant::Res(r) | gex_core::Variant::Text(r) => {
+                            if let Some(x) = swap(r) {
+                                *r = x;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        };
+        let fix_text = |t: &mut String| {
+            if let Some(x) = crate::files::replace_ref(t, old, &new) {
+                *t = x;
+            }
+        };
+        fix_tree(&mut self.tree);
+        self.undo.iter_mut().chain(self.redo.iter_mut()).for_each(fix_tree);
+        fix_text(&mut self.scene_saved);
+        if let Some(x) = self.scene_res.as_deref().and_then(swap) {
+            self.scene_res = Some(x);
+        }
+        for d in &mut self.docs {
+            fix_tree(&mut d.tree);
+            d.undo.iter_mut().chain(d.redo.iter_mut()).for_each(fix_tree);
+            fix_text(&mut d.scene_saved);
+            if let Some(x) = d.scene_res.as_deref().and_then(swap) {
+                d.scene_res = Some(x);
+            }
+        }
+        let keys: Vec<String> = self.scripts.keys().cloned().collect();
+        for k in keys {
+            let mut sc = self.scripts.remove(&k).unwrap();
+            fix_text(&mut sc.text);
+            fix_text(&mut sc.saved);
+            let key = match swap(&k) {
+                Some(x) => {
+                    self.renamed_scripts.push((k.clone(), x.clone()));
+                    sc.res = x.clone();
+                    x
+                }
+                None => k,
+            };
+            self.scripts.insert(key, sc);
+        }
+        let bps: Vec<String> = self.breakpoints.keys().filter(|k| swap(k).is_some()).cloned().collect();
+        for k in bps {
+            let v = self.breakpoints.remove(&k).unwrap();
+            self.breakpoints.insert(swap(&k).unwrap(), v);
+        }
+        if let Some(x) = self.asset_selected.as_deref().and_then(swap) {
+            self.asset_selected = Some(x);
+        }
+        if let Some(x) = swap(&self.asset_dir) {
+            self.asset_dir = x;
+        }
+        self.renderer.as_mut().map(|r| r.reload_textures());
+        let msg = if fixed.is_empty() { format!("renamed to {}", new) } else { format!("renamed to {} (fixed {} file(s): {})", new, fixed.len(), fixed.join(", ")) };
+        self.log(LogKind::Info, msg);
+        Ok(new)
+    }
+
+    /// Moves a project file or folder to the hidden .trash folder.
+    pub fn delete_asset(&mut self, res: &str) -> Result<(), String> {
+        if self.playing.is_some() {
+            return Err("stop the game first".into());
+        }
+        if self.scene_res.as_deref() == Some(res) || self.docs.iter().any(|d| d.scene_res.as_deref() == Some(res)) {
+            return Err("close that scene first".into());
+        }
+        let to = crate::files::trash(&self.project, res)?;
+        self.scripts.retain(|k, _| k != res && !k.starts_with(&format!("{}/", res)));
+        if self.asset_selected.as_deref() == Some(res) {
+            self.asset_selected = None;
+        }
+        self.log(LogKind::Info, format!("moved {} to {} (move it back to undo)", res, to.display()));
+        Ok(())
+    }
+
+    /// Copies files from disk into the project (dropped on the window, or picked).
+    pub fn import_files(&mut self, files: &[PathBuf]) {
+        let dir = if self.asset_dir.starts_with("res://") { self.asset_dir.clone() } else { "res://assets".to_string() };
+        if let Some(p) = self.project.res_to_path(&dir) {
+            let _ = std::fs::create_dir_all(p);
+        }
+        match crate::files::import(&self.project, &dir, files) {
+            Ok(made) => {
+                if let Some(last) = made.last() {
+                    self.asset_dir = dir;
+                    self.asset_selected = Some(last.clone());
+                }
+                self.log(LogKind::Info, format!("imported {}", made.join(", ")));
+            }
+            Err(e) => self.log(LogKind::Error, format!("import: {}", e)),
+        }
+    }
+
+    /// A new empty scene file in a folder, opened in a tab.
+    pub fn new_scene_file(&mut self, dir: &str, kind: gex_core::NodeKind) -> Option<String> {
+        let res = crate::files::free_name(&self.project, dir, "new_scene.jscene")?;
+        let path = self.project.res_to_path(&res)?;
+        let root = if kind.is_3d() { "World" } else { "Main" };
+        if let Err(e) = std::fs::write(&path, gex_core::scene::new_scene_text(root, kind)) {
+            self.log(LogKind::Error, e.to_string());
+            return None;
+        }
+        self.open_scene(&res);
+        Some(res)
+    }
+
+    /// A new script file in a folder, opened in a tab.
+    pub fn new_script_file(&mut self, dir: &str) -> Option<String> {
+        let res = crate::files::free_name(&self.project, dir, "new_script.jlb")?;
+        let path = self.project.res_to_path(&res)?;
+        if let Err(e) = std::fs::write(&path, ">> Attach this to a node in the Events panel.\n\nDEF on_create() {\n\t\n}\n") {
+            self.log(LogKind::Error, e.to_string());
+            return None;
+        }
+        self.open_script(&res, None);
+        Some(res)
     }
 
     /// Selects just this node.
