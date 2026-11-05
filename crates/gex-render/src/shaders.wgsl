@@ -24,6 +24,7 @@ struct InstanceIn {
     @location(5) m2: vec4<f32>,
     @location(6) m3: vec4<f32>,
     @location(7) color: vec4<f32>,
+    @location(8) uv: vec4<f32>,
 };
 
 fn encode(c: vec4<f32>) -> vec4<f32> {
@@ -53,7 +54,7 @@ fn vs_mesh(v: MeshIn, i: InstanceIn) -> MeshOut {
     var o: MeshOut;
     o.clip = g.view_proj_3d * model * vec4<f32>(v.pos, 1.0);
     o.normal = normalize((model * vec4<f32>(v.normal, 0.0)).xyz);
-    o.uv = v.uv;
+    o.uv = v.uv * i.uv.zw + i.uv.xy;
     o.color = i.color;
     return o;
 }
@@ -87,7 +88,7 @@ fn vs_sprite(v: SpriteIn, i: InstanceIn) -> SpriteOut {
     let model = mat4x4<f32>(i.m0, i.m1, i.m2, i.m3);
     var o: SpriteOut;
     o.clip = g.view_proj_2d * model * vec4<f32>(v.pos, 0.0, 1.0);
-    o.uv = v.uv;
+    o.uv = mix(i.uv.xy, i.uv.zw, v.uv);
     o.color = i.color;
     return o;
 }

@@ -37,6 +37,32 @@ pub struct LogLine {
     pub line: usize,
 }
 
+/// One frame's input from the window.
+#[derive(Clone, Debug, Default)]
+pub struct FrameInput {
+    pub dt: f64,
+    /// Keys (and gamepad buttons, "pad_a"...) held down.
+    pub keys: HashSet<String>,
+    pub mouse: [f32; 2],
+    pub buttons: HashSet<String>,
+    /// Mouse wheel movement this frame (positive is up).
+    pub wheel: f32,
+    /// Gamepad sticks and triggers: "left_x", "left_y", "right_x", "right_y", "lt", "rt".
+    pub axes: HashMap<String, f32>,
+    pub ui: Vec<UiEvent>,
+}
+
+#[derive(Clone, Debug)]
+pub enum UiEvent {
+    Pressed(NodeId),
+    Changed(NodeId, String),
+    Submitted(NodeId, String),
+}
+
+fn jle_vec(x: f32, y: f32) -> glam::Vec3 {
+    glam::Vec3::new(x, y, 0.0)
+}
+
 pub(crate) enum Pending {
     /// Run `handler` on one node's scripts, or on every node's when `target` is None.
     Event { target: Option<NodeId>, handler: String, args: Vec<Value> },
@@ -68,6 +94,15 @@ pub struct WorldState {
     pub touching: HashSet<(NodeId, NodeId)>,
     pub(crate) queue: VecDeque<Pending>,
     pub(crate) timers: Vec<Timer>,
+    pub physics: crate::physics::Physics,
+    pub audio: crate::audio::Audio,
+    pub vfs: gex_assets::Vfs,
+    pub axes: HashMap<String, f32>,
+    pub wheel: f32,
+    /// DRAW_* commands from this frame.
+    pub draws: Vec<crate::commands::Draw>,
+    /// Sprite animations: node → (animation, time, ended).
+    pub(crate) anims: HashMap<NodeId, (String, f64, bool)>,
 }
 
 impl WorldState {
@@ -127,6 +162,13 @@ impl Game {
             touching: HashSet::new(),
             queue: VecDeque::new(),
             timers: Vec::new(),
+            physics: crate::physics::Physics::new(project.config.gravity_2d, project.config.gravity_3d),
+            audio: Default::default(),
+            vfs: gex_assets::Vfs::new(&project.dir, &project.config),
+            axes: HashMap::new(),
+            wheel: 0.0,
+            draws: Vec::new(),
+            anims: HashMap::new(),
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
@@ -159,10 +201,24 @@ impl Game {
         self.started = true;
         let ids = self.st.borrow().tree.walk();
         self.attach_all(&ids);
+        self.autoplay(&ids);
         for id in &ids {
             self.run(*id, "on_create", vec![]);
         }
         self.drain();
+    }
+
+    /// Starts Sound nodes that play by themselves.
+    fn autoplay(&mut self, ids: &[NodeId]) {
+        let mut st = self.st.borrow_mut();
+        for id in ids {
+            let auto = st.tree.get(*id).is_some_and(|n| n.kind == NodeKind::Sound && n.prop("autoplay").is_some_and(|v| v.as_bool()));
+            if auto {
+                if let Err(e) = crate::commands::play_node(&mut st, *id) {
+                    st.log(LogKind::Error, e);
+                }
+            }
+        }
     }
 
     fn attach_all(&mut self, ids: &[NodeId]) {
@@ -332,18 +388,32 @@ impl Game {
         }
     }
 
-    /// One frame of the game.
+    /// One frame of the game (the simple form, for tools and tests).
     pub fn frame(&mut self, dt: f64, keys_down: HashSet<String>, mouse: [f32; 2], mouse_down: HashSet<String>) {
+        self.step(FrameInput { dt, keys: keys_down, mouse, buttons: mouse_down, ..Default::default() });
+    }
+
+    /// One frame of the game.
+    pub fn step(&mut self, input: FrameInput) {
         self.start();
-        let dt = dt.clamp(0.0, 0.25);
+        let dt = input.dt.clamp(0.0, 0.25);
+        let moved;
         {
             let mut st = self.st.borrow_mut();
-            st.input.next_frame(keys_down, mouse, mouse_down);
+            moved = st.input.mouse != input.mouse;
+            st.input.next_frame(input.keys, input.mouse, input.buttons);
+            st.axes = input.axes;
+            st.wheel = input.wheel;
             st.dt = dt;
             st.time += dt;
+            st.draws.clear();
+        }
+        // UI first: a click belongs to the frame it happened in.
+        for ev in input.ui {
+            self.ui_event(ev);
         }
         // Input events.
-        let (pressed, released, clicks) = {
+        let (pressed, released, clicks, mouse) = {
             let st = self.st.borrow();
             let mut p: Vec<String> = st.input.pressed.iter().cloned().collect();
             let mut r: Vec<String> = st.input.released.iter().cloned().collect();
@@ -351,7 +421,7 @@ impl Game {
             p.sort();
             r.sort();
             c.sort();
-            (p, r, c)
+            (p, r, c, st.input.mouse)
         };
         for k in pressed {
             self.broadcast("on_key_pressed", vec![Value::text(&k)]);
@@ -362,9 +432,15 @@ impl Game {
             self.broadcast(&format!("on_release_{}", k), vec![]);
         }
         for b in clicks {
-            let m = self.st.borrow().input.mouse;
-            self.broadcast("on_mouse_pressed", vec![Value::text(&b), num(m[0] as f64), num(m[1] as f64)]);
+            self.broadcast("on_mouse_pressed", vec![Value::text(&b), num(mouse[0] as f64), num(mouse[1] as f64)]);
         }
+        if moved {
+            self.broadcast("on_mouse_moved", vec![num(mouse[0] as f64), num(mouse[1] as f64)]);
+        }
+        if input.wheel != 0.0 {
+            self.broadcast("on_mouse_wheel", vec![num(input.wheel as f64)]);
+        }
+        self.tile_statics();
         // Fixed-rate physics and collisions.
         self.physics_acc += dt;
         let step = 1.0 / PHYSICS_HZ;
@@ -373,12 +449,141 @@ impl Game {
             self.physics_acc -= step;
             steps += 1;
             self.broadcast("on_physics", vec![num(step)]);
+            {
+                let mut st = self.st.borrow_mut();
+                let st = &mut *st;
+                st.physics.step(&mut st.tree);
+            }
             self.collisions();
         }
         self.broadcast("on_step", vec![num(dt)]);
+        self.broadcast("on_draw", vec![]);
+        self.animate(dt);
         self.timers(dt);
+        {
+            // Sound nodes report whether they're still playing.
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            st.audio.tidy();
+            let playing: Vec<(NodeId, bool)> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Sound).map(|i| (i, st.audio.by_node.contains_key(&i))).collect();
+            for (i, p) in playing {
+                st.tree.nodes[i].props.insert("playing".into(), Variant::Bool(p));
+            }
+        }
         self.conditions();
         self.drain();
+    }
+
+    /// A click or text change from the UI.
+    pub fn ui_event(&mut self, ev: UiEvent) {
+        match ev {
+            UiEvent::Pressed(id) => {
+                let name = match self.st.borrow().tree.get(id) {
+                    Some(n) => n.name.clone(),
+                    None => return,
+                };
+                self.run(id, "on_pressed", vec![]);
+                let slug: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+                self.broadcast(&format!("on_pressed_{}", slug), vec![]);
+            }
+            UiEvent::Changed(id, text) => {
+                if let Some(n) = self.st.borrow_mut().tree.get_mut(id) {
+                    n.props.insert("text".into(), Variant::Text(text.clone()));
+                }
+                self.run(id, "on_text_changed", vec![Value::text(&text)]);
+            }
+            UiEvent::Submitted(id, text) => self.run(id, "on_text_submitted", vec![Value::text(&text)]),
+        }
+    }
+
+    /// Sprite sheet animations: moves each animated Sprite2D to its current frame.
+    fn animate(&mut self, dt: f64) {
+        let mut ended = Vec::new();
+        {
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            let ids: Vec<NodeId> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Sprite2D).collect();
+            for id in ids {
+                let n = &st.tree.nodes[id];
+                let name = n.text("animation").to_string();
+                if name.is_empty() {
+                    st.anims.remove(&id);
+                    continue;
+                }
+                let Some(frames) = gex_core::tiles::animation_frames(n.text("animations"), &name) else { continue };
+                if frames.is_empty() {
+                    continue;
+                }
+                let fps = n.num("anim_fps", 10.0).max(0.0);
+                let looped = n.prop("anim_loop").is_none_or(|v| v.as_bool());
+                let a = st.anims.entry(id).or_insert_with(|| (name.clone(), 0.0, false));
+                if a.0 != name {
+                    *a = (name.clone(), 0.0, false);
+                } else {
+                    a.1 += dt;
+                }
+                let mut k = (a.1 * fps).floor() as usize;
+                if k >= frames.len() {
+                    if looped {
+                        k %= frames.len();
+                    } else {
+                        k = frames.len() - 1;
+                        if !a.2 {
+                            a.2 = true;
+                            ended.push((id, name.clone()));
+                        }
+                    }
+                }
+                st.tree.nodes[id].props.insert("frame".into(), Variant::Num(frames[k] as f64));
+            }
+        }
+        for (id, name) in ended {
+            self.run(id, "on_animation_end", vec![Value::text(&name)]);
+        }
+    }
+
+    /// Solid tiles become static physics boxes (rows of tiles merged into one box).
+    fn tile_statics(&mut self) {
+        let mut st = self.st.borrow_mut();
+        let st = &mut *st;
+        let mut boxes = Vec::new();
+        for id in st.tree.walk() {
+            let n = &st.tree.nodes[id];
+            if n.kind != NodeKind::TileMap2D || !n.prop("solid").is_none_or(|v| v.as_bool()) {
+                continue;
+            }
+            let grid = gex_core::tiles::parse(n.text("tiles"));
+            let only = gex_core::tiles::solid_set(n.text("solid_tiles"));
+            let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
+            let m = st.tree.global_matrix(id);
+            let solid = |t: i32| t >= 0 && only.as_ref().is_none_or(|o| o.contains(&t));
+            for (r, row) in grid.iter().enumerate() {
+                let mut c = 0;
+                while c < row.len() {
+                    if !solid(row[c]) {
+                        c += 1;
+                        continue;
+                    }
+                    let start = c;
+                    while c < row.len() && solid(row[c]) {
+                        c += 1;
+                    }
+                    let a = m.transform_point3(jle_vec(start as f32 * tw, r as f32 * th));
+                    let b = m.transform_point3(jle_vec(c as f32 * tw, (r + 1) as f32 * th));
+                    let (lo, hi) = (a.min(b).truncate(), a.max(b).truncate());
+                    boxes.push(crate::physics::StaticBox2 { owner: id, center: (lo + hi) / 2.0, half: (hi - lo) / 2.0 });
+                }
+            }
+        }
+        st.physics.statics_2d = boxes;
+    }
+
+    /// What to draw this frame: the tree plus anything scripts drew with DRAW_*.
+    pub fn render_list(&self) -> gex_core::render::RenderList {
+        let st = self.st.borrow();
+        let mut list = gex_core::render::extract(&st.tree);
+        crate::commands::append_draws(&st.draws, &mut list);
+        list
     }
 
     fn timers(&mut self, dt: f64) {
@@ -448,6 +653,23 @@ impl Game {
                 boxes.push((owner, aabb(tree, id)));
             }
             let mut now = HashSet::new();
+            // Physics bodies touching each other, reported for their owners.
+            let owner_of = |id: NodeId| -> NodeId {
+                match tree.get(id) {
+                    Some(n) if !self.scripts.contains_key(&id) => match n.parent {
+                        Some(p) if self.scripts.contains_key(&p) && n.kind != NodeKind::Body2D && n.kind != NodeKind::Body3D => p,
+                        _ => id,
+                    },
+                    _ => id,
+                }
+            };
+            for (a, b) in st.physics.touching() {
+                let (a, b) = (owner_of(a), owner_of(b));
+                if a != b {
+                    now.insert((a, b));
+                    now.insert((b, a));
+                }
+            }
             for i in 0..boxes.len() {
                 for j in i + 1..boxes.len() {
                     let (a, ra) = boxes[i];
@@ -489,6 +711,7 @@ impl Game {
                     let mut ids = Vec::new();
                     self.st.borrow().tree.walk_from(id, &mut ids);
                     self.attach_all(&ids);
+                    self.autoplay(&ids);
                     for i in ids {
                         self.run(i, "on_create", vec![]);
                     }
@@ -499,9 +722,13 @@ impl Game {
                     for i in ids.iter().rev() {
                         self.run(*i, "on_destroy", vec![]);
                     }
-                    let gone = self.st.borrow_mut().tree.remove(id);
+                    let mut st = self.st.borrow_mut();
+                    let gone = st.tree.remove(id);
                     for g in gone {
                         self.scripts.remove(&g);
+                        if let Some(s) = st.audio.by_node.remove(&g) {
+                            st.audio.stop(s);
+                        }
                     }
                 }
             }

@@ -2,20 +2,19 @@
 //! The editor sends input each frame; the game sends back what to draw, a copy of its
 //! tree (for the inspector) and log lines.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use gex_core::project::Project;
-use gex_core::render::{extract, RenderList};
+use gex_core::render::RenderList;
 use gex_core::{scene, SceneTree};
 
-use crate::world::{Game, LogKind, LogLine};
+use crate::world::{FrameInput, Game, LogKind, LogLine};
 
 pub enum ToGame {
-    Frame { dt: f64, keys: HashSet<String>, mouse: [f32; 2], buttons: HashSet<String> },
+    Frame(FrameInput),
     Stop,
 }
 
@@ -51,8 +50,8 @@ impl GameHandle {
     }
 
     /// Asks for the next frame, unless the last one isn't done yet.
-    pub fn request_frame(&mut self, dt: f64, keys: HashSet<String>, mouse: [f32; 2], buttons: HashSet<String>) {
-        if !self.waiting && self.tx.send(ToGame::Frame { dt, keys, mouse, buttons }).is_ok() {
+    pub fn request_frame(&mut self, input: FrameInput) {
+        if !self.waiting && self.tx.send(ToGame::Frame(input)).is_ok() {
             self.waiting = true;
         }
     }
@@ -95,8 +94,8 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
     while let Ok(msg) = rx.recv() {
         match msg {
             ToGame::Stop => break,
-            ToGame::Frame { dt, keys, mouse, buttons } => {
-                game.frame(dt, keys, mouse, buttons);
+            ToGame::Frame(input) => {
+                game.step(input);
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
@@ -110,10 +109,8 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                     game.st.borrow_mut().logs.extend(logs);
                 }
                 let quit = game.st.borrow().quit;
-                let (list, tree) = {
-                    let t = game.tree();
-                    (extract(&t), t.clone())
-                };
+                let list = game.render_list();
+                let tree = game.tree().clone();
                 let logs = game.take_logs();
                 if tx.send(FromGame::Frame { list, tree, logs }).is_err() || quit {
                     break;

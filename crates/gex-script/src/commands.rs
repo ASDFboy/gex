@@ -32,12 +32,33 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("TIMER", "(name, seconds, repeat)", "runs on_timer(name) and on_timer_<name>() later"),
     ("TIMER_STOP", "(name)", "cancels this node's timer"),
     ("COLLIDING", "(node)", "the nodes touching this one now, as a table of ids"),
+    ("MOVE", "(node, dx, dy, dz)", "moves a body, sliding along walls; gives TRUE when it's on the floor after"),
+    ("IMPULSE", "(node, x, y, z)", "adds to a dynamic body's velocity at once (a kick or a jump), whatever its mass"),
+    ("RAYCAST", "(x, y, dx, dy, length, ignore)", "the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL"),
+    ("RAYCAST_3D", "(x, y, z, dx, dy, dz, length, ignore)", "the same in 3D"),
     ("DISTANCE", "(a, b)", "how far apart two nodes are"),
+    ("PLAY_SOUND", "(file, volume, pitch)", "plays a sound file once (res:// or hl2://...); gives its id"),
+    ("STOP_SOUND", "(id)", "stops a sound from PLAY_SOUND (NULL stops every sound)"),
+    ("PLAY", "(node)", "starts a Sound node"),
+    ("STOP", "(node)", "stops a Sound node"),
+    ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
+    ("VOLUME", "(level)", "the master volume, 0 to 1"),
+    ("ANIMATE", "(node, name)", "plays a Sprite2D animation (from its animations property)"),
+    ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
+    ("SET_TILE", "(node, col, row, id)", "changes a tile (-1 clears it)"),
+    ("TILE_AT", "(node, x, y)", "the cell under a world position: [col:, row:]"),
+    ("DRAW_RECT", "(x, y, w, h, color, filled)", "draws a rectangle this frame (2D world)"),
+    ("DRAW_LINE", "(x1, y1, x2, y2, color)", "draws a line this frame"),
+    ("DRAW_CIRCLE", "(x, y, radius, color, filled)", "draws a circle this frame"),
+    ("DRAW_TEXT", "(x, y, text, size, color)", "draws text this frame"),
+    ("DRAW_IMAGE", "(file, x, y, w, h)", "draws an image this frame"),
     ("KEY_DOWN", "(key)", "TRUE while a key (or mouse button) is held"),
     ("KEY_PRESSED", "(key)", "TRUE on the frame a key went down"),
     ("KEY_RELEASED", "(key)", "TRUE on the frame a key went up"),
     ("MOUSE_X", "()", "mouse x in game coordinates"),
     ("MOUSE_Y", "()", "mouse y in game coordinates"),
+    ("MOUSE_WHEEL", "()", "how far the wheel turned this frame"),
+    ("AXIS", "(name)", "a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt"),
     ("DELTA_TIME", "()", "seconds since the last frame"),
     ("GAME_TIME", "()", "seconds since the game started"),
     ("CHANGE_SCENE", "(scene)", "switches to another scene file"),
@@ -136,6 +157,129 @@ fn set_prop(st: &mut WorldState, id: NodeId, k: &str, v: &Value) -> R<()> {
     Ok(())
 }
 
+/// Something a script drew this frame (2D world coordinates).
+#[derive(Clone, Debug)]
+pub enum Draw {
+    Rect { x: f32, y: f32, w: f32, h: f32, color: [f32; 4], filled: bool },
+    Line { a: [f32; 2], b: [f32; 2], color: [f32; 4] },
+    Circle { x: f32, y: f32, r: f32, color: [f32; 4], filled: bool },
+    Text { x: f32, y: f32, text: String, size: f32, color: [f32; 4] },
+    Image { file: String, x: f32, y: f32, w: f32, h: f32 },
+}
+
+/// Turns DRAW_* commands into sprites, lines and labels on top of the scene.
+pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
+    use gex_core::render::{Label, Region, Sprite};
+    let node = NodeId::default();
+    let sprite = |x: f32, y: f32, w: f32, h: f32, color, texture: &str| Sprite {
+        node,
+        model: glam::Mat4::from_translation(glam::Vec3::new(x, y, 0.0)),
+        size: glam::Vec2::new(w, h),
+        centered: false,
+        color,
+        texture: texture.to_string(),
+        layer: 1000.0,
+        region: Region::Whole,
+        flip: [false; 2],
+    };
+    for d in draws {
+        match d {
+            Draw::Rect { x, y, w, h, color, filled: true } => list.sprites.push(sprite(*x, *y, *w, *h, *color, "")),
+            Draw::Rect { x, y, w, h, color, filled: false } => {
+                let p = [[*x, *y], [x + w, *y], [x + w, y + h], [*x, y + h]];
+                for k in 0..4 {
+                    list.lines_2d.push((p[k], p[(k + 1) % 4], *color));
+                }
+            }
+            Draw::Line { a, b, color } => list.lines_2d.push((*a, *b, *color)),
+            Draw::Circle { x, y, r, color, filled: true } => list.sprites.push(sprite(x - r, y - r, r * 2.0, r * 2.0, *color, "@circle")),
+            Draw::Circle { x, y, r, color, filled: false } => {
+                let n = 32;
+                for k in 0..n {
+                    let a0 = k as f32 / n as f32 * std::f32::consts::TAU;
+                    let a1 = (k + 1) as f32 / n as f32 * std::f32::consts::TAU;
+                    list.lines_2d.push(([x + r * a0.cos(), y + r * a0.sin()], [x + r * a1.cos(), y + r * a1.sin()], *color));
+                }
+            }
+            Draw::Text { x, y, text, size, color } => list.labels.push(Label { node, pos: glam::Vec2::new(*x, *y), text: text.clone(), size: *size, color: *color, layer: 1000.0 }),
+            Draw::Image { file, x, y, w, h } => list.sprites.push(sprite(*x, *y, *w, *h, [1.0; 4], file)),
+        }
+    }
+}
+
+/// A color given as a table ([r:, g:, b:, a:] or [r, g, b, a], 0 to 1), as text ("#ff8800",
+/// "red"...), or NULL for white.
+fn color_arg(v: Option<&Value>) -> [f32; 4] {
+    match v {
+        None | Some(Value::Null) => [1.0; 4],
+        Some(Value::Text(t)) => {
+            let t = t.trim().to_ascii_lowercase();
+            let named = match t.as_str() {
+                "white" => Some([1.0, 1.0, 1.0]),
+                "black" => Some([0.0, 0.0, 0.0]),
+                "red" => Some([0.9, 0.2, 0.2]),
+                "green" => Some([0.3, 0.8, 0.3]),
+                "blue" => Some([0.25, 0.45, 0.95]),
+                "yellow" => Some([0.95, 0.85, 0.2]),
+                "orange" => Some([0.95, 0.55, 0.15]),
+                "purple" => Some([0.6, 0.3, 0.85]),
+                "gray" | "grey" => Some([0.5, 0.5, 0.5]),
+                _ => None,
+            };
+            if let Some(c) = named {
+                return [c[0], c[1], c[2], 1.0];
+            }
+            let h = t.trim_start_matches('#');
+            let p = |i: usize| u8::from_str_radix(h.get(i..i + 2).unwrap_or("ff"), 16).unwrap_or(255) as f32 / 255.0;
+            if h.len() >= 6 {
+                [p(0), p(2), p(4), if h.len() >= 8 { p(6) } else { 1.0 }]
+            } else {
+                [1.0; 4]
+            }
+        }
+        Some(t @ Value::Table(..)) => match to_variant(t, Some(&gex_core::Variant::Color([1.0; 4]))) {
+            Some(gex_core::Variant::Color(c)) if jlb::embed::table_get(t, "r").is_some() => c,
+            _ => match t {
+                Value::Table(rc, _) => {
+                    let g = |i: usize, d: f32| rc.items.get(i).and_then(|s| as_f64(&s.borrow())).map(|v| v as f32).unwrap_or(d);
+                    [g(0, 1.0), g(1, 1.0), g(2, 1.0), g(3, 1.0)]
+                }
+                _ => [1.0; 4],
+            },
+        },
+        Some(_) => [1.0; 4],
+    }
+}
+
+fn truthy(v: Option<&Value>, default: bool) -> bool {
+    match v {
+        None | Some(Value::Null) => default,
+        Some(v) => jlb::ops::truth(v).unwrap_or(default),
+    }
+}
+
+/// Starts a Sound node's stream (restarting it if it's playing).
+pub fn play_node(st: &mut WorldState, id: NodeId) -> Result<(), String> {
+    let n = &st.tree.nodes[id];
+    if n.kind != gex_core::NodeKind::Sound {
+        return Err(format!("{} isn't a Sound node", n.name));
+    }
+    let file = n.text("stream").to_string();
+    if file.is_empty() {
+        return Err(format!("the Sound node {} has no stream file", n.name));
+    }
+    let (vol, pitch, looped) = (n.num("volume", 1.0) as f32, n.num("pitch", 1.0) as f32, n.prop("loop").is_some_and(|v| v.as_bool()));
+    if let Some(old) = st.audio.by_node.remove(&id) {
+        st.audio.stop(old);
+    }
+    let r = st.audio.play(&st.vfs, &file, vol, pitch, looped);
+    let s = r?;
+    if s != 0 {
+        st.audio.by_node.insert(id, s);
+    }
+    Ok(())
+}
+
 impl Host for EngineHost {
     fn call(&mut self, _it: &mut Interp, name: &'static str, a: Vec<Value>) -> Result<R<Value>, Vec<Value>> {
         if !COMMANDS.iter().any(|c| c.0 == name) {
@@ -227,11 +371,132 @@ impl Host for EngineHost {
                 v.sort();
                 Ok(ids(v))
             }
+            "MOVE" => {
+                let id = target(st, a.first())?;
+                let d = glam::Vec3::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, num_arg(&a, 3, 0.0) as f32);
+                let g = st.physics.move_node(&mut st.tree, id, d).map_err(jlb::value::fault)?;
+                Ok(Value::Bool(g))
+            }
+            "IMPULSE" => {
+                let id = target(st, a.first())?;
+                let v = glam::Vec3::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, num_arg(&a, 3, 0.0) as f32);
+                st.physics.impulse(&st.tree, id, v);
+                Ok(Value::Null)
+            }
+            "RAYCAST" | "RAYCAST_3D" => {
+                let three = name == "RAYCAST_3D";
+                let n = |i| num_arg(&a, i, 0.0) as f32;
+                let (len_i, ign_i) = if three { (6, 7) } else { (4, 5) };
+                let max = num_arg(&a, len_i, if three { 1000.0 } else { 100000.0 }) as f32;
+                let ignore = match a.get(ign_i) {
+                    None | Some(Value::Null) => None,
+                    v => Some(target(st, v)?),
+                };
+                let hit = if three {
+                    st.physics.raycast_3d(glam::Vec3::new(n(0), n(1), n(2)), glam::Vec3::new(n(3), n(4), n(5)), max, ignore)
+                } else {
+                    st.physics.raycast_2d(glam::Vec2::new(n(0), n(1)), glam::Vec2::new(n(2), n(3)), max, ignore)
+                };
+                Ok(match hit {
+                    None => Value::Null,
+                    Some(h) => jlb::embed::named_table(vec![
+                        ("node", id_value(h.node)),
+                        ("x", num(h.point.x as f64)),
+                        ("y", num(h.point.y as f64)),
+                        ("z", num(h.point.z as f64)),
+                        ("nx", num(h.normal.x as f64)),
+                        ("ny", num(h.normal.y as f64)),
+                        ("nz", num(h.normal.z as f64)),
+                        ("distance", num(h.distance as f64)),
+                    ]),
+                })
+            }
             "DISTANCE" => {
                 let x = target(st, a.first())?;
                 let y = target(st, a.get(1))?;
                 let p = |i| st.tree.global_matrix(i).w_axis.truncate();
                 Ok(num(p(x).distance(p(y)) as f64))
+            }
+            "PLAY_SOUND" => {
+                let f = text_arg(name, &a, 0)?;
+                let r = st.audio.play(&st.vfs, &f, num_arg(&a, 1, 1.0) as f32, num_arg(&a, 2, 1.0) as f32, false);
+                Ok(num(r.map_err(jlb::value::fault)? as f64))
+            }
+            "STOP_SOUND" => {
+                match a.first() {
+                    None | Some(Value::Null) => st.audio.stop_all(),
+                    Some(v) => st.audio.stop(as_f64(v).unwrap_or(0.0) as u64),
+                }
+                Ok(Value::Null)
+            }
+            "PLAY" => {
+                let id = target(st, a.first())?;
+                play_node(st, id).map_err(jlb::value::fault)?;
+                Ok(Value::Null)
+            }
+            "STOP" => {
+                let id = target(st, a.first())?;
+                if let Some(s) = st.audio.by_node.remove(&id) {
+                    st.audio.stop(s);
+                }
+                Ok(Value::Null)
+            }
+            "MUSIC" => {
+                let f = text_arg(name, &a, 0)?;
+                let r = st.audio.music(&st.vfs, &f, num_arg(&a, 1, 1.0) as f32);
+                r.map_err(jlb::value::fault)?;
+                Ok(Value::Null)
+            }
+            "VOLUME" => {
+                st.audio.master = num_arg(&a, 0, 1.0).clamp(0.0, 4.0) as f32;
+                Ok(Value::Null)
+            }
+            "ANIMATE" => {
+                let id = target(st, a.first())?;
+                let anim = text_arg(name, &a, 1)?;
+                st.anims.remove(&id);
+                st.tree.nodes[id].props.insert("animation".into(), gex_core::Variant::Text(anim));
+                Ok(Value::Null)
+            }
+            "TILE" | "SET_TILE" => {
+                let id = target(st, a.first())?;
+                if st.tree.nodes[id].kind != gex_core::NodeKind::TileMap2D {
+                    return err(format!("{} isn't a TileMap2D", st.tree.nodes[id].name));
+                }
+                let (c, r) = (num_arg(&a, 1, 0.0).floor() as i32, num_arg(&a, 2, 0.0).floor() as i32);
+                let mut grid = gex_core::tiles::parse(st.tree.nodes[id].text("tiles"));
+                if name == "TILE" {
+                    return Ok(num(gex_core::tiles::get(&grid, c, r) as f64));
+                }
+                gex_core::tiles::set(&mut grid, c, r, num_arg(&a, 3, -1.0) as i32);
+                st.tree.nodes[id].props.insert("tiles".into(), gex_core::Variant::Text(gex_core::tiles::to_text(&grid)));
+                Ok(Value::Null)
+            }
+            "TILE_AT" => {
+                let id = target(st, a.first())?;
+                let n = &st.tree.nodes[id];
+                let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
+                let local = st.tree.global_matrix(id).inverse().transform_point3(glam::Vec3::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, 0.0));
+                Ok(jlb::embed::named_table(vec![("col", num((local.x / tw).floor() as f64)), ("row", num((local.y / th).floor() as f64))]))
+            }
+            "DRAW_RECT" | "DRAW_CIRCLE" | "DRAW_LINE" | "DRAW_TEXT" | "DRAW_IMAGE" => {
+                let n = |i| num_arg(&a, i, 0.0) as f32;
+                let d = match name {
+                    "DRAW_RECT" => Draw::Rect { x: n(0), y: n(1), w: n(2), h: n(3), color: color_arg(a.get(4)), filled: truthy(a.get(5), true) },
+                    "DRAW_CIRCLE" => Draw::Circle { x: n(0), y: n(1), r: n(2), color: color_arg(a.get(3)), filled: truthy(a.get(4), true) },
+                    "DRAW_LINE" => Draw::Line { a: [n(0), n(1)], b: [n(2), n(3)], color: color_arg(a.get(4)) },
+                    "DRAW_TEXT" => Draw::Text { x: n(0), y: n(1), text: a.get(2).map(display).unwrap_or_default(), size: num_arg(&a, 3, 16.0) as f32, color: color_arg(a.get(4)) },
+                    _ => Draw::Image { file: text_arg(name, &a, 0)?, x: n(1), y: n(2), w: num_arg(&a, 3, 64.0) as f32, h: num_arg(&a, 4, 64.0) as f32 },
+                };
+                if st.draws.len() < 100_000 {
+                    st.draws.push(d);
+                }
+                Ok(Value::Null)
+            }
+            "MOUSE_WHEEL" => Ok(num(st.wheel as f64)),
+            "AXIS" => {
+                let k = text_arg(name, &a, 0)?.to_ascii_lowercase();
+                Ok(num(st.axes.get(&k).copied().unwrap_or(0.0) as f64))
             }
             "KEY_DOWN" => Ok(Value::Bool(st.input.key_down(&text_arg(name, &a, 0)?.to_lowercase()))),
             "KEY_PRESSED" => Ok(Value::Bool(st.input.key_pressed(&text_arg(name, &a, 0)?.to_lowercase()))),

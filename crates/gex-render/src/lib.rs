@@ -45,6 +45,8 @@ struct Globals {
 struct Instance {
     model: [[f32; 4]; 4],
     color: [f32; 4],
+    /// Texture rectangle: u0, v0, u1, v1.
+    uv: [f32; 4],
 }
 
 #[repr(C)]
@@ -115,6 +117,7 @@ pub struct Renderer {
     white_linear: Tex,
     white_nearest: Tex,
     missing: Tex,
+    circle: Tex,
     instances: Option<wgpu::Buffer>,
     lines: Option<wgpu::Buffer>,
     target: Option<Target>,
@@ -185,7 +188,7 @@ impl Renderer {
             immediate_size: 0,
         });
 
-        let instance_attrs = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4];
+        let instance_attrs = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4];
         let instance_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Instance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -312,6 +315,16 @@ impl Renderer {
         let white_linear = make_tex(device, queue, &tex_layout, &linear, 1, 1, &[255; 4]);
         let white_nearest = make_tex(device, queue, &tex_layout, &nearest, 1, 1, &[255; 4]);
         let missing = make_tex(device, queue, &tex_layout, &nearest, 8, 8, &check);
+        // "@circle": a soft-edged disc for DRAW_CIRCLE.
+        let mut disc = Vec::with_capacity(64 * 64 * 4);
+        for y in 0..64 {
+            for x in 0..64 {
+                let d = ((x as f32 - 31.5).powi(2) + (y as f32 - 31.5).powi(2)).sqrt();
+                let a = ((32.0 - d) * 1.5).clamp(0.0, 1.0);
+                disc.extend_from_slice(&[255, 255, 255, (a * 255.0) as u8]);
+            }
+        }
+        let circle = make_tex(device, queue, &tex_layout, &linear, 64, 64, &disc);
         Renderer {
             mesh_pipe,
             sprite_pipe,
@@ -328,6 +341,7 @@ impl Renderer {
             white_linear,
             white_nearest,
             missing,
+            circle,
             instances: None,
             lines: None,
             target: None,
@@ -357,6 +371,9 @@ impl Renderer {
     fn tex(&self, path: &str, pixel: bool) -> &Tex {
         if path.is_empty() {
             return if pixel { &self.white_nearest } else { &self.white_linear };
+        }
+        if path == "@circle" {
+            return &self.circle;
         }
         match self.textures.get(&(path.to_string(), pixel)) {
             Some(Ok(t)) => t,
@@ -413,7 +430,7 @@ impl Renderer {
         let new_target = self.ensure_target(device, size);
         // Textures first (loading needs &mut self).
         for s in &list.sprites {
-            if !s.texture.is_empty() {
+            if !s.texture.is_empty() && !s.texture.starts_with('@') {
                 self.ensure_texture(device, queue, vfs, &s.texture, true);
             }
         }
@@ -456,7 +473,7 @@ impl Renderer {
             let m = &list.meshes[i];
             let prim = mesh::primitive(&m.mesh);
             let start = inst.len() as u32;
-            inst.push(Instance { model: m.model.to_cols_array_2d(), color: srgb_to_linear(m.color) });
+            inst.push(Instance { model: m.model.to_cols_array_2d(), color: srgb_to_linear(m.color), uv: [0.0, 0.0, m.uv_scale[0], m.uv_scale[1]] });
             match mesh_batches.last_mut() {
                 Some(b) if b.0 == prim && b.1 == m.texture => b.3 += 1,
                 _ => mesh_batches.push((prim, m.texture.clone(), start, 1)),
@@ -468,7 +485,15 @@ impl Renderer {
             let off = if s.centered { Vec3::new(-0.5 * s.size.x, -0.5 * s.size.y, 0.0) } else { Vec3::ZERO };
             let local = Mat4::from_translation(off) * Mat4::from_scale(Vec3::new(s.size.x, s.size.y, 1.0));
             let start = inst.len() as u32;
-            inst.push(Instance { model: (s.model * local).to_cols_array_2d(), color: srgb_to_linear(s.color) });
+            let tex_size = self.tex(&s.texture, true).size;
+            let mut uv = region_uv(s.region, tex_size);
+            if s.flip[0] {
+                uv.swap(0, 2);
+            }
+            if s.flip[1] {
+                uv.swap(1, 3);
+            }
+            inst.push(Instance { model: (s.model * local).to_cols_array_2d(), color: srgb_to_linear(s.color), uv });
             match sprite_batches.last_mut() {
                 Some(b) if b.0 == s.texture => b.2 += 1,
                 _ => sprite_batches.push((s.texture.clone(), start, 1)),
@@ -507,6 +532,10 @@ impl Renderer {
             lines.push(vb);
         }
         let n3 = lines.len() as u32;
+        for (a, b, c) in &list.lines_2d {
+            lines.push(LineVertex { pos: [a[0], a[1], 0.0], color: *c, space: 1.0 });
+            lines.push(LineVertex { pos: [b[0], b[1], 0.0], color: *c, space: 1.0 });
+        }
         lines.extend_from_slice(&overlay.lines_2d);
         let n2 = lines.len() as u32 - n3;
         if !lines.is_empty() {
@@ -583,6 +612,27 @@ fn upload(device: &wgpu::Device, queue: &wgpu::Queue, buf: &mut Option<wgpu::Buf
         *buf = Some(device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
     }
     queue.write_buffer(buf.as_ref().unwrap(), 0, data);
+}
+
+/// The texture rectangle for a sprite region.
+fn region_uv(r: gex_core::render::Region, tex: [u32; 2]) -> [f32; 4] {
+    use gex_core::render::Region;
+    match r {
+        Region::Whole => [0.0, 0.0, 1.0, 1.0],
+        Region::Frame { h, v, frame } => {
+            let f = frame % (h * v).max(1);
+            let (c, r) = ((f % h) as f32, (f / h) as f32);
+            [c / h as f32, r / v as f32, (c + 1.0) / h as f32, (r + 1.0) / v as f32]
+        }
+        Region::Tile { w, h, id } => {
+            let (tw, th) = (tex[0].max(1) as f32, tex[1].max(1) as f32);
+            let cols = (tw / w.max(1.0)).floor().max(1.0) as u32;
+            let (c, r) = ((id % cols) as f32, (id / cols) as f32);
+            // A hair inside the tile, so neighbours don't bleed in.
+            let e = 0.01;
+            [(c * w + e) / tw, (r * h + e) / th, ((c + 1.0) * w - e) / tw, ((r + 1.0) * h - e) / th]
+        }
+    }
 }
 
 fn make_tex(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, w: u32, h: u32, rgba: &[u8]) -> Tex {

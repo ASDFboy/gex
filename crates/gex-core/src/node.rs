@@ -15,6 +15,8 @@ use crate::variant::Variant;
 pub enum NodeKind {
     /// A plain grouping node (no transform effect beyond passing it on).
     Node,
+    /// Plays a sound file (with autoplay, or PLAY(node) from a script).
+    Sound,
     // ---- 2D ----
     Node2D,
     /// A textured or plain-colored rectangle.
@@ -23,50 +25,87 @@ pub enum NodeKind {
     Camera2D,
     /// A rectangle that reports collisions (on_collide) with other colliders.
     Collider2D,
+    /// A physics body: dynamic (falls, bounces), static (walls, floors) or kinematic
+    /// (moved by scripts with MOVE, like a platformer character).
+    Body2D,
+    /// A grid of tiles from a tileset image; its tiles can be solid for physics.
+    TileMap2D,
+    // ---- UI (screen space, in the game window's pixels) ----
+    Panel,
+    Button,
+    Label,
+    TextInput,
+    ProgressBar,
+    Image,
     // ---- 3D ----
     Node3D,
     /// A primitive (cube, sphere, plane) or a model resource.
     Mesh3D,
     Camera3D,
     Light3D,
+    /// A 3D physics body (box, sphere or capsule).
+    Body3D,
 }
 
 pub const ALL_KINDS: &[NodeKind] = &[
     NodeKind::Node,
+    NodeKind::Sound,
     NodeKind::Node2D,
     NodeKind::Sprite2D,
     NodeKind::Label2D,
     NodeKind::Camera2D,
     NodeKind::Collider2D,
+    NodeKind::Body2D,
+    NodeKind::TileMap2D,
+    NodeKind::Panel,
+    NodeKind::Button,
+    NodeKind::Label,
+    NodeKind::TextInput,
+    NodeKind::ProgressBar,
+    NodeKind::Image,
     NodeKind::Node3D,
     NodeKind::Mesh3D,
     NodeKind::Camera3D,
     NodeKind::Light3D,
+    NodeKind::Body3D,
 ];
 
 impl NodeKind {
     pub fn name(self) -> &'static str {
         match self {
             NodeKind::Node => "Node",
+            NodeKind::Sound => "Sound",
             NodeKind::Node2D => "Node2D",
             NodeKind::Sprite2D => "Sprite2D",
             NodeKind::Label2D => "Label2D",
             NodeKind::Camera2D => "Camera2D",
             NodeKind::Collider2D => "Collider2D",
+            NodeKind::Body2D => "Body2D",
+            NodeKind::TileMap2D => "TileMap2D",
+            NodeKind::Panel => "Panel",
+            NodeKind::Button => "Button",
+            NodeKind::Label => "Label",
+            NodeKind::TextInput => "TextInput",
+            NodeKind::ProgressBar => "ProgressBar",
+            NodeKind::Image => "Image",
             NodeKind::Node3D => "Node3D",
             NodeKind::Mesh3D => "Mesh3D",
             NodeKind::Camera3D => "Camera3D",
             NodeKind::Light3D => "Light3D",
+            NodeKind::Body3D => "Body3D",
         }
     }
     pub fn from_name(s: &str) -> Option<NodeKind> {
         ALL_KINDS.iter().copied().find(|k| k.name().eq_ignore_ascii_case(s))
     }
     pub fn is_2d(self) -> bool {
-        matches!(self, NodeKind::Node2D | NodeKind::Sprite2D | NodeKind::Label2D | NodeKind::Camera2D | NodeKind::Collider2D)
+        matches!(self, NodeKind::Node2D | NodeKind::Sprite2D | NodeKind::Label2D | NodeKind::Camera2D | NodeKind::Collider2D | NodeKind::Body2D | NodeKind::TileMap2D)
+    }
+    pub fn is_ui(self) -> bool {
+        matches!(self, NodeKind::Panel | NodeKind::Button | NodeKind::Label | NodeKind::TextInput | NodeKind::ProgressBar | NodeKind::Image)
     }
     pub fn is_3d(self) -> bool {
-        matches!(self, NodeKind::Node3D | NodeKind::Mesh3D | NodeKind::Camera3D | NodeKind::Light3D)
+        matches!(self, NodeKind::Node3D | NodeKind::Mesh3D | NodeKind::Camera3D | NodeKind::Light3D | NodeKind::Body3D)
     }
     /// The built-in properties this kind has, with their defaults. Scene files only
     /// store values that differ from these.
@@ -80,6 +119,75 @@ impl NodeKind {
                 ("color", Color([1.0, 1.0, 1.0, 1.0])),
                 ("centered", Bool(true)),
                 ("layer", Num(0.0)),
+                ("hframes", Num(1.0)),
+                ("vframes", Num(1.0)),
+                ("frame", Num(0.0)),
+                ("animations", Text(String::new())),
+                ("animation", Text(String::new())),
+                ("anim_fps", Num(10.0)),
+                ("anim_loop", Bool(true)),
+                ("flip_h", Bool(false)),
+                ("flip_v", Bool(false)),
+            ],
+            NodeKind::TileMap2D => vec![
+                ("tileset", Res(String::new())),
+                ("tile_width", Num(32.0)),
+                ("tile_height", Num(32.0)),
+                ("tiles", Text(String::new())),
+                ("solid", Bool(true)),
+                ("solid_tiles", Text(String::new())),
+                ("layer", Num(-5.0)),
+                ("color", Color([1.0; 4])),
+            ],
+            NodeKind::Panel => vec![
+                ("width", Num(200.0)),
+                ("height", Num(100.0)),
+                ("color", Color([0.1, 0.12, 0.16, 0.92])),
+                ("border_color", Color([0.4, 0.75, 0.96, 1.0])),
+                ("border", Num(1.0)),
+                ("radius", Num(4.0)),
+                ("anchor", Text("top_left".into())),
+            ],
+            NodeKind::Button => vec![
+                ("text", Text("Button".into())),
+                ("width", Num(140.0)),
+                ("height", Num(36.0)),
+                ("size", Num(16.0)),
+                ("color", Color([0.14, 0.2, 0.28, 1.0])),
+                ("text_color", Color([0.78, 0.84, 0.88, 1.0])),
+                ("disabled", Bool(false)),
+                ("anchor", Text("top_left".into())),
+            ],
+            NodeKind::Label => vec![
+                ("text", Text("Label".into())),
+                ("size", Num(18.0)),
+                ("color", Color([1.0; 4])),
+                ("align", Text("left".into())),
+                ("anchor", Text("top_left".into())),
+            ],
+            NodeKind::TextInput => vec![
+                ("text", Text(String::new())),
+                ("placeholder", Text("type here".into())),
+                ("width", Num(200.0)),
+                ("height", Num(30.0)),
+                ("size", Num(16.0)),
+                ("anchor", Text("top_left".into())),
+            ],
+            NodeKind::ProgressBar => vec![
+                ("value", Num(0.5)),
+                ("max", Num(1.0)),
+                ("width", Num(200.0)),
+                ("height", Num(16.0)),
+                ("color", Color([0.4, 0.75, 0.96, 1.0])),
+                ("back_color", Color([0.1, 0.1, 0.12, 1.0])),
+                ("anchor", Text("top_left".into())),
+            ],
+            NodeKind::Image => vec![
+                ("texture", Res(String::new())),
+                ("width", Num(64.0)),
+                ("height", Num(64.0)),
+                ("color", Color([1.0; 4])),
+                ("anchor", Text("top_left".into())),
             ],
             NodeKind::Label2D => vec![("text", Text("Label".into())), ("size", Num(16.0)), ("color", Color([1.0; 4])), ("layer", Num(10.0))],
             NodeKind::Camera2D => vec![("zoom", Num(1.0)), ("current", Bool(true))],
@@ -87,6 +195,46 @@ impl NodeKind {
             NodeKind::Mesh3D => vec![("mesh", Text("cube".into())), ("color", Color([0.8, 0.8, 0.8, 1.0])), ("texture", Res(String::new()))],
             NodeKind::Camera3D => vec![("fov", Num(70.0)), ("current", Bool(true)), ("near", Num(0.05)), ("far", Num(500.0))],
             NodeKind::Light3D => vec![("color", Color([1.0, 1.0, 1.0, 1.0])), ("energy", Num(1.0))],
+            NodeKind::Sound => vec![
+                ("stream", Res(String::new())),
+                ("volume", Num(1.0)),
+                ("pitch", Num(1.0)),
+                ("loop", Bool(false)),
+                ("autoplay", Bool(false)),
+                ("playing", Bool(false)),
+            ],
+            NodeKind::Body2D => vec![
+                ("body", Text("dynamic".into())),
+                ("shape", Text("box".into())),
+                ("width", Num(32.0)),
+                ("height", Num(32.0)),
+                ("radius", Num(16.0)),
+                ("gravity_scale", Num(1.0)),
+                ("friction", Num(0.5)),
+                ("bounce", Num(0.0)),
+                ("density", Num(1.0)),
+                ("fixed_rotation", Bool(false)),
+                ("vx", Num(0.0)),
+                ("vy", Num(0.0)),
+                ("on_floor", Bool(false)),
+            ],
+            NodeKind::Body3D => vec![
+                ("body", Text("dynamic".into())),
+                ("shape", Text("box".into())),
+                ("width", Num(1.0)),
+                ("height", Num(1.0)),
+                ("depth", Num(1.0)),
+                ("radius", Num(0.5)),
+                ("gravity_scale", Num(1.0)),
+                ("friction", Num(0.5)),
+                ("bounce", Num(0.0)),
+                ("density", Num(1.0)),
+                ("fixed_rotation", Bool(false)),
+                ("vx", Num(0.0)),
+                ("vy", Num(0.0)),
+                ("vz", Num(0.0)),
+                ("on_floor", Bool(false)),
+            ],
             _ => vec![],
         }
     }

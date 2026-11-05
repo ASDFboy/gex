@@ -669,6 +669,8 @@ pub struct PlayerApp {
     tex: Option<egui::TextureId>,
     last: std::time::Instant,
     ended: bool,
+    ui_events: Vec<gex_script::UiEvent>,
+    ui_images: HashMap<String, egui::TextureHandle>,
 }
 
 impl PlayerApp {
@@ -678,7 +680,7 @@ impl PlayerApp {
         let tree = gex_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let list = gex_core::render::extract(&tree);
-        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false })
+        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new() })
     }
 }
 
@@ -715,13 +717,29 @@ impl eframe::App for PlayerApp {
             let cams = gex_render::Cameras::for_game(&self.list, px, self.design);
             let m = ctx.input(|i| i.pointer.hover_pos()).map(|p| cams.screen_to_2d(gex_core::glam::Vec2::new(p.x * ppp, p.y * ppp))).unwrap_or_default();
             if !self.handle.waiting {
-                self.handle.request_frame(now.duration_since(self.last).as_secs_f64(), keys, [m.x, m.y], buttons);
+                self.handle.request_frame(gex_script::FrameInput {
+                    dt: now.duration_since(self.last).as_secs_f64(),
+                    keys,
+                    mouse: [m.x, m.y],
+                    buttons,
+                    wheel: ctx.input(|i| i.smooth_scroll_delta.y) / 50.0,
+                    axes: Default::default(),
+                    ui: std::mem::take(&mut self.ui_events),
+                });
                 self.last = now;
             }
             let probs = viewport::paint_list(ui, rs, &mut self.renderer, &mut self.tex, &self.vfs, rect, &self.list, &cams, &gex_render::Overlay::default());
             for p in probs {
                 eprintln!("{}", p);
             }
+            let design = gex_core::glam::Vec2::new(self.design[0] as f32, self.design[1] as f32);
+            let fit = (px[0] as f32 / design.x).min(px[1] as f32 / design.y);
+            let map = |p: gex_core::glam::Vec2| {
+                let s = (p - design / 2.0) * fit + gex_core::glam::Vec2::new(px[0] as f32, px[1] as f32) / 2.0;
+                rect.min + egui::vec2(s.x / ppp, s.y / ppp)
+            };
+            let ev = crate::ui_layer::paint_ui(ui, &self.list.ui, design, &map, fit / ppp, true, &mut self.ui_images, &self.vfs);
+            self.ui_events.extend(ev);
         });
         ctx.request_repaint();
     }

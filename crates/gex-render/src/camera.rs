@@ -1,3 +1,4 @@
+#![allow(deprecated)] // glam 0.33 moved the camera helpers; the old names still work.
 //! Cameras: the game's own (Camera2D / Camera3D nodes) or the editor's.
 
 use gex_core::glam::{Mat4, Vec2, Vec3, Vec4Swizzles};

@@ -182,6 +182,17 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
                 o.line3(p, p + m.transform_vector3(Vec3::NEG_Z).normalize_or_zero() * 0.8, c);
             }
         }
+        for id in tree.walk() {
+            let n = &tree.nodes[id];
+            if n.kind == NodeKind::Body3D {
+                let size = if matches!(n.text("shape"), "sphere" | "ball") {
+                    Vec3::splat(n.num("radius", 0.5) as f32 * 2.0)
+                } else {
+                    Vec3::new(n.num("width", 1.0) as f32, n.num("height", 1.0) as f32, n.num("depth", 1.0) as f32)
+                };
+                box_lines(&mut o, tree.global_matrix(id) * Mat4::from_scale(size), [0.3, 0.9, 0.5, 0.7]);
+            }
+        }
         if let Some(sel) = st.selected.filter(|s| tree.contains(*s)) {
             let m = tree.global_matrix(sel);
             if tree.nodes[sel].kind == NodeKind::Mesh3D {
@@ -240,6 +251,14 @@ fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Op
     }
     let w = cams.screen_to_2d(screen);
     let zoom = (cams.view_proj_2d.x_axis.x * cams.size[0] as f32 / 2.0).abs().max(0.01);
+    // UI nodes sit on top (in the editor, game-window pixels are world pixels).
+    let [dw, dh] = st.project.config.window_size;
+    for u in list.ui.iter().rev() {
+        let tl = u.top_left(Vec2::new(dw as f32, dh as f32));
+        if w.x >= tl.x && w.y >= tl.y && w.x <= tl.x + u.size.x && w.y <= tl.y + u.size.y {
+            return Some(u.node);
+        }
+    }
     // Labels, then sprites from the top layer down, then point-like nodes.
     for l in list.labels.iter().rev() {
         let size = Vec2::new(l.text.chars().count() as f32 * l.size * 0.55, l.size * 1.2);
@@ -339,6 +358,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                 p.keys.clear();
             }
             p.buttons = if resp.hovered() { ui.input(mouse_buttons) } else { HashSet::new() };
+            if resp.hovered() && game_cam {
+                p.wheel += scroll / 50.0;
+            }
             if let Some(pp) = pointer {
                 let m = cams.screen_to_2d(to_px(pp));
                 p.mouse = [m.x, m.y];
@@ -378,8 +400,28 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         }
     }
 
+    // Painting tiles into the selected TileMap2D.
+    let painting = !playing && !st.mode_3d && st.tile_brush.is_some() && st.selected.is_some_and(|s| st.tree.get(s).is_some_and(|n| n.kind == NodeKind::TileMap2D));
+    if painting {
+        let down = ui.input(|i| i.pointer.primary_down());
+        if let (true, true, Some(pp)) = (down, resp.hovered() || resp.dragged(), pointer) {
+            let id = st.selected.unwrap();
+            let w = cams.screen_to_2d(to_px(pp));
+            let n = &st.tree.nodes[id];
+            let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
+            let local = st.tree.global_matrix(id).inverse().transform_point3(w.extend(0.0));
+            let (c, r) = ((local.x / tw).floor() as i32, (local.y / th).floor() as i32);
+            let brush = if ui.input(|i| i.modifiers.shift) { -1 } else { st.tile_brush.unwrap() };
+            let mut grid = gex_core::tiles::parse(n.text("tiles"));
+            if c >= 0 && r >= 0 && gex_core::tiles::get(&grid, c, r) != brush {
+                st.will_change(&format!("paint {:?}", id));
+                gex_core::tiles::set(&mut grid, c, r, brush);
+                st.tree.nodes[id].props.insert("tiles".into(), Variant::Text(gex_core::tiles::to_text(&grid)));
+            }
+        }
+    }
     // Select, drag nodes, drop assets (editing only).
-    if !playing {
+    if !playing && !painting {
         let drag_id = egui::Id::new("viewport drag");
         if resp.drag_started_by(egui::PointerButton::Primary) {
             if let Some(pp) = pointer {
@@ -441,6 +483,24 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     let problems = paint_list(ui, rs, &mut st.renderer, textures, &st.vfs, rect, &list, &cams, &overlay);
     for p in problems {
         st.log(gex_script::LogKind::Error, p);
+    }
+    // UI nodes, in game-window pixels.
+    let [dw, dh] = st.project.config.window_size;
+    let design = Vec2::new(dw as f32, dh as f32);
+    let events = {
+        let world_ui = !game_cam && !st.mode_3d;
+        let fit = (px[0] as f32 / design.x).min(px[1] as f32 / design.y);
+        let map = |p: Vec2| -> Pos2 {
+            let s = if world_ui { cams.world_2d_to_screen(p) } else { (p - design / 2.0) * fit + Vec2::new(px[0] as f32, px[1] as f32) / 2.0 };
+            rect.min + egui::vec2(s.x / ppp, s.y / ppp)
+        };
+        let scale = if world_ui { st.cam2.zoom / ppp } else { fit / ppp };
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        child.set_clip_rect(rect);
+        crate::ui_layer::paint_ui(&mut child, &list.ui, design, &map, scale, playing && game_cam, &mut st.ui_images, &st.vfs)
+    };
+    if let Some(p) = &mut st.playing {
+        p.ui_events.extend(events);
     }
     if resp.has_focus() && playing {
         ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, theme::GOOD), egui::StrokeKind::Inside);

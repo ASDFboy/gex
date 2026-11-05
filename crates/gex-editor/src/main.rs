@@ -13,6 +13,7 @@ mod panels;
 mod state;
 mod templates;
 mod theme;
+mod ui_layer;
 mod viewport;
 
 use std::path::PathBuf;

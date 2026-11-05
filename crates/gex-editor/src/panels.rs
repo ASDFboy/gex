@@ -11,6 +11,7 @@ use crate::theme;
 pub fn kind_icon(k: NodeKind) -> &'static str {
     match k {
         NodeKind::Node => "○",
+        NodeKind::Sound => "🔊",
         NodeKind::Node2D => "⊞",
         NodeKind::Sprite2D => "▣",
         NodeKind::Label2D => "🔤",
@@ -20,25 +21,89 @@ pub fn kind_icon(k: NodeKind) -> &'static str {
         NodeKind::Mesh3D => "■",
         NodeKind::Camera3D => "🎥",
         NodeKind::Light3D => "💡",
+        NodeKind::Body2D => "✚",
+        NodeKind::TileMap2D => "🗺",
+        NodeKind::Panel => "🗖",
+        NodeKind::Button => "🔘",
+        NodeKind::Label => "🅰",
+        NodeKind::TextInput => "⌨",
+        NodeKind::ProgressBar => "📊",
+        NodeKind::Image => "🖼",
+        NodeKind::Body3D => "🔲",
     }
 }
 
 pub fn add_node_menu(ui: &mut egui::Ui, st: &mut EditorState) {
-    ui.label(RichText::new("2D").color(theme::TEXT_DIM));
-    for k in ALL_KINDS.iter().filter(|k| k.is_2d() || **k == NodeKind::Node) {
-        if ui.button(format!("{} {}", kind_icon(*k), k.name())).clicked() {
-            st.add_node(*k);
-            ui.close();
+    let groups: [(&str, fn(NodeKind) -> bool); 4] = [
+        ("General", |k| !k.is_2d() && !k.is_3d() && !k.is_ui()),
+        ("2D", |k| k.is_2d()),
+        ("UI (screen space)", |k| k.is_ui()),
+        ("3D", |k| k.is_3d()),
+    ];
+    for (i, (title, f)) in groups.iter().enumerate() {
+        if i > 0 {
+            ui.separator();
+        }
+        ui.label(RichText::new(*title).color(theme::TEXT_DIM));
+        for k in ALL_KINDS.iter().filter(|k| f(**k)) {
+            if ui.button(format!("{} {}", kind_icon(*k), k.name())).clicked() {
+                st.add_node(*k);
+                ui.close();
+            }
         }
     }
-    ui.separator();
-    ui.label(RichText::new("3D").color(theme::TEXT_DIM));
-    for k in ALL_KINDS.iter().filter(|k| k.is_3d()) {
-        if ui.button(format!("{} {}", kind_icon(*k), k.name())).clicked() {
-            st.add_node(*k);
-            ui.close();
+}
+
+/// Picking a tile to paint with, from the TileMap2D's tileset image.
+fn tile_palette(ui: &mut egui::Ui, st: &mut EditorState, id: NodeId) {
+    let n = &st.tree.nodes[id];
+    let path = n.text("tileset").to_string();
+    let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
+    ui.horizontal(|ui| {
+        let painting = st.tile_brush.is_some();
+        if ui.selectable_label(painting, "🖌 Paint tiles").on_hover_text("LMB paints in the scene view, Shift+LMB erases").clicked() {
+            st.tile_brush = if painting { None } else { Some(0) };
+        }
+        if ui.selectable_label(st.tile_brush == Some(-1), "Eraser").clicked() {
+            st.tile_brush = Some(-1);
+        }
+    });
+    if path.is_empty() {
+        ui.label(RichText::new("Set a tileset image to pick tiles from.").color(theme::TEXT_DIM));
+        return;
+    }
+    let tex = st.ui_images.entry(path.clone()).or_insert_with(|| {
+        let img = gex_assets::load_image(&st.vfs, &path).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
+        let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
+        ui.ctx().load_texture(path.clone(), ci, egui::TextureOptions::NEAREST)
+    });
+    let size = tex.size_vec2();
+    let cols = (size.x / tw).floor().max(1.0) as i32;
+    let rows = (size.y / th).floor().max(1.0) as i32;
+    let scale = (ui.available_width() / size.x).min(3.0).max(0.25);
+    let (rect, resp) = ui.allocate_exact_size(size * scale, egui::Sense::click());
+    ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
+    for c in 0..=cols {
+        let x = rect.min.x + c as f32 * tw * scale;
+        ui.painter().line_segment([egui::pos2(x, rect.min.y), egui::pos2(x, rect.min.y + rows as f32 * th * scale)], egui::Stroke::new(1.0, Color32::from_black_alpha(120)));
+    }
+    for r in 0..=rows {
+        let y = rect.min.y + r as f32 * th * scale;
+        ui.painter().line_segment([egui::pos2(rect.min.x, y), egui::pos2(rect.min.x + cols as f32 * tw * scale, y)], egui::Stroke::new(1.0, Color32::from_black_alpha(120)));
+    }
+    if let Some(b) = st.tile_brush.filter(|b| *b >= 0) {
+        let (c, r) = ((b % cols) as f32, (b / cols) as f32);
+        let r0 = egui::Rect::from_min_size(rect.min + egui::vec2(c * tw * scale, r * th * scale), egui::vec2(tw * scale, th * scale));
+        ui.painter().rect_stroke(r0, 0.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+    }
+    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.clicked()) {
+        let local = (p - rect.min) / scale;
+        let (c, r) = ((local.x / tw).floor() as i32, (local.y / th).floor() as i32);
+        if c < cols && r < rows {
+            st.tile_brush = Some(r * cols + c);
         }
     }
+    ui.label(RichText::new(format!("tile {}", st.tile_brush.unwrap_or(-1))).small().color(theme::TEXT_DIM));
 }
 
 // ---------------------------------------------------------------- hierarchy
@@ -251,6 +316,9 @@ fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
         }
         Variant::Bool(b) => ui.checkbox(b, "").changed(),
         Variant::Num(n) => ui.add(egui::DragValue::new(n).speed(if key == "zoom" || key == "energy" { 0.01 } else { 0.5 }).max_decimals(3)).changed(),
+        Variant::Text(s) if key == "tiles" || key == "animations" || key == "text" && s.contains('\n') => {
+            ui.add(egui::TextEdit::multiline(s).code_editor().desired_rows(3).desired_width(f32::INFINITY)).changed()
+        }
         Variant::Text(s) => ui.add(egui::TextEdit::singleline(s).desired_width(f32::INFINITY)).changed(),
         Variant::Res(s) => {
             let r = ui.add(egui::TextEdit::singleline(s).hint_text("drop an asset here").desired_width(f32::INFINITY));
@@ -403,6 +471,9 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         });
         ui.data_mut(|d| d.insert_temp(mem_id, name));
     });
+    if kind == NodeKind::TileMap2D {
+        egui::CollapsingHeader::new("Tiles").default_open(true).show(ui, |ui| tile_palette(ui, st, id));
+    }
     egui::CollapsingHeader::new("Groups").default_open(false).show(ui, |ui| {
         let mut groups = st.tree.nodes[id].groups.join(", ");
         if ui.add(egui::TextEdit::singleline(&mut groups).hint_text("enemies, pickups").desired_width(f32::INFINITY)).changed() {

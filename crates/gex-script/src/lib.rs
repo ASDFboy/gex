@@ -20,12 +20,14 @@
 //! | `on_<event>(...)`                | SEND(node, "<event>", ...) or EMIT("<event>", ...) |
 //! | `when_<name>()` → `on_<name>()`  | a condition: on_<name> runs when when_<name> turns TRUE |
 
+pub mod audio;
 pub mod commands;
 pub mod convert;
+pub mod physics;
 pub mod thread;
 pub mod world;
 
-pub use world::{Game, LogKind, LogLine};
+pub use world::{FrameInput, Game, LogKind, LogLine, UiEvent};
 
 #[cfg(test)]
 mod tests;

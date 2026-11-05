@@ -38,6 +38,9 @@ pub struct Playing {
     pub keys: HashSet<String>,
     /// Keys pressed since the last frame request (so a quick tap isn't missed).
     pub taps: HashSet<String>,
+    pub wheel: f32,
+    pub ui_events: Vec<gex_script::UiEvent>,
+    pub axes: std::collections::HashMap<String, f32>,
     pub mouse: [f32; 2],
     pub buttons: HashSet<String>,
     /// The viewport shows the game's own camera (else the editor camera, to look around).
@@ -64,6 +67,10 @@ pub struct EditorState {
     pub cam2: EditorCamera2D,
     pub cam3: EditorCamera3D,
     pub show_grid: bool,
+    /// Painting tiles into the selected TileMap2D with this tile (-1 erases).
+    pub tile_brush: Option<i32>,
+    /// Textures for UI Image nodes and tile palettes.
+    pub ui_images: std::collections::HashMap<String, eframe::egui::TextureHandle>,
     /// The 2D camera has been fitted to the game window once.
     pub cam_fitted: bool,
     pub asset_dir: String,
@@ -94,6 +101,8 @@ impl EditorState {
             cam2: EditorCamera2D::default(),
             cam3: EditorCamera3D::default(),
             show_grid: true,
+            tile_brush: None,
+            ui_images: Default::default(),
             cam_fitted: false,
             asset_dir: "res://".into(),
             asset_selected: None,
@@ -411,6 +420,9 @@ impl EditorState {
             last: Instant::now(),
             keys: HashSet::new(),
             taps: HashSet::new(),
+            wheel: 0.0,
+            ui_events: Vec::new(),
+            axes: Default::default(),
             mouse: [0.0; 2],
             buttons: HashSet::new(),
             game_camera: true,
@@ -457,7 +469,15 @@ impl EditorState {
             p.last = now;
             let mut keys = p.keys.clone();
             keys.extend(p.taps.drain());
-            p.handle.request_frame(dt, keys, p.mouse, p.buttons.clone());
+            p.handle.request_frame(gex_script::FrameInput {
+                dt,
+                keys,
+                mouse: p.mouse,
+                buttons: p.buttons.clone(),
+                wheel: std::mem::take(&mut p.wheel),
+                axes: p.axes.clone(),
+                ui: std::mem::take(&mut p.ui_events),
+            });
         }
     }
 

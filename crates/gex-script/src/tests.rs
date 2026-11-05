@@ -118,3 +118,137 @@ fn handlers_are_found() {
     v.sort();
     assert_eq!(v, ["on_step", "on_y", "when_x"]);
 }
+
+#[test]
+fn physics_bodies_fall_collide_and_move() {
+    let scene = r#"(root: (name: "R", kind: Some(Node2D), children: [
+        (name: "Floor", kind: Some(Body2D), transform: Some((position: (400.0, 500.0, 0.0))),
+            props: {"body": Text("static"), "width": Num(800.0), "height": Num(40.0)}),
+        (name: "Wall", kind: Some(Body2D), transform: Some((position: (600.0, 400.0, 0.0))),
+            props: {"body": Text("static"), "width": Num(40.0), "height": Num(160.0)}),
+        (name: "Crate", kind: Some(Body2D), transform: Some((position: (200.0, 100.0, 0.0))), scripts: ["res://crate.jlb"]),
+        (name: "Hero", kind: Some(Body2D), transform: Some((position: (500.0, 464.0, 0.0))),
+            props: {"body": Text("kinematic")}, scripts: ["res://hero.jlb"]),
+    ]))"#;
+    let crate_jlb = "landed = 0\nDEF on_collide_start(other) {\n    IF NAME_OF(other) == \"Floor\" { GLOBAL landed += 1 }\n}\nDEF on_step(dt) {\n    self.landed = landed\n}\n";
+    let hero_jlb = "DEF on_step(dt) {\n    self.floor = MOVE(NULL, 300 * dt, 50 * dt)\n    hit = RAYCAST(self.x, self.y, 0, 1, 500, self.id)\n    IF hit !== NULL { self.below = NAME_OF(hit.node) }\n}\n";
+    let p = project("phys", &[("main.jscene", scene), ("crate.jlb", crate_jlb), ("hero.jlb", hero_jlb)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..180 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let logs = g.take_logs();
+    let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.clone()).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let t = g.tree();
+    let c = t.find_path(None, "R/Crate").unwrap();
+    let y = t.nodes[c].transform.position.y;
+    // The crate (32 tall) rests on the floor's top at y = 480.
+    assert!((y - 464.0).abs() < 2.0, "crate y {}", y);
+    assert_eq!(t.nodes[c].props.get("on_floor"), Some(&Variant::Bool(true)));
+    assert_eq!(t.nodes[c].props.get("landed"), Some(&Variant::Num(1.0)), "collide_start once");
+    let h = t.find_path(None, "R/Hero").unwrap();
+    let hx = t.nodes[h].transform.position.x;
+    // Walking right is stopped by the wall (its left side is at 580; hero half width 16).
+    assert!(hx < 566.0 && hx > 540.0, "hero x {}", hx);
+    assert_eq!(t.nodes[h].props.get("floor"), Some(&Variant::Bool(true)));
+    assert_eq!(t.nodes[h].props.get("below"), Some(&Variant::Text("Floor".into())));
+}
+
+#[test]
+fn physics_3d_ball_rests_on_ground() {
+    let scene = r#"(root: (name: "R", kind: Some(Node3D), children: [
+        (name: "Ground", kind: Some(Body3D), props: {"body": Text("static"), "width": Num(20.0), "height": Num(1.0), "depth": Num(20.0)}),
+        (name: "Ball", kind: Some(Body3D), transform: Some((position: (0.0, 5.0, 0.0))), props: {"shape": Text("sphere")}),
+    ]))"#;
+    let p = project("phys3", &[("main.jscene", scene)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..240 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let t = g.tree();
+    let b = t.find_path(None, "R/Ball").unwrap();
+    let y = t.nodes[b].transform.position.y;
+    assert!((y - 1.0).abs() < 0.05, "ball y {}", y);
+    assert_eq!(t.nodes[b].props.get("on_floor"), Some(&Variant::Bool(true)));
+}
+
+/// A tiny 8-bit mono WAV file.
+fn wav() -> String {
+    let data: Vec<u8> = (0..800).map(|i| (128.0 + 60.0 * ((i as f32) * 0.3).sin()) as u8).collect();
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&8000u32.to_le_bytes());
+    b.extend_from_slice(&8000u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&8u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    b.extend_from_slice(&data);
+    // Stored as Latin-1 text so the helper can write it; every byte maps to one char.
+    b.iter().map(|c| *c as char).collect()
+}
+
+#[test]
+fn sounds_play_or_report_problems() {
+    let w = wav();
+    let scene = r#"(root: (name: "R", kind: Some(Node), scripts: ["res://s.jlb"], children: [
+        (name: "Beep", kind: Some(Sound), props: {"stream": Res("res://beep.wav"), "autoplay": Bool(true)}),
+    ]))"#;
+    let s = "DEF on_create() {\n    PLAY_SOUND(\"res://beep.wav\", 0.5)\n    PLAY(\"Beep\")\n    MUSIC(\"res://beep.wav\")\n    MUSIC(\"\")\n    TRY { PLAY_SOUND(\"res://bad.wav\") } FAIL e { PRINT(\"bad sound\") }\n}\n";
+    let p = project("audio", &[("main.jscene", scene), ("s.jlb", s), ("bad.wav", "not a sound")]);
+    // The WAV has bytes >= 0x80, so write it as raw bytes.
+    std::fs::write(p.dir.join("beep.wav"), w.chars().map(|c| c as u8).collect::<Vec<u8>>()).unwrap();
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    g.frame(0.016, HashSet::new(), [0.0; 2], HashSet::new());
+    let logs = g.take_logs();
+    let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.clone()).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    assert!(logs.iter().any(|l| l.text == "bad sound"), "{:?}", logs.iter().map(|l| &l.text).collect::<Vec<_>>());
+}
+
+#[test]
+fn tiles_animation_drawing_and_ui() {
+    let scene = r#"(root: (name: "R", kind: Some(Node2D), scripts: ["res://r.jlb"], children: [
+        (name: "Map", kind: Some(TileMap2D), transform: Some((position: (0.0, 200.0, 0.0))),
+            props: {"tiles": Text("1,1,1,1,1,1,1,1,1,1")}),
+        (name: "Ball", kind: Some(Body2D), transform: Some((position: (100.0, 0.0, 0.0))), props: {"shape": Text("circle")}),
+        (name: "Hero", kind: Some(Sprite2D), props: {"hframes": Num(4.0), "animations": Text("idle=0; walk=1-3"), "animation": Text("walk"), "anim_fps": Num(10.0)}),
+        (name: "Go", kind: Some(Button), scripts: ["res://go.jlb"]),
+    ]))"#;
+    let r = "pressed = 0\nDEF on_step(dt) {\n    DRAW_RECT(0, 0, 10, 10, \"#ff0000\")\n    DRAW_CIRCLE(5, 5, 3, [r: 0, g: 1, b: 0, a: 1], FALSE)\n    DRAW_TEXT(1, 2, \"hi\", 12)\n}\nDEF on_pressed_go() {\n    GLOBAL pressed += 1\n    self.pressed = pressed\n    SET_TILE(\"Map\", 0, 0, -1)\n}\n";
+    let go = "DEF on_pressed() {\n    self.text = \"pressed!\"\n}\n";
+    let p = project("twod", &[("main.jscene", scene), ("r.jlb", r), ("go.jlb", go)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..90 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let go_id = g.tree().find_path(None, "R/Go").unwrap();
+    g.step(crate::FrameInput { dt: 1.0 / 60.0, ui: vec![crate::UiEvent::Pressed(go_id)], ..Default::default() });
+    let logs = g.take_logs();
+    let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.clone()).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let list = g.render_list();
+    let t = g.tree();
+    let ball = t.find_path(None, "R/Ball").unwrap();
+    // The ball (radius 16) rests on the tile row whose top is at y = 200.
+    assert!((t.nodes[ball].transform.position.y - 184.0).abs() < 2.0, "ball y {}", t.nodes[ball].transform.position.y);
+    let hero = t.find_path(None, "R/Hero").unwrap();
+    let f = t.nodes[hero].num("frame", -1.0);
+    assert!((1.0..=3.0).contains(&f), "frame {}", f);
+    assert_eq!(t.nodes[go_id].text("text"), "pressed!");
+    let root = t.root.unwrap();
+    assert_eq!(t.nodes[root].props.get("pressed"), Some(&Variant::Num(1.0)));
+    let map = t.find_path(None, "R/Map").unwrap();
+    assert!(t.nodes[map].text("tiles").starts_with("-1,1"));
+    // 9 tiles + hero + the drawn rect and filled... and the outline circle as lines.
+    assert!(list.sprites.iter().any(|s| s.layer == 1000.0));
+    assert!(list.lines_2d.len() >= 32);
+    assert!(list.labels.iter().any(|l| l.text == "hi"));
+    assert_eq!(list.ui.len(), 1);
+}

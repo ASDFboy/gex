@@ -6,6 +6,7 @@ pub mod node;
 pub mod project;
 pub mod render;
 pub mod scene;
+pub mod tiles;
 pub mod tree;
 pub mod variant;
 

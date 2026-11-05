@@ -15,11 +15,15 @@ pub struct ProjectConfig {
     pub window_size: [u32; 2],
     /// Extra asset sources (see gex-assets): e.g. a Source-engine game install.
     pub mounts: Vec<MountConfig>,
+    /// Gravity for 2D bodies, in pixels per second² (y grows downward).
+    pub gravity_2d: [f32; 2],
+    /// Gravity for 3D bodies, in metres per second².
+    pub gravity_3d: [f32; 3],
 }
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        ProjectConfig { name: "New Game".into(), main_scene: "res://scenes/main.jscene".into(), window_size: [1280, 720], mounts: Vec::new() }
+        ProjectConfig { name: "New Game".into(), main_scene: "res://scenes/main.jscene".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: [0.0, 980.0], gravity_3d: [0.0, -9.81, 0.0] }
     }
 }
 
