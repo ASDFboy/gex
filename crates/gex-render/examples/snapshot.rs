@@ -18,9 +18,45 @@ fn main() {
 
     let mut tree = SceneTree::new();
     let root = tree.add(None, Node::new("R", NodeKind::Node3D));
-    let mut cube = Node::new("Cube", NodeKind::Mesh3D);
-    cube.transform.position = Vec3::new(0.0, 0.5, 0.0);
-    tree.add(Some(root), cube);
+    let add = |t: &mut SceneTree, kind, pos: Vec3, f: &dyn Fn(&mut Node)| {
+        let mut n = Node::new("n", kind);
+        n.transform.position = pos;
+        f(&mut n);
+        t.add(Some(root), n);
+    };
+    add(&mut tree, NodeKind::Environment, Vec3::ZERO, &|n| {
+        n.props.insert("fog_start".into(), Variant::Num(8.0));
+        n.props.insert("fog_end".into(), Variant::Num(30.0));
+    });
+    add(&mut tree, NodeKind::Light3D, Vec3::ZERO, &|n| n.transform.rotation = Vec3::new(-50.0, 30.0, 0.0));
+    add(&mut tree, NodeKind::Light3D, Vec3::new(2.0, 1.0, 1.5), &|n| {
+        n.props.insert("type".into(), Variant::Text("point".into()));
+        n.props.insert("color".into(), Variant::Color([1.0, 0.2, 0.1, 1.0]));
+        n.props.insert("energy".into(), Variant::Num(3.0));
+        n.props.insert("range".into(), Variant::Num(4.0));
+    });
+    add(&mut tree, NodeKind::Mesh3D, Vec3::ZERO, &|n| {
+        n.props.insert("mesh".into(), Variant::Text("plane".into()));
+        n.transform.scale = Vec3::new(40.0, 1.0, 40.0);
+    });
+    add(&mut tree, NodeKind::Mesh3D, Vec3::new(0.0, 0.5, 0.0), &|_| {});
+    add(&mut tree, NodeKind::Mesh3D, Vec3::new(2.0, 1.0, 0.0), &|n| n.props.insert("mesh".into(), Variant::Text("sphere".into())).map(|_| ()).unwrap_or(()));
+    add(&mut tree, NodeKind::Mesh3D, Vec3::new(-2.0, 0.6, 1.0), &|n| {
+        n.props.insert("color".into(), Variant::Color([0.3, 0.6, 1.0, 0.4]));
+    });
+    // GEX_SNAP_MODEL=dir:file.glb:animation adds a model (from that folder) to the scene.
+    if let Ok(spec) = std::env::var("GEX_SNAP_MODEL") {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let file = format!("res://{}", parts.get(1).copied().unwrap_or(""));
+        let anim = parts.get(2).copied().unwrap_or("").to_string();
+        add(&mut tree, NodeKind::Mesh3D, Vec3::new(0.0, 0.0, 2.0), &|n| {
+            n.props.insert("mesh".into(), Variant::Text(file.clone()));
+            n.props.insert("animation".into(), Variant::Text(anim.clone()));
+            n.props.insert("anim_time".into(), Variant::Num(0.35));
+            n.transform.scale = Vec3::splat(0.02);
+            n.transform.rotation.y = 60.0;
+        });
+    }
     let mut s = Node::new("S", NodeKind::Sprite2D);
     s.transform.position = Vec3::new(100.0, 100.0, 0.0);
     s.props.insert("color".into(), Variant::Color([1.0, 0.3, 0.2, 1.0]));
@@ -29,15 +65,14 @@ fn main() {
 
     let size = [640u32, 360u32];
     let cams = Cameras::for_editor(mode_3d, &EditorCamera2D::default(), &EditorCamera3D::default(), size);
-    let mut o = Overlay::default();
-    for i in -20..=20 {
-        let f = i as f32;
-        o.line3(Vec3::new(f, 0.0, -20.0), Vec3::new(f, 0.0, 20.0), [0.5, 0.6, 0.7, 0.6]);
-        o.line3(Vec3::new(-20.0, 0.0, f), Vec3::new(20.0, 0.0, f), [0.5, 0.6, 0.7, 0.6]);
-    }
-    let vfs = gex_assets::Vfs::new(std::path::Path::new("."), &Default::default());
+    let o = Overlay::default();
+    let dir = std::env::var("GEX_SNAP_MODEL").ok().and_then(|s| s.split(':').next().map(|d| d.to_string())).unwrap_or_else(|| ".".into());
+    let vfs = gex_assets::Vfs::new(std::path::Path::new(&dir), &Default::default());
     let mut r = Renderer::new(&device, &queue);
     r.render(&device, &queue, &vfs, size, &list, &cams, &o);
+    for p in &r.problems {
+        eprintln!("problem: {}", p);
+    }
 
     // Read the target back.
     let tex = r.target_texture().unwrap();

@@ -43,7 +43,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("STOP", "(node)", "stops a Sound node"),
     ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
-    ("ANIMATE", "(node, name)", "plays a Sprite2D animation (from its animations property)"),
+    ("ANIMATE", "(node, name)", "plays an animation: a Sprite2D's (from its animations property) or a model's"),
+    ("ANIMATIONS", "(node)", "the names of a Mesh3D model's animations"),
     ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
     ("SET_TILE", "(node, col, row, id)", "changes a tile (-1 clears it)"),
     ("TILE_AT", "(node, x, y)", "the cell under a world position: [col:, row:]"),
@@ -455,8 +456,21 @@ impl Host for EngineHost {
                 let id = target(st, a.first())?;
                 let anim = text_arg(name, &a, 1)?;
                 st.anims.remove(&id);
-                st.tree.nodes[id].props.insert("animation".into(), gex_core::Variant::Text(anim));
+                let n = &mut st.tree.nodes[id];
+                n.props.insert("animation".into(), gex_core::Variant::Text(anim));
+                if n.kind == gex_core::NodeKind::Mesh3D {
+                    n.props.insert("anim_time".into(), gex_core::Variant::Num(0.0));
+                }
                 Ok(Value::Null)
+            }
+            "ANIMATIONS" => {
+                let id = target(st, a.first())?;
+                let mesh = st.tree.nodes[id].text("mesh").to_string();
+                let names = match gex_assets::model::cached(&st.vfs, &mesh) {
+                    Ok(m) => m.animations.iter().map(|a| Value::text(&a.name)).collect(),
+                    Err(_) => Vec::new(),
+                };
+                Ok(list_table(names))
             }
             "TILE" | "SET_TILE" => {
                 let id = target(st, a.first())?;

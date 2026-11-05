@@ -81,13 +81,42 @@ pub struct MeshDraw {
     pub texture: String,
     /// How many times the texture repeats across the mesh.
     pub uv_scale: [f32; 2],
+    pub cast_shadows: bool,
+    /// Model animations: which one, and how far into it (seconds).
+    pub animation: String,
+    pub anim_time: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LightKind {
+    Directional,
+    Point,
+    Spot,
 }
 
 #[derive(Clone, Debug)]
 pub struct LightDraw {
+    pub kind: LightKind,
+    pub pos: Vec3,
     /// Direction the light shines along (world space).
     pub dir: Vec3,
     pub color: [f32; 3],
+    pub range: f32,
+    /// Spot lights: half the cone, in degrees.
+    pub angle: f32,
+    pub shadows: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Environment3D {
+    pub sky_top: [f32; 4],
+    pub sky_horizon: [f32; 4],
+    pub ground: [f32; 4],
+    pub sky_texture: String,
+    pub ambient: [f32; 3],
+    pub fog_color: [f32; 4],
+    pub fog_start: f32,
+    pub fog_end: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -125,6 +154,7 @@ pub struct RenderList {
     /// Background color.
     pub clear: [f32; 4],
     pub ui: Vec<UiItem>,
+    pub environment: Option<Environment3D>,
     /// Lines drawn by scripts this frame (2D world): (from, to, color).
     pub lines_2d: Vec<([f32; 2], [f32; 2], [f32; 4])>,
 }
@@ -233,7 +263,26 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 color: n.color("color"),
                 texture: n.text("texture").to_string(),
                 uv_scale: [n.num("uv_scale_x", 1.0) as f32, n.num("uv_scale_y", 1.0) as f32],
+                cast_shadows: n.prop("cast_shadows").is_none_or(|v| v.as_bool()),
+                animation: n.text("animation").to_string(),
+                anim_time: n.num("anim_time", 0.0) as f32,
             }),
+            NodeKind::Environment => {
+                if out.environment.is_none() {
+                    let a = n.color("ambient");
+                    let e = n.num("ambient_energy", 0.35) as f32;
+                    out.environment = Some(Environment3D {
+                        sky_top: n.color("sky_top"),
+                        sky_horizon: n.color("sky_horizon"),
+                        ground: n.color("ground"),
+                        sky_texture: n.text("sky_texture").to_string(),
+                        ambient: [a[0] * e, a[1] * e, a[2] * e],
+                        fog_color: n.color("fog_color"),
+                        fog_start: n.num("fog_start", 0.0) as f32,
+                        fog_end: n.num("fog_end", 0.0) as f32,
+                    });
+                }
+            }
             NodeKind::Camera3D => {
                 if n.prop("current").is_none_or(|v| v.as_bool()) && out.camera3d.is_none() {
                     out.camera3d = Some(Camera3D {
@@ -248,8 +297,17 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 let c = n.color("color");
                 let e = n.num("energy", 1.0) as f32;
                 out.lights.push(LightDraw {
+                    kind: match n.text("type") {
+                        "point" => LightKind::Point,
+                        "spot" => LightKind::Spot,
+                        _ => LightKind::Directional,
+                    },
+                    pos: model.w_axis.truncate(),
                     dir: model.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Y),
                     color: [c[0] * e, c[1] * e, c[2] * e],
+                    range: n.num("range", 10.0).max(0.01) as f32,
+                    angle: n.num("angle", 45.0) as f32,
+                    shadows: n.prop("shadows").is_none_or(|v| v.as_bool()),
                 });
             }
             _ => {}

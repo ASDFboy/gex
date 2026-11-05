@@ -25,6 +25,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 rfd = "0.15"
 egui-wgpu = "0.36"
 steamlocate = "2"
+gltf = "1"
+tobj = "4"
+vmdl = "0.2"
+vbsp = "0.9"
 rodio = { version = "0.23", default-features = false, features = ["playback", "wav", "mp3", "vorbis", "flac", "symphonia-wav", "symphonia-adpcm"] }
 
 [profile.dev]

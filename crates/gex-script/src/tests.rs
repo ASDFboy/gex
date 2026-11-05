@@ -252,3 +252,38 @@ fn tiles_animation_drawing_and_ui() {
     assert!(list.labels.iter().any(|l| l.text == "hi"));
     assert_eq!(list.ui.len(), 1);
 }
+
+#[test]
+fn model_animation_and_mesh_collision() {
+    let scene = r#"(root: (name: "R", kind: Some(Node3D), scripts: ["res://r.jlb"], children: [
+        (name: "Guy", kind: Some(Mesh3D), props: {"mesh": Text("res://guy.glb"), "anim_loop": Bool(false)}),
+        (name: "Floor", kind: Some(Mesh3D), props: {"mesh": Text("plane"), "collision": Bool(true)}, transform: Some((scale: (10.0, 1.0, 10.0)))),
+        (name: "Ball", kind: Some(Body3D), transform: Some((position: (0.0, 3.0, 0.0))), props: {"shape": Text("sphere")}),
+    ]))"#;
+    let r = "ended = \"\"\nDEF on_create() {\n    names = ANIMATIONS(\"Guy\")\n    self.count = LEN(names)\n    ANIMATE(\"Guy\", names[1])\n}\n";
+    let guy = "";
+    let p = project("model", &[("main.jscene", scene), ("r.jlb", r), ("guy.jlb", guy)]);
+    std::fs::write(p.dir.join("guy.glb"), gex_assets::model::tiny_skinned_glb()).unwrap();
+    std::fs::write(p.dir.join("end.jlb"), "DEF on_animation_end(name) {\n    self.done = name\n}\n").unwrap();
+    // Attach the end-of-animation handler to Guy.
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    {
+        let mut st = g.st.borrow_mut();
+        let id = st.tree.find_path(None, "R/Guy").unwrap();
+        st.tree.nodes[id].scripts.push("res://end.jlb".into());
+    }
+    for _ in 0..150 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let t = g.tree();
+    let root = t.root.unwrap();
+    assert_eq!(t.nodes[root].props.get("count"), Some(&Variant::Num(1.0)));
+    let guy = t.find_path(None, "R/Guy").unwrap();
+    assert_eq!(t.nodes[guy].props.get("anim_time"), Some(&Variant::Num(1.0)), "stopped at the end");
+    assert_eq!(t.nodes[guy].props.get("done"), Some(&Variant::Text("lift".into())));
+    let ball = t.find_path(None, "R/Ball").unwrap();
+    let y = t.nodes[ball].transform.position.y;
+    assert!((y - 0.5).abs() < 0.05, "the ball rests on the collision plane: {}", y);
+}

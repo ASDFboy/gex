@@ -11,6 +11,9 @@ pub struct Cameras {
     pub draw_3d: bool,
     pub draw_2d: bool,
     pub size: [u32; 2],
+    /// Where the 3D camera is, and a point it's looking at (shadows are fitted around it).
+    pub eye: Vec3,
+    pub focus: Vec3,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,18 +95,22 @@ impl Cameras {
     /// design window, like a GameMaker room.
     pub fn for_game(list: &RenderList, size: [u32; 2], design: [u32; 2]) -> Cameras {
         let fit = (size[0] as f32 / design[0].max(1) as f32).min(size[1] as f32 / design[1].max(1) as f32).max(0.01);
-        let vp3 = match list.camera3d {
+        let (vp3, eye, focus) = match list.camera3d {
             Some(c) => {
                 let proj = Mat4::perspective_rh(c.fov_deg.to_radians(), aspect(size), c.near.max(0.001), c.far.max(c.near + 0.01));
-                proj * c.world.inverse()
+                let eye = c.world.w_axis.truncate();
+                (proj * c.world.inverse(), eye, eye + c.world.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Z) * 12.0)
             }
-            None => EditorCamera3D::default().view_proj(aspect(size)),
+            None => {
+                let d = EditorCamera3D::default();
+                (d.view_proj(aspect(size)), d.eye(), d.target)
+            }
         };
         let vp2 = match list.camera2d {
             Some(c) => ortho_2d(c.center, c.zoom * fit, c.rotation, size),
             None => ortho_2d(Vec2::new(design[0] as f32 / 2.0, design[1] as f32 / 2.0), fit, 0.0, size),
         };
-        Cameras { view_proj_3d: vp3, view_proj_2d: vp2, draw_3d: true, draw_2d: true, size }
+        Cameras { view_proj_3d: vp3, view_proj_2d: vp2, draw_3d: true, draw_2d: true, size, eye, focus }
     }
 
     pub fn for_editor(mode_3d: bool, c2: &EditorCamera2D, c3: &EditorCamera3D, size: [u32; 2]) -> Cameras {
@@ -113,6 +120,8 @@ impl Cameras {
             draw_3d: mode_3d,
             draw_2d: !mode_3d,
             size,
+            eye: c3.eye(),
+            focus: c3.target,
         }
     }
 

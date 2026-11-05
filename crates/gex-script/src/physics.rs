@@ -5,6 +5,7 @@
 //! 2D works in pixels (y down) in the tree and in metres inside rapier (50 px = 1 m).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
 use gex_core::{NodeId, NodeKind, SceneTree, Variant};
@@ -18,6 +19,9 @@ pub struct StaticBox2 {
     pub center: Vec2,
     pub half: Vec2,
 }
+
+/// A static triangle mesh in world space (Mesh3D nodes with collision on): owner, vertices, triangles.
+pub type StaticMesh = (NodeId, Arc<Vec<Vec3>>, Arc<Vec<[u32; 3]>>);
 
 pub struct RayHit {
     pub node: NodeId,
@@ -393,8 +397,8 @@ impl World3 {
         }
     }
 
-    fn set_statics(&mut self, boxes: &[StaticBox3], meshes: &[(NodeId, Vec<Vec3>, Vec<[u32; 3]>)]) {
-        let key = format!("{:?}{}", boxes, meshes.iter().map(|m| m.1.len()).sum::<usize>());
+    fn set_statics(&mut self, boxes: &[StaticBox3], meshes: &[StaticMesh]) {
+        let key = format!("{:?}{:?}", boxes, meshes.iter().map(|m| (m.0, Arc::as_ptr(&m.1))).collect::<Vec<_>>());
         if key == self.statics_key {
             return;
         }
@@ -410,7 +414,7 @@ impl World3 {
             self.statics.push(h);
         }
         for (owner, v, i) in meshes {
-            if let Ok(c) = d3::ColliderBuilder::trimesh(v.clone(), i.clone()) {
+            if let Ok(c) = d3::ColliderBuilder::trimesh(v.to_vec(), i.to_vec()) {
                 let h = self.world.insert_collider(c, None);
                 self.owners.insert(h, *owner);
                 self.statics.push(h);
@@ -574,7 +578,7 @@ pub struct Physics {
     /// Extra static shapes from tilemaps and maps (set before each step).
     pub statics_2d: Vec<StaticBox2>,
     pub statics_3d: Vec<StaticBox3>,
-    pub meshes_3d: Vec<(NodeId, Vec<Vec3>, Vec<[u32; 3]>)>,
+    pub meshes_3d: Vec<StaticMesh>,
 }
 
 impl Physics {

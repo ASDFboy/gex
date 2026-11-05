@@ -30,6 +30,7 @@ pub fn kind_icon(k: NodeKind) -> &'static str {
         NodeKind::ProgressBar => "📊",
         NodeKind::Image => "🖼",
         NodeKind::Body3D => "🔲",
+        NodeKind::Environment => "⛅",
     }
 }
 
@@ -722,6 +723,14 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                         st.tree.nodes[id].props.insert("texture".into(), Variant::Res(sel.clone()));
                     }
                 }
+            } else if gex_assets::model::is_model(&sel) {
+                if let Some(id) = st.selected.filter(|_| st.playing.is_none()) {
+                    if st.tree.nodes.get(id).is_some_and(|n| n.kind == NodeKind::Mesh3D) && ui.button("Use on selected").clicked() {
+                        st.will_change("model");
+                        st.tree.nodes[id].props.insert("mesh".into(), Variant::Text(sel.clone()));
+                    }
+                }
+                ui.label(RichText::new("Drag into the 3D view to place it.").small().color(theme::TEXT_DIM));
             } else if sel.ends_with(".jscene") {
                 if st.playing.is_none() && ui.button("Instance into scene").clicked() {
                     st.instance_scene(&sel);

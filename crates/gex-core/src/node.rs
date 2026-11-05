@@ -45,6 +45,8 @@ pub enum NodeKind {
     Light3D,
     /// A 3D physics body (box, sphere or capsule).
     Body3D,
+    /// Sky, ambient light and fog for 3D scenes (the first one in the tree is used).
+    Environment,
 }
 
 pub const ALL_KINDS: &[NodeKind] = &[
@@ -68,6 +70,7 @@ pub const ALL_KINDS: &[NodeKind] = &[
     NodeKind::Camera3D,
     NodeKind::Light3D,
     NodeKind::Body3D,
+    NodeKind::Environment,
 ];
 
 impl NodeKind {
@@ -93,6 +96,7 @@ impl NodeKind {
             NodeKind::Camera3D => "Camera3D",
             NodeKind::Light3D => "Light3D",
             NodeKind::Body3D => "Body3D",
+            NodeKind::Environment => "Environment",
         }
     }
     pub fn from_name(s: &str) -> Option<NodeKind> {
@@ -105,7 +109,7 @@ impl NodeKind {
         matches!(self, NodeKind::Panel | NodeKind::Button | NodeKind::Label | NodeKind::TextInput | NodeKind::ProgressBar | NodeKind::Image)
     }
     pub fn is_3d(self) -> bool {
-        matches!(self, NodeKind::Node3D | NodeKind::Mesh3D | NodeKind::Camera3D | NodeKind::Light3D | NodeKind::Body3D)
+        matches!(self, NodeKind::Node3D | NodeKind::Mesh3D | NodeKind::Camera3D | NodeKind::Light3D | NodeKind::Body3D | NodeKind::Environment)
     }
     /// The built-in properties this kind has, with their defaults. Scene files only
     /// store values that differ from these.
@@ -192,9 +196,39 @@ impl NodeKind {
             NodeKind::Label2D => vec![("text", Text("Label".into())), ("size", Num(16.0)), ("color", Color([1.0; 4])), ("layer", Num(10.0))],
             NodeKind::Camera2D => vec![("zoom", Num(1.0)), ("current", Bool(true))],
             NodeKind::Collider2D => vec![("width", Num(32.0)), ("height", Num(32.0)), ("group", Text(String::new()))],
-            NodeKind::Mesh3D => vec![("mesh", Text("cube".into())), ("color", Color([0.8, 0.8, 0.8, 1.0])), ("texture", Res(String::new()))],
+            NodeKind::Mesh3D => vec![
+                ("mesh", Text("cube".into())),
+                ("color", Color([0.8, 0.8, 0.8, 1.0])),
+                ("texture", Res(String::new())),
+                ("uv_scale_x", Num(1.0)),
+                ("uv_scale_y", Num(1.0)),
+                ("cast_shadows", Bool(true)),
+                ("collision", Bool(false)),
+                ("animation", Text(String::new())),
+                ("anim_speed", Num(1.0)),
+                ("anim_loop", Bool(true)),
+                ("anim_time", Num(0.0)),
+            ],
             NodeKind::Camera3D => vec![("fov", Num(70.0)), ("current", Bool(true)), ("near", Num(0.05)), ("far", Num(500.0))],
-            NodeKind::Light3D => vec![("color", Color([1.0, 1.0, 1.0, 1.0])), ("energy", Num(1.0))],
+            NodeKind::Light3D => vec![
+                ("type", Text("directional".into())),
+                ("color", Color([1.0, 1.0, 1.0, 1.0])),
+                ("energy", Num(1.0)),
+                ("range", Num(10.0)),
+                ("angle", Num(45.0)),
+                ("shadows", Bool(true)),
+            ],
+            NodeKind::Environment => vec![
+                ("sky_top", Color([0.32, 0.5, 0.78, 1.0])),
+                ("sky_horizon", Color([0.72, 0.8, 0.88, 1.0])),
+                ("ground", Color([0.22, 0.22, 0.24, 1.0])),
+                ("sky_texture", Res(String::new())),
+                ("ambient", Color([0.55, 0.6, 0.7, 1.0])),
+                ("ambient_energy", Num(0.35)),
+                ("fog_color", Color([0.72, 0.8, 0.88, 1.0])),
+                ("fog_start", Num(0.0)),
+                ("fog_end", Num(0.0)),
+            ],
             NodeKind::Sound => vec![
                 ("stream", Res(String::new())),
                 ("volume", Num(1.0)),

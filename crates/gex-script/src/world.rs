@@ -103,6 +103,8 @@ pub struct WorldState {
     pub draws: Vec<crate::commands::Draw>,
     /// Sprite animations: node → (animation, time, ended).
     pub(crate) anims: HashMap<NodeId, (String, f64, bool)>,
+    /// Collision meshes made from Mesh3D models: node → (what they were made from, mesh).
+    pub(crate) mesh_colliders: HashMap<NodeId, (String, crate::physics::StaticMesh)>,
 }
 
 impl WorldState {
@@ -169,6 +171,7 @@ impl Game {
             wheel: 0.0,
             draws: Vec::new(),
             anims: HashMap::new(),
+            mesh_colliders: HashMap::new(),
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
@@ -537,6 +540,43 @@ impl Game {
                 st.tree.nodes[id].props.insert("frame".into(), Variant::Num(frames[k] as f64));
             }
         }
+        // Model (Mesh3D) animations.
+        {
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            let ids: Vec<NodeId> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Mesh3D).collect();
+            for id in ids {
+                let n = &st.tree.nodes[id];
+                let name = n.text("animation").to_string();
+                let mesh = n.text("mesh").to_string();
+                if name.is_empty() || !gex_assets::model::is_model(&mesh) {
+                    continue;
+                }
+                let Ok(model) = gex_assets::model::cached(&st.vfs, &mesh) else { continue };
+                let Some(anim) = model.animation(&name) else { continue };
+                let speed = n.num("anim_speed", 1.0);
+                let looped = n.prop("anim_loop").is_none_or(|v| v.as_bool());
+                let a = st.anims.entry(id).or_insert_with(|| (name.clone(), n.num("anim_time", 0.0), false));
+                if a.0 != name {
+                    *a = (name.clone(), 0.0, false);
+                }
+                a.1 += dt * speed;
+                let dur = anim.duration as f64;
+                if dur > 0.0 && a.1 >= dur {
+                    if looped {
+                        a.1 %= dur;
+                    } else {
+                        a.1 = dur;
+                        if !a.2 {
+                            a.2 = true;
+                            ended.push((id, name.clone()));
+                        }
+                    }
+                }
+                let t = a.1;
+                st.tree.nodes[id].props.insert("anim_time".into(), Variant::Num(t));
+            }
+        }
         for (id, name) in ended {
             self.run(id, "on_animation_end", vec![Value::text(&name)]);
         }
@@ -576,6 +616,45 @@ impl Game {
             }
         }
         st.physics.statics_2d = boxes;
+        // Mesh3D nodes with collision on become static triangle meshes.
+        let mut meshes = Vec::new();
+        let mut keep = HashSet::new();
+        for id in st.tree.walk() {
+            let n = &st.tree.nodes[id];
+            if n.kind != NodeKind::Mesh3D || !n.prop("collision").is_some_and(|v| v.as_bool()) {
+                continue;
+            }
+            let mesh = n.text("mesh").to_string();
+            let m = st.tree.global_matrix(id);
+            let key = format!("{}{:?}", mesh, m);
+            keep.insert(id);
+            if st.mesh_colliders.get(&id).is_none_or(|c| c.0 != key) {
+                let (v, t) = if gex_assets::model::is_model(&mesh) {
+                    match gex_assets::model::cached(&st.vfs, &mesh) {
+                        Ok(model) => model.triangles(),
+                        Err(e) => {
+                            st.logs.push(LogLine { kind: LogKind::Error, text: format!("collision for {}: {}", n.name, e), file: None, line: 0 });
+                            (Vec::new(), Vec::new())
+                        }
+                    }
+                } else {
+                    // Primitives: their unit box (a plane is a thin slab under its surface).
+                    let (lo, hi) = if mesh == "plane" { (-0.05, 0.0) } else { (-0.5, 0.5) };
+                    let c: Vec<glam::Vec3> = (0..8).map(|i| glam::Vec3::new(if i & 1 == 0 { -0.5 } else { 0.5 }, if i & 2 == 0 { lo } else { hi }, if i & 4 == 0 { -0.5 } else { 0.5 })).collect();
+                    let t = vec![[0, 1, 3], [0, 3, 2], [4, 6, 7], [4, 7, 5], [0, 4, 5], [0, 5, 1], [2, 3, 7], [2, 7, 6], [0, 2, 6], [0, 6, 4], [1, 5, 7], [1, 7, 3]];
+                    (c, t)
+                };
+                let v: Vec<glam::Vec3> = v.into_iter().map(|p| m.transform_point3(p)).collect();
+                st.mesh_colliders.insert(id, (key, (id, std::sync::Arc::new(v), std::sync::Arc::new(t))));
+            }
+            if let Some((_, c)) = st.mesh_colliders.get(&id) {
+                if !c.1.is_empty() {
+                    meshes.push(c.clone());
+                }
+            }
+        }
+        st.mesh_colliders.retain(|k, _| keep.contains(k));
+        st.physics.meshes_3d = meshes;
     }
 
     /// What to draw this frame: the tree plus anything scripts drew with DRAW_*.

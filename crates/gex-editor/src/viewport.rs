@@ -531,6 +531,25 @@ fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
         if let Some(id) = st.instance_scene(path) {
             place(st, id);
         }
+    } else if gex_assets::model::is_model(&lower) {
+        st.will_change("drop");
+        let name: String = path.rsplit('/').next().unwrap_or("Model").split('.').next().unwrap_or("Model").to_string();
+        let mut n = Node::new(name, NodeKind::Mesh3D);
+        n.props.insert("mesh".into(), Variant::Text(path.to_string()));
+        n.props.insert("color".into(), Variant::Color([1.0; 4]));
+        if lower.ends_with(".bsp") {
+            n.props.insert("collision".into(), Variant::Bool(true));
+        }
+        let id = st.tree.add(st.tree.root, n);
+        place(st, id);
+        st.selected = Some(id);
+        st.mode_3d = true;
+    } else if lower.ends_with(".wav") || lower.ends_with(".mp3") || lower.ends_with(".ogg") || lower.ends_with(".flac") {
+        st.will_change("drop");
+        let mut n = Node::new("Sound", NodeKind::Sound);
+        n.props.insert("stream".into(), Variant::Res(path.to_string()));
+        let id = st.tree.add(st.tree.root, n);
+        st.selected = Some(id);
     } else if gex_assets::image_load::is_image(&lower) {
         st.will_change("drop");
         let name: String = path.rsplit('/').next().unwrap_or("Sprite").split('.').next().unwrap_or("Sprite").to_string();
