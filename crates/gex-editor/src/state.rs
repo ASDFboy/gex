@@ -305,6 +305,17 @@ impl EditorState {
                 r
             }
         };
+        // Other open scenes with copies of this one: describe them against the file as it was,
+        // so after saving they can be rebuilt from the new file with their own changes kept.
+        let users: Vec<(usize, Option<String>)> = {
+            let read = self.reader();
+            self.docs
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.tree.nodes.iter().any(|(_, n)| n.instance_of.as_deref() == Some(res.as_str())))
+                .map(|(i, d)| (i, scene::save(&d.tree, &read).ok()))
+                .collect()
+        };
         let result = self.scene_text().and_then(|text| {
             let p = self.project.res_to_path(&res).ok_or("not a project path")?;
             if let Some(d) = p.parent() {
@@ -317,6 +328,16 @@ impl EditorState {
             Ok(t) => {
                 self.scene_saved = t;
                 self.status = format!("saved {}", res);
+                for (i, before) in users {
+                    let Some(text) = before else { continue };
+                    let rebuilt = scene::load(&text, &|p: &str| self.project.read_text(p));
+                    if let Ok(tree) = rebuilt {
+                        let d = &mut self.docs[i];
+                        d.undo.push(std::mem::replace(&mut d.tree, tree));
+                        d.redo.clear();
+                        d.selected = d.tree.root;
+                    }
+                }
             }
             Err(e) => self.log(LogKind::Error, format!("couldn't save {}: {}", res, e)),
         }

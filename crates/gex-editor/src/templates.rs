@@ -214,4 +214,28 @@ mod tests {
         let p3 = st.tree.find_path(None, "Level/Player").unwrap();
         assert!(st.tree.nodes[p3].instance_of.is_some(), "undo brings the instance back");
     }
+
+    #[test]
+    fn saving_a_scene_updates_its_copies_in_other_open_scenes() {
+        let dir = std::env::temp_dir().join(format!("gex-copies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        super::create_demo(&dir).unwrap();
+        let mut st = crate::state::EditorState::new(gex_core::project::Project::open(&dir).unwrap());
+        st.open_scene("res://scenes/main.jscene");
+        // An override on one copy, unsaved.
+        let c2 = st.tree.find_path(None, "Level/Coin2").unwrap();
+        st.tree.nodes[c2].props.insert("width".into(), gex_core::Variant::Num(99.0));
+        st.open_scene("res://scenes/coin.jscene");
+        let root = st.tree.root.unwrap();
+        st.tree.nodes[root].props.insert("color".into(), gex_core::Variant::Color([1.0, 0.5, 0.0, 1.0]));
+        st.save_scene();
+        st.open_scene("res://scenes/main.jscene");
+        for name in ["Level/Coin", "Level/Coin2"] {
+            let c = st.tree.find_path(None, name).unwrap();
+            assert_eq!(st.tree.nodes[c].color("color"), [1.0, 0.5, 0.0, 1.0], "{} follows the file", name);
+        }
+        let c2 = st.tree.find_path(None, "Level/Coin2").unwrap();
+        assert_eq!(st.tree.nodes[c2].num("width", 0.0), 99.0, "its own change is kept");
+        assert!(!st.scene_text().unwrap().contains("Color((1.0, 0.5"), "no stale color saved as an override");
+    }
 }

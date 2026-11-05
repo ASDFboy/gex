@@ -46,7 +46,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
     ("BURST", "(node, count)", "a Particles2D throws out this many particles at once (an explosion, a puff)"),
-    ("ANIMATE", "(node, name)", "plays an animation: a Sprite2D's (from its animations property) or a model's"),
+    ("ANIMATE", "(node, name, restart)", "plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE"),
     ("ANIMATIONS", "(node)", "the names of a Mesh3D model's animations"),
     ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
     ("SET_TILE", "(node, col, row, id)", "changes a tile (-1 clears it)"),
@@ -512,6 +512,12 @@ impl Host for EngineHost {
             "ANIMATE" => {
                 let id = target(st, a.first())?;
                 let anim = text_arg(name, &a, 1)?;
+                // Already playing it: carry on (so calling ANIMATE every frame is fine).
+                let restart = a.get(2).is_some_and(|v| matches!(v, Value::Bool(true)));
+                let same = st.tree.nodes[id].text("animation") == anim && st.anims.get(&id).is_none_or(|(n, _, ended)| *n == anim && !ended);
+                if same && !restart {
+                    return Ok(Value::Null);
+                }
                 st.anims.remove(&id);
                 let n = &mut st.tree.nodes[id];
                 n.props.insert("animation".into(), gex_core::Variant::Text(anim));

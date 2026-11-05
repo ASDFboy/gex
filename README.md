@@ -71,7 +71,14 @@ cargo test --workspace                         # everything's tests, including t
 | F12 or Ctrl+click | go to a function's definition (script editor) |
 | Ctrl+F | find and replace (script editor) |
 
-More: [docs/NODES.md](docs/NODES.md) (every node kind and its properties).
+## Learn it
+
+1. [Tutorial 1: the basics](docs/TUTORIAL-1-BASICS.md): nodes, scripts, collisions, reusable
+   scenes, a score, a menu, export.
+2. [Tutorial 2: going further](docs/TUTORIAL-2-ADVANCED.md): physics, tilemaps and pathfinding,
+   animation, cameras, tweens and particles, UI, input actions, saving, 3D, first person,
+   Half-Life 2 assets, debugging.
+3. Reference: [every node](docs/NODES.md), [every script event and command](docs/SCRIPTING.md).
 
 ## Layout
 

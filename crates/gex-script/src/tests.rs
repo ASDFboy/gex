@@ -516,3 +516,75 @@ fn tweens_move_props_and_report_the_end() {
     assert!(logs.iter().any(|l| l == "done x"), "the root's own tween ended: {:?}", logs);
     assert_eq!(logs.iter().filter(|l| l.starts_with("done")).count(), 1, "on_tween_end runs on the tweened node only");
 }
+
+/// The scripts from docs/TUTORIAL-1-BASICS.md, as written there.
+#[test]
+fn tutorial_one_works() {
+    let scene = r#"(root: (name: "Main", kind: Some(Node2D), scripts: ["res://scripts/main.jlb"], children: [
+        (name: "Player", kind: Some(Sprite2D), transform: Some((position: (640.0, 360.0, 0.0))), props: {"width": Num(40.0), "height": Num(40.0)},
+            scripts: ["res://scripts/player.jlb"], children: [(name: "Collider2D", kind: Some(Collider2D), props: {"width": Num(40.0), "height": Num(40.0)})]),
+        (name: "Coin", kind: Some(Sprite2D), transform: Some((position: (640.0, 250.0, 0.0))), props: {"width": Num(20.0), "height": Num(20.0)},
+            children: [(name: "Collider2D", kind: Some(Collider2D), props: {"width": Num(20.0), "height": Num(20.0)})]),
+        (name: "Score", kind: Some(Label), transform: Some((position: (20.0, 16.0, 0.0))), props: {"text": Text("Score: 0")}),
+    ]))"#;
+    let coin = r#"(root: (name: "Coin", kind: Some(Sprite2D), children: [(name: "Collider2D", kind: Some(Collider2D))]))"#;
+    let player = "speed = 300\n\nDEF on_step(dt) {\n\tIF KEY_DOWN(\"left\") OR KEY_DOWN(\"a\") { self.x -= speed * dt }\n\tIF KEY_DOWN(\"right\") OR KEY_DOWN(\"d\") { self.x += speed * dt }\n\tIF KEY_DOWN(\"up\") OR KEY_DOWN(\"w\") { self.y -= speed * dt }\n\tIF KEY_DOWN(\"down\") OR KEY_DOWN(\"s\") { self.y += speed * dt }\n}\n\nDEF on_collide_start(other) {\n\tDESTROY(other)\n\tEMIT(\"coin_taken\")\n}\n";
+    let main = "score = 0\n\nDEF on_coin_taken() {\n\tGLOBAL score += 1\n\tSET(\"Score\", \"text\", \"Score: \" + score)\n}\n\nDEF on_create() {\n\tTIMER(\"spawn\", 2, TRUE)\n}\n\nDEF on_timer_spawn() {\n\tSPAWN(\"res://scenes/coin.jscene\", RANDOM(40, 1240), RANDOM(80, 680))\n}\n";
+    let p = project("tutorial1", &[("scenes/main.jscene", scene), ("scenes/coin.jscene", coin), ("scripts/player.jlb", player), ("scripts/main.jlb", main)]);
+    let mut g = Game::from_scene(p, "res://scenes/main.jscene", None).unwrap();
+    for _ in 0..30 {
+        g.frame(1.0 / 60.0, ["up".to_string()].into(), [0.0; 2], HashSet::new());
+    }
+    for _ in 0..100 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let t = g.tree();
+    let score = t.find_path(None, "Main/Score").unwrap();
+    assert_eq!(t.nodes[score].text("text"), "Score: 1");
+    let coins: Vec<_> = t.walk().into_iter().filter(|i| t.nodes[*i].name == "Coin").collect();
+    assert_eq!(coins.len(), 1, "the first coin is gone and the timer spawned one");
+    assert_ne!(t.nodes[coins[0]].transform.position.y, 250.0);
+    drop(t);
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:?}", errs);
+}
+
+/// Scripts from docs/TUTORIAL-2-ADVANCED.md: a chasing enemy, sprite animation, a condition event.
+#[test]
+fn tutorial_two_snippets_work() {
+    let row = |s: &str| s.to_string();
+    let mut grid = vec![row("-1,-1,-1,-1,-1,-1,-1,-1,-1,-1"); 8];
+    grid[3] = row("-1,-1,-1,-1,0,-1,-1,-1,-1,-1");
+    grid[4] = row("-1,-1,-1,-1,0,-1,-1,-1,-1,-1");
+    grid[5] = row("-1,-1,-1,-1,0,-1,-1,-1,-1,-1");
+    let scene = format!(r#"(root: (name: "Level", kind: Some(Node2D), children: [
+        (name: "Ground", kind: Some(TileMap2D), props: {{"tiles": Text("{}")}}),
+        (name: "Player", kind: Some(Sprite2D), transform: Some((position: (272.0, 144.0, 0.0)))),
+        (name: "Enemy", kind: Some(Sprite2D), transform: Some((position: (48.0, 144.0, 0.0))),
+            props: {{"hframes": Num(9.0), "animations": Text("idle=0; run=1-6; jump=7,8"), "hp": Num(3.0)}},
+            scripts: ["res://enemy.jlb", "res://anim.jlb", "res://dead.jlb"]),
+    ]))"#, grid.join("\\n"));
+    let enemy = "speed = 120\npath = NULL\nstep = 1\n\nDEF on_create() {\n\tTIMER(\"think\", 0.5, TRUE)\n}\n\nDEF on_timer_think() {\n\tGLOBAL path = FIND_PATH(\"../Ground\", self.x, self.y, GET(\"../Player\", \"x\"), GET(\"../Player\", \"y\"))\n\tGLOBAL step = 2\n}\n\nDEF on_step(dt) {\n\tIF path == NULL OR step > LEN(path) { RETURN }\n\ttarget = path[step]\n\tdx = target.x - self.x\n\tdy = target.y - self.y\n\td = (dx * dx + dy * dy) !^ 2\n\tIF d < 4 {\n\t\tGLOBAL step += 1\n\t} ELSE {\n\t\tself.x += dx / d * speed * dt\n\t\tself.y += dy / d * speed * dt\n\t}\n}\n";
+    let anim = "last_x = self.x\n\nDEF on_step(dt) {\n\tdx = self.x - last_x\n\tGLOBAL last_x = self.x\n\tIF dx !== 0 {\n\t\tANIMATE(NULL, \"run\")\n\t\tself.flip_h = dx < 0\n\t} ELSE {\n\t\tANIMATE(NULL, \"idle\")\n\t}\n}\n";
+    let dead = "DEF when_dead() {\n\tRETURN self.hp <= 0\n}\n\nDEF on_dead() {\n\tPRINT(\"down\")\n}\n";
+    let p = project("tutorial2", &[("main.jscene", &scene), ("enemy.jlb", enemy), ("anim.jlb", anim), ("dead.jlb", dead)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    let mut frames_seen = HashSet::new();
+    for _ in 0..240 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        let t = g.tree();
+        let e = t.find_path(None, "Level/Enemy").unwrap();
+        frames_seen.insert(t.nodes[e].num("frame", 0.0) as i64);
+    }
+    let t = g.tree();
+    let e = t.find_path(None, "Level/Enemy").unwrap();
+    let pos = t.nodes[e].transform.position;
+    assert!((pos.x - 272.0).abs() < 20.0 && (pos.y - 144.0).abs() < 20.0, "went around the wall to the player: {}", pos);
+    assert!(frames_seen.len() >= 4, "the run animation cycled: {:?}", frames_seen);
+    drop(t);
+    g.st.borrow_mut().tree.nodes.iter_mut().find(|(_, n)| n.name == "Enemy").unwrap().1.props.insert("hp".into(), Variant::Num(0.0));
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    let logs: Vec<_> = g.take_logs();
+    assert!(logs.iter().all(|l| l.kind != LogKind::Error), "{:?}", logs);
+    assert!(logs.iter().any(|l| l.text == "down"));
+}

@@ -29,7 +29,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | `Particles2D` | sparks, smoke, dust, trails | `emitting`, `rate` (per second), `lifetime`, `direction` (degrees, -90 = up), `spread`, `speed`, `speed_random`, `gravity`, `size` → `size_end`, `color` → `color_end`, `spin`, `area` (radius they start in), `texture` (a soft dot if empty) |
 
 **Sprite animation.** A sprite sheet is one picture cut into `hframes` × `vframes` cells; `frame`
-picks one. Name animations in `animations`, like `walk: 0-5, idle: 6, jump: 7-9`, then
+picks one. Name animations in `animations`, like `idle=0; walk=1-5; jump=6,7,8`, then
 `ANIMATE(NULL, "walk")` (speed from `anim_fps`, looping from `anim_loop`).
 
 **Particles.** They play in the editor too, so you can tune them by eye. Leave `emitting` on for
@@ -38,7 +38,7 @@ for one-off effects (an explosion, a coin pickup). Particles stay where they wer
 moving emitter leaves a trail.
 
 **Tilemaps.** Select a TileMap2D and the Inspector shows its tileset as a palette: click a tile,
-then paint in the scene view (right-drag erases). Tile ids count left to right, top to bottom,
+then paint in the scene view (Shift-drag erases). Tile ids count left to right, top to bottom,
 from 0. Solid tiles collide with bodies; `solid_tiles` like `"0-3, 7"` limits which ones.
 `FIND_PATH` walks around the solid tiles.
 
@@ -75,6 +75,8 @@ for it.
 ## Scenes inside scenes
 
 Save any branch as its own `.jscene` (right-click → **Save branch as scene**), then drop that file
-into other scenes as many times as you like: every copy follows the original file. Right-click an
-instance → **Editable children** to change things inside one copy only (only the differences are
-saved). `SPAWN("res://scenes/enemy.jscene", x, y)` adds one while the game runs.
+into other scenes as many times as you like (drag it from the Assets panel into the scene view,
+or **Instance into scene** in its preview): every copy follows the original file. Nodes inside a
+copy show greyed in the Hierarchy; select one and change it in the Inspector to change that copy
+only (only the differences are saved). Right-click a copy → **Open its scene** to change them all,
+or **Make local** to cut it loose from the file. `SPAWN("res://scenes/enemy.jscene", x, y)` adds one while the game runs.

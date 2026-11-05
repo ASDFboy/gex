@@ -60,7 +60,7 @@ outside variables.
 
 The Events panel lists these; click one to add it to a script.
 
-Collisions: a `Collider2D` reports for the nearest node with scripts (itself or its parent), so a
+Collisions: a `Collider2D` reports for its parent (or for itself, if it has scripts), so a
 Sprite2D with a Collider2D child gets the events. Bodies (`Body2D`, `Body3D`) report for
 themselves.
 
@@ -139,7 +139,7 @@ The script editor completes these as you type and shows each one's inputs.
 | Command | |
 |---|---|
 | `BURST(node, count)` | a Particles2D throws out this many particles at once (an explosion, a puff) |
-| `ANIMATE(node, name)` | plays an animation: a Sprite2D's (from its animations property) or a model's |
+| `ANIMATE(node, name, restart)` | plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE |
 | `ANIMATIONS(node)` | the names of a Mesh3D model's animations |
 | `TILE(node, col, row)` | a TileMap2D's tile id at a cell (-1 = empty) |
 | `SET_TILE(node, col, row, id)` | changes a tile (-1 clears it) |
