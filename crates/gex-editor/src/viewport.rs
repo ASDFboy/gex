@@ -359,8 +359,19 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     // The app's shortcuts still work while the view has focus (it isn't a text field).
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gex viewport id"), resp.id));
     if let Some(p) = &mut st.playing {
-        // Feed the game while the view has focus.
-        if resp.has_focus() || resp.hovered() {
+        // Feed the game while the view has focus (or holds the mouse).
+        if p.locked && !resp.has_focus() {
+            resp.request_focus();
+        }
+        if resp.clicked() && p.lock_suspended {
+            p.lock_suspended = false;
+        }
+        if resp.has_focus() || resp.hovered() || p.locked {
+            if game_cam && (resp.has_focus() || p.locked) {
+                let d = ui.input(crate::app::mouse_motion);
+                p.mouse_delta[0] += d[0];
+                p.mouse_delta[1] += d[1];
+            }
             if resp.has_focus() {
                 // Keys tapped between two frames still count as pressed once.
                 let taps: Vec<String> = ui.input(|i| {
@@ -372,7 +383,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
             } else {
                 p.keys.clear();
             }
-            p.buttons = if resp.hovered() { ui.input(mouse_buttons) } else { HashSet::new() };
+            p.buttons = if resp.hovered() || p.locked { ui.input(mouse_buttons) } else { HashSet::new() };
             if resp.hovered() && game_cam {
                 p.wheel += scroll / 50.0;
             }

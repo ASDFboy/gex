@@ -47,6 +47,8 @@ pub struct FrameInput {
     pub buttons: HashSet<String>,
     /// Mouse wheel movement this frame (positive is up).
     pub wheel: f32,
+    /// Raw mouse movement since the last frame (works while the mouse is locked).
+    pub mouse_delta: [f32; 2],
     /// Gamepad sticks and triggers: "left_x", "left_y", "right_x", "right_y", "lt", "rt".
     pub axes: HashMap<String, f32>,
     pub ui: Vec<UiEvent>,
@@ -99,6 +101,9 @@ pub struct WorldState {
     pub vfs: gex_assets::Vfs,
     pub axes: HashMap<String, f32>,
     pub wheel: f32,
+    pub mouse_delta: [f32; 2],
+    /// A script asked for the mouse to be hidden and held (first-person look).
+    pub mouse_locked: bool,
     /// DRAW_* commands from this frame.
     pub draws: Vec<crate::commands::Draw>,
     /// Sprite animations: node → (animation, time, ended).
@@ -173,6 +178,8 @@ impl Game {
             vfs: gex_assets::Vfs::new(&project.dir, &project.config),
             axes: HashMap::new(),
             wheel: 0.0,
+            mouse_delta: [0.0; 2],
+            mouse_locked: false,
             draws: Vec::new(),
             anims: HashMap::new(),
             mesh_colliders: HashMap::new(),
@@ -456,6 +463,7 @@ impl Game {
             st.input.next_frame(input.keys, input.mouse, input.buttons);
             st.axes = input.axes;
             st.wheel = input.wheel;
+            st.mouse_delta = input.mouse_delta;
             st.dt = dt;
             st.time += dt;
             st.draws.clear();
@@ -728,6 +736,7 @@ impl Game {
         let st = self.st.borrow();
         let mut list = gex_core::render::extract(&st.tree);
         crate::particles::draw(&st.tree, &st.particles, &mut list);
+        list.mouse_locked = st.mouse_locked;
         crate::commands::append_draws(&st.draws, &mut list);
         list
     }

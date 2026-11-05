@@ -193,6 +193,14 @@ The script editor completes these as you type and shows each one's inputs.
 - 2D physics counts 50 pixels as a metre; the project's gravity settings are in the
   `project.jproj` file (`gravity_2d`, `gravity_3d`).
 
+## First-person controls in short
+
+`MOUSE_LOCK(TRUE)` hides the mouse and holds it; then `MOUSE_DX()` / `MOUSE_DY()` say how far it
+moved each frame. Turn the body with `self.rotation_y` and tilt a Camera3D child with its
+`rotation_x`; move with `MOVE(NULL, dx, dy, dz)` on a kinematic capsule Body3D. The demo's
+`scripts/fps.jlb` is a complete example. In the editor, Escape frees the mouse; click the game
+view to grab it again.
+
 ## Debugging
 
 Click the gutter next to a line in the script editor to set a breakpoint. When the game reaches it, it pauses: the Console's debugger shows the call

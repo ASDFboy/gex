@@ -157,6 +157,8 @@ pub struct RenderList {
     pub environment: Option<Environment3D>,
     /// Lines drawn by scripts this frame (2D world): (from, to, color).
     pub lines_2d: Vec<([f32; 2], [f32; 2], [f32; 4])>,
+    /// The game wants the mouse hidden and held in the window (MOUSE_LOCK).
+    pub mouse_locked: bool,
 }
 
 impl RenderList {

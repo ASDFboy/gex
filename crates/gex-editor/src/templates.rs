@@ -18,6 +18,8 @@ pub const DEMO: &[(&str, &str)] = &[
     ("scenes/menu.jscene", include_str!("demo/scenes/menu.jscene")),
     ("scenes/platformer.jscene", include_str!("demo/scenes/platformer.jscene")),
     ("scenes/crate3d.jscene", include_str!("demo/scenes/crate3d.jscene")),
+    ("scenes/fps.jscene", include_str!("demo/scenes/fps.jscene")),
+    ("scripts/fps.jlb", include_str!("demo/scripts/fps.jlb")),
     ("scripts/menu.jlb", include_str!("demo/scripts/menu.jlb")),
     ("scripts/hero.jlb", include_str!("demo/scripts/hero.jlb")),
     ("scripts/back_to_menu.jlb", include_str!("demo/scripts/back_to_menu.jlb")),
@@ -131,6 +133,32 @@ mod tests {
         assert!(x1 > x0 + 80.0, "ran right: {} -> {}", x0, x1);
         assert!(y1 < y0 - 40.0, "jumped: {} -> {}", y0, y1);
         let errs: Vec<_> = gp.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+        assert!(errs.is_empty(), "{:#?}", errs);
+        // First person: the mouse turns the player, W walks the way it faces, things get shoved.
+        let mut gf = Game::from_scene(p.clone(), "res://scenes/fps.jscene", None).unwrap();
+        let step = |g: &mut Game, keys: &[&str], d: [f32; 2], buttons: &[&str]| {
+            g.step(gex_script::FrameInput { dt: 1.0 / 60.0, keys: keys.iter().map(|k| k.to_string()).collect(), mouse_delta: d, buttons: buttons.iter().map(|k| k.to_string()).collect(), ..Default::default() })
+        };
+        for _ in 0..30 {
+            step(&mut gf, &[], [0.0; 2], &[]);
+        }
+        assert!(gf.render_list().mouse_locked);
+        let pos = |g: &Game| {
+            let t = g.tree();
+            let id = t.find_path(None, "Arena/Player").unwrap();
+            (t.nodes[id].transform.position, t.nodes[id].transform.rotation.y)
+        };
+        let (p0, _) = pos(&gf);
+        assert!((p0.y - 0.9).abs() < 0.1, "standing on the floor: {}", p0);
+        step(&mut gf, &[], [-600.0, 0.0], &[]);
+        let (_, yaw) = pos(&gf);
+        assert!((yaw - 90.0).abs() < 0.5, "600 px left = 90 degrees: {}", yaw);
+        for _ in 0..60 {
+            step(&mut gf, &["w"], [0.0; 2], &[]);
+        }
+        let (p1, _) = pos(&gf);
+        assert!(p1.x < p0.x - 4.0 && (p1.z - p0.z).abs() < 0.5, "walked towards -x (facing left): {} -> {}", p0, p1);
+        let errs: Vec<_> = gf.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
         assert!(errs.is_empty(), "{:#?}", errs);
         // The menu loads and its buttons' handlers exist.
         let mut gm = Game::from_scene(p, "res://scenes/menu.jscene", None).unwrap();

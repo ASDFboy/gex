@@ -48,6 +48,11 @@ pub struct Playing {
     pub buttons: HashSet<String>,
     /// The viewport shows the game's own camera (else the editor camera, to look around).
     pub game_camera: bool,
+    /// Raw mouse movement since the last frame request.
+    pub mouse_delta: [f32; 2],
+    /// The mouse is held for the game (MOUSE_LOCK), or Escape let it go for now.
+    pub locked: bool,
+    pub lock_suspended: bool,
 }
 
 /// What dragging a selected node does in the scene view.
@@ -892,6 +897,9 @@ impl EditorState {
             mouse: [0.0; 2],
             buttons: HashSet::new(),
             game_camera: true,
+            mouse_delta: [0.0; 2],
+            locked: false,
+            lock_suspended: false,
         });
         self.status = "playing — Shift+F5 or ■ to stop".into();
     }
@@ -958,6 +966,7 @@ impl EditorState {
                 mouse: p.mouse,
                 buttons: p.buttons.clone(),
                 wheel: std::mem::take(&mut p.wheel),
+                mouse_delta: std::mem::take(&mut p.mouse_delta),
                 axes: p.axes.clone(),
                 ui: std::mem::take(&mut p.ui_events),
             });

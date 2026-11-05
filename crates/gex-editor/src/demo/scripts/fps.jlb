@@ -1,0 +1,61 @@
+>> A first-person player: a kinematic capsule (Body3D) moved with MOVE, a Camera3D
+>> child for the head, and mouse-look with MOUSE_LOCK / MOUSE_DX / MOUSE_DY.
+>> Angles are in degrees (SIN and COS take degrees too).
+
+speed = 6
+gravity = 20
+jump = 7
+sensitivity = 0.15
+vy = 0
+on_floor = FALSE
+yaw = 0
+pitch = 0
+
+DEF on_create() {
+	MOUSE_LOCK(TRUE)
+}
+
+DEF on_destroy() {
+	MOUSE_LOCK(FALSE)
+}
+
+DEF on_step(dt) {
+	>> Look around: the body turns left/right, the head looks up/down.
+	GLOBAL yaw -= MOUSE_DX() * sensitivity + AXIS("right_x") * 150 * dt
+	GLOBAL pitch -= MOUSE_DY() * sensitivity + AXIS("right_y") * 150 * dt
+	GLOBAL pitch = MAX(-85, MIN(85, pitch))
+	self.rotation_y = yaw
+	SET("Head", "rotation_x", pitch)
+}
+
+DEF on_physics(dt) {
+	>> Which way the keys push, before turning: x is right, z is backwards.
+	fx = AXIS("left_x")
+	fz = AXIS("left_y")
+	IF KEY_DOWN("move_left") { fx = -1 }
+	IF KEY_DOWN("move_right") { fx = 1 }
+	IF KEY_DOWN("w") OR KEY_DOWN("up") { fz = -1 }
+	IF KEY_DOWN("s") OR KEY_DOWN("down") { fz = 1 }
+	>> Turn it by where we're facing.
+	mx = fx * COS(yaw) + fz * SIN(yaw)
+	mz = fz * COS(yaw) - fx * SIN(yaw)
+	IF KEY_PRESSED("jump") AND on_floor {
+		GLOBAL vy = jump
+	}
+	GLOBAL vy -= gravity * dt
+	GLOBAL on_floor = MOVE(NULL, mx * speed * dt, vy * dt, mz * speed * dt)
+	IF on_floor AND vy < 0 { GLOBAL vy = 0 }
+}
+
+DEF on_mouse_pressed(button, x, y) {
+	>> Shove whatever's in front of the crosshair.
+	dx = 0 - SIN(yaw) * COS(pitch)
+	dy = SIN(pitch)
+	dz = 0 - COS(yaw) * COS(pitch)
+	hit = RAYCAST_3D(self.x, self.y + 0.7, self.z, dx, dy, dz, 30, self.id)
+	IF hit !== NULL {
+		IF GET(hit.node, "body") == "dynamic" {
+			IMPULSE(hit.node, dx * 8, 3, dz * 8)
+		}
+	}
+}

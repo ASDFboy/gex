@@ -163,6 +163,32 @@ pub struct EditorApp {
     cmd: Option<String>,
     settings: SettingsForm,
     pads: crate::gamepad::Pads,
+    /// The window holds and hides the mouse for the game right now.
+    cursor_locked: bool,
+}
+
+/// Hides the mouse and holds it in the window (or gives it back).
+pub fn lock_cursor(ctx: &egui::Context, on: bool) {
+    if on {
+        // Locked where the platform has it; elsewhere (X11) confined, which still gives raw motion.
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if cfg!(target_os = "linux") { egui::CursorGrab::Confined } else { egui::CursorGrab::Locked }));
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
+    } else {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
+        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+    }
+}
+
+/// Raw mouse movement in this frame's events.
+pub fn mouse_motion(i: &egui::InputState) -> [f32; 2] {
+    let mut d = [0.0; 2];
+    for e in &i.events {
+        if let egui::Event::MouseMoved(v) = e {
+            d[0] += v.x;
+            d[1] += v.y;
+        }
+    }
+    d
 }
 
 #[derive(Default)]
@@ -198,6 +224,7 @@ impl EditorApp {
             cmd: None,
             settings: SettingsForm::default(),
             pads: crate::gamepad::Pads::new(),
+            cursor_locked: false,
         };
         if let Some(p) = project {
             app.open_project(&p);
@@ -869,6 +896,21 @@ impl eframe::App for EditorApp {
             if st.playing.is_some() {
                 ctx.request_repaint();
             }
+            // MOUSE_LOCK: hold the mouse while the game wants it; Escape lets go until the
+            // game view is clicked again.
+            if let Some(p) = &mut st.playing {
+                if self.cursor_locked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    p.lock_suspended = true;
+                }
+            }
+            let want = st.playing.as_ref().is_some_and(|p| p.list.mouse_locked && !p.lock_suspended && p.game_camera) && ctx.input(|i| i.focused);
+            if want != self.cursor_locked {
+                lock_cursor(&ctx, want);
+                self.cursor_locked = want;
+            }
+            if let Some(p) = &mut st.playing {
+                p.locked = self.cursor_locked;
+            }
             // Files dropped on the window go into the project.
             let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
             if !dropped.is_empty() {
@@ -951,6 +993,8 @@ pub struct PlayerApp {
     /// up between two frames) still counts as pressed once.
     taps: std::collections::HashSet<String>,
     tap_buttons: std::collections::HashSet<String>,
+    mouse_delta: [f32; 2],
+    cursor_locked: bool,
 }
 
 impl PlayerApp {
@@ -960,7 +1004,7 @@ impl PlayerApp {
         let tree = gex_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let list = gex_core::render::extract(&tree);
-        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default() })
+        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false })
     }
 }
 
@@ -1007,6 +1051,15 @@ impl eframe::App for PlayerApp {
                 }
             }
         });
+        let d = ctx.input(mouse_motion);
+        self.mouse_delta[0] += d[0];
+        self.mouse_delta[1] += d[1];
+        // MOUSE_LOCK, let go while the window isn't focused.
+        let want = self.list.mouse_locked && ctx.input(|i| i.focused);
+        if want != self.cursor_locked {
+            lock_cursor(&ctx, want);
+            self.cursor_locked = want;
+        }
         let (pad_keys, axes) = self.pads.poll();
         keys.extend(pad_keys);
         let Some(rs) = frame.wgpu_render_state() else { return };
@@ -1025,6 +1078,7 @@ impl eframe::App for PlayerApp {
                     mouse: [m.x, m.y],
                     buttons,
                     wheel: ctx.input(|i| i.smooth_scroll_delta.y) / 50.0,
+                    mouse_delta: std::mem::take(&mut self.mouse_delta),
                     axes,
                     ui: std::mem::take(&mut self.ui_events),
                 });

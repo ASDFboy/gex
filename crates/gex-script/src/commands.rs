@@ -64,6 +64,9 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("MOUSE_X", "()", "mouse x in game coordinates"),
     ("MOUSE_Y", "()", "mouse y in game coordinates"),
     ("MOUSE_WHEEL", "()", "how far the wheel turned this frame"),
+    ("MOUSE_LOCK", "(on)", "hides the mouse and keeps it in the window, for mouse-look (Escape frees it in the editor)"),
+    ("MOUSE_DX", "()", "how far the mouse moved sideways this frame, in screen pixels (works while locked)"),
+    ("MOUSE_DY", "()", "how far the mouse moved up or down this frame (down is positive)"),
     ("AXIS", "(name)", "a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt"),
     ("DELTA_TIME", "()", "seconds since the last frame"),
     ("GAME_TIME", "()", "seconds since the game started"),
@@ -542,6 +545,12 @@ impl Host for EngineHost {
                 Ok(Value::Null)
             }
             "MOUSE_WHEEL" => Ok(num(st.wheel as f64)),
+            "MOUSE_LOCK" => {
+                st.mouse_locked = a.first().is_none_or(|v| !matches!(v, Value::Bool(false) | Value::Null));
+                Ok(Value::Null)
+            }
+            "MOUSE_DX" => Ok(num(st.mouse_delta[0] as f64)),
+            "MOUSE_DY" => Ok(num(st.mouse_delta[1] as f64)),
             "AXIS" => {
                 let k = text_arg(name, &a, 0)?.to_ascii_lowercase();
                 Ok(num(st.axes.get(&k).copied().unwrap_or(0.0) as f64))

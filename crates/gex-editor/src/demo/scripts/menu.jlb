@@ -18,3 +18,7 @@ DEF on_pressed_platformer() {
 DEF on_pressed_world() {
 	CHANGE_SCENE("res://scenes/world3d.jscene")
 }
+
+DEF on_pressed_fps() {
+	CHANGE_SCENE("res://scenes/fps.jscene")
+}
