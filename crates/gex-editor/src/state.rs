@@ -113,6 +113,9 @@ pub struct EditorState {
     pub game_breakpoints: std::sync::Arc<gex_script::thread::Breakpoints>,
     /// Vim keys in the script editor.
     pub vim_enabled: bool,
+    /// Particles2D previews in the scene view (not while playing).
+    pub preview_particles: HashMap<NodeId, gex_script::particles::Emitter>,
+    pub particle_clock: Instant,
     /// Something asked for the command line to open (":" in Vim normal mode).
     pub open_command: bool,
 }
@@ -152,6 +155,8 @@ impl EditorState {
             status: String::new(),
             breakpoints: HashMap::new(),
             game_breakpoints: Default::default(),
+            preview_particles: HashMap::new(),
+            particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
             open_command: false,
         };
@@ -204,6 +209,7 @@ impl EditorState {
     }
 
     fn take_doc(&mut self) -> SceneDoc {
+        self.preview_particles.clear();
         SceneDoc {
             tree: std::mem::take(&mut self.tree),
             scene_res: self.scene_res.take(),

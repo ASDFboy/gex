@@ -26,10 +26,16 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | `Collider2D` | an area that reports overlaps (pickups, triggers) | `width`, `height` |
 | `Body2D` | a physics object | `body` (dynamic / kinematic / static), `shape` (box / circle), `width`, `height`, `radius`, `friction`, `bounce`, `density`, `gravity_scale`, `fixed_rotation`; live: `vx`, `vy`, `on_floor` |
 | `TileMap2D` | a grid of tiles from one tileset picture | `tileset`, `tile_width`, `tile_height`, `solid`, `solid_tiles` |
+| `Particles2D` | sparks, smoke, dust, trails | `emitting`, `rate` (per second), `lifetime`, `direction` (degrees, -90 = up), `spread`, `speed`, `speed_random`, `gravity`, `size` → `size_end`, `color` → `color_end`, `spin`, `area` (radius they start in), `texture` (a soft dot if empty) |
 
 **Sprite animation.** A sprite sheet is one picture cut into `hframes` × `vframes` cells; `frame`
 picks one. Name animations in `animations`, like `walk: 0-5, idle: 6, jump: 7-9`, then
 `ANIMATE(NULL, "walk")` (speed from `anim_fps`, looping from `anim_loop`).
+
+**Particles.** They play in the editor too, so you can tune them by eye. Leave `emitting` on for
+a steady stream (smoke, a trail behind the player), or turn it off and call `BURST(node, 40)`
+for one-off effects (an explosion, a coin pickup). Particles stay where they were thrown out, so a
+moving emitter leaves a trail.
 
 **Tilemaps.** Select a TileMap2D and the Inspector shows its tileset as a palette: click a tile,
 then paint in the scene view (right-drag erases). Tile ids count left to right, top to bottom,

@@ -23,6 +23,7 @@ pub fn kind_icon(k: NodeKind) -> &'static str {
         NodeKind::Light3D => "💡",
         NodeKind::Body2D => "✚",
         NodeKind::TileMap2D => "🗺",
+        NodeKind::Particles2D => "✨",
         NodeKind::Panel => "🗖",
         NodeKind::Button => "🔘",
         NodeKind::Label => "🅰",

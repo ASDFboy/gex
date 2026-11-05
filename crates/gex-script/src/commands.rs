@@ -43,6 +43,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("STOP", "(node)", "stops a Sound node"),
     ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
+    ("BURST", "(node, count)", "a Particles2D throws out this many particles at once (an explosion, a puff)"),
     ("ANIMATE", "(node, name)", "plays an animation: a Sprite2D's (from its animations property) or a model's"),
     ("ANIMATIONS", "(node)", "the names of a Mesh3D model's animations"),
     ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
@@ -375,6 +376,16 @@ impl Host for EngineHost {
                 let mut v: Vec<NodeId> = st.touching.iter().filter(|(x, _)| *x == id).map(|(_, y)| *y).collect();
                 v.sort();
                 Ok(ids(v))
+            }
+            "BURST" => {
+                let id = target(st, a.first())?;
+                if st.tree.nodes[id].kind != gex_core::NodeKind::Particles2D {
+                    return err(format!("{} isn't a Particles2D", st.tree.nodes[id].name));
+                }
+                let n = num_arg(&a, 1, 20.0).max(0.0) as usize;
+                let st = &mut *st;
+                st.particles.entry(id).or_default().spawn(&st.tree, id, n);
+                Ok(Value::Null)
             }
             "MOVE" => {
                 let id = target(st, a.first())?;

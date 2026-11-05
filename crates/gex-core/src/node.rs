@@ -30,6 +30,8 @@ pub enum NodeKind {
     Body2D,
     /// A grid of tiles from a tileset image; its tiles can be solid for physics.
     TileMap2D,
+    /// Sparks, smoke, dust: many small sprites that fly out, fade and shrink.
+    Particles2D,
     // ---- UI (screen space, in the game window's pixels) ----
     Panel,
     Button,
@@ -59,6 +61,7 @@ pub const ALL_KINDS: &[NodeKind] = &[
     NodeKind::Collider2D,
     NodeKind::Body2D,
     NodeKind::TileMap2D,
+    NodeKind::Particles2D,
     NodeKind::Panel,
     NodeKind::Button,
     NodeKind::Label,
@@ -85,6 +88,7 @@ impl NodeKind {
             NodeKind::Collider2D => "Collider2D",
             NodeKind::Body2D => "Body2D",
             NodeKind::TileMap2D => "TileMap2D",
+            NodeKind::Particles2D => "Particles2D",
             NodeKind::Panel => "Panel",
             NodeKind::Button => "Button",
             NodeKind::Label => "Label",
@@ -103,7 +107,7 @@ impl NodeKind {
         ALL_KINDS.iter().copied().find(|k| k.name().eq_ignore_ascii_case(s))
     }
     pub fn is_2d(self) -> bool {
-        matches!(self, NodeKind::Node2D | NodeKind::Sprite2D | NodeKind::Label2D | NodeKind::Camera2D | NodeKind::Collider2D | NodeKind::Body2D | NodeKind::TileMap2D)
+        matches!(self, NodeKind::Node2D | NodeKind::Sprite2D | NodeKind::Label2D | NodeKind::Camera2D | NodeKind::Collider2D | NodeKind::Body2D | NodeKind::TileMap2D | NodeKind::Particles2D)
     }
     pub fn is_ui(self) -> bool {
         matches!(self, NodeKind::Panel | NodeKind::Button | NodeKind::Label | NodeKind::TextInput | NodeKind::ProgressBar | NodeKind::Image)
@@ -142,6 +146,24 @@ impl NodeKind {
                 ("solid_tiles", Text(String::new())),
                 ("layer", Num(-5.0)),
                 ("color", Color([1.0; 4])),
+            ],
+            NodeKind::Particles2D => vec![
+                ("emitting", Bool(true)),
+                ("rate", Num(30.0)),
+                ("lifetime", Num(1.0)),
+                ("texture", Res(String::new())),
+                ("direction", Num(-90.0)),
+                ("spread", Num(30.0)),
+                ("speed", Num(120.0)),
+                ("speed_random", Num(0.3)),
+                ("gravity", Num(0.0)),
+                ("size", Num(8.0)),
+                ("size_end", Num(2.0)),
+                ("color", Color([1.0, 0.8, 0.3, 1.0])),
+                ("color_end", Color([1.0, 0.3, 0.1, 0.0])),
+                ("spin", Num(0.0)),
+                ("area", Num(0.0)),
+                ("layer", Num(1.0)),
             ],
             NodeKind::Panel => vec![
                 ("width", Num(200.0)),

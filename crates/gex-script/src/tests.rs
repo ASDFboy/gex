@@ -367,3 +367,37 @@ fn paths_and_saves() {
     assert_eq!(root.props.get("second"), Some(&Variant::Text("b".into())));
     assert_eq!(root.props.get("missing"), Some(&Variant::Null));
 }
+
+#[test]
+fn particles_emit_burst_fade_and_draw() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), scripts: ["res://boom.jlb"], children: [
+        (name: "Smoke", kind: Some(Particles2D), transform: Some((position: (100.0, 100.0, 0.0))),
+            props: {"rate": Num(60.0), "lifetime": Num(0.5), "gravity": Num(200.0)}),
+        (name: "Boom", kind: Some(Particles2D), props: {"emitting": Bool(false), "speed": Num(0.0)}),
+    ]))"#;
+    let script = "DEF on_press_space() {\n    BURST(\"Boom\", 50)\n}\n";
+    let p = project("particles", &[("main.jscene", scene), ("boom.jlb", script)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..30 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let smoke = g.tree().find_path(None, "Root/Smoke").unwrap();
+    let boom = g.tree().find_path(None, "Root/Boom").unwrap();
+    let count = |g: &Game, id| g.st.borrow().particles.get(&id).map(|e| e.count()).unwrap_or(0);
+    let n = count(&g, smoke);
+    assert!((20..=32).contains(&n), "about rate * min(time, lifetime): {}", n);
+    assert_eq!(count(&g, boom), 0, "not emitting");
+    g.frame(1.0 / 60.0, ["space".to_string()].into(), [0.0; 2], HashSet::new());
+    assert_eq!(count(&g, boom), 50);
+    let list = g.render_list();
+    assert!(list.sprites.iter().filter(|s| s.node == boom).count() == 50);
+    // Smoke fades towards color_end as it ages.
+    assert!(list.sprites.iter().filter(|s| s.node == smoke).any(|s| s.color[3] < 0.7));
+    // Everything is gone a lifetime after the burst.
+    for _ in 0..80 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert_eq!(count(&g, boom), 0);
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:?}", errs);
+}

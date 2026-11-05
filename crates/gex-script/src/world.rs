@@ -107,6 +107,8 @@ pub struct WorldState {
     pub(crate) tile_boxes: HashMap<NodeId, (String, Vec<crate::physics::StaticBox2>)>,
     /// Collision meshes made from Mesh3D models: node → (what they were made from, mesh).
     pub(crate) mesh_colliders: HashMap<NodeId, (String, crate::physics::StaticMesh)>,
+    /// Particles2D emitters and their live particles.
+    pub(crate) particles: HashMap<NodeId, crate::particles::Emitter>,
 }
 
 impl WorldState {
@@ -175,6 +177,7 @@ impl Game {
             anims: HashMap::new(),
             mesh_colliders: HashMap::new(),
             tile_boxes: HashMap::new(),
+            particles: HashMap::new(),
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
@@ -508,6 +511,11 @@ impl Game {
         self.broadcast("on_step", vec![num(dt)]);
         self.broadcast("on_draw", vec![]);
         self.animate(dt);
+        {
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            crate::particles::update(&st.tree, &mut st.particles, dt as f32);
+        }
         self.timers(dt);
         {
             // Sound nodes report whether they're still playing.
@@ -719,6 +727,7 @@ impl Game {
     pub fn render_list(&self) -> gex_core::render::RenderList {
         let st = self.st.borrow();
         let mut list = gex_core::render::extract(&st.tree);
+        crate::particles::draw(&st.tree, &st.particles, &mut list);
         crate::commands::append_draws(&st.draws, &mut list);
         list
     }

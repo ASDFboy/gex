@@ -341,7 +341,11 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     let game_cam = st.playing.as_ref().is_some_and(|p| p.game_camera);
     let list = match &st.playing {
         Some(p) => p.list.clone(),
-        None => extract(&st.tree),
+        None => {
+            let mut l = extract(&st.tree);
+            preview_particles(ui.ctx(), st, &mut l);
+            l
+        }
     };
     let cams = if game_cam { Cameras::for_game(&list, px, st.project.config.window_size) } else { Cameras::for_editor(st.mode_3d, &st.cam2, &st.cam3, px) };
 
@@ -677,5 +681,21 @@ fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
         st.selected = Some(id);
     } else {
         st.status = format!("{} can't be placed in a scene yet", path);
+    }
+}
+
+/// Particles2D nodes play in the editor too, so their look can be tuned without running the game.
+fn preview_particles(ctx: &egui::Context, st: &mut EditorState, list: &mut gex_core::render::RenderList) {
+    let now = std::time::Instant::now();
+    let dt = now.duration_since(st.particle_clock).as_secs_f32().min(0.1);
+    st.particle_clock = now;
+    let any = st.tree.walk().into_iter().any(|i| st.tree.nodes[i].kind == NodeKind::Particles2D);
+    if !any && st.preview_particles.is_empty() {
+        return;
+    }
+    gex_script::particles::update(&st.tree, &mut st.preview_particles, dt);
+    gex_script::particles::draw(&st.tree, &st.preview_particles, list);
+    if st.preview_particles.values().any(|e| e.count() > 0) {
+        ctx.request_repaint();
     }
 }

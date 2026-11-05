@@ -127,10 +127,11 @@ The script editor completes these as you type and shows each one's inputs.
 | `MUSIC(file, volume)` | plays a looping music track, replacing the last one ("" stops it) |
 | `VOLUME(level)` | the master volume, 0 to 1 |
 
-### Animation and tiles
+### Animation, particles and tiles
 
 | Command | |
 |---|---|
+| `BURST(node, count)` | a Particles2D throws out this many particles at once (an explosion, a puff) |
 | `ANIMATE(node, name)` | plays an animation: a Sprite2D's (from its animations property) or a model's |
 | `ANIMATIONS(node)` | the names of a Mesh3D model's animations |
 | `TILE(node, col, row)` | a TileMap2D's tile id at a cell (-1 = empty) |

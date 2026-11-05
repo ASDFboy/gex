@@ -8,6 +8,10 @@ DEF on_create() {
 
 DEF on_coin_taken(which) {
 	GLOBAL score += 1
+	>> A shower of sparks where the coin was.
+	SET("Sparks", "x", GET(which, "x"))
+	SET("Sparks", "y", GET(which, "y"))
+	BURST("Sparks", 40)
 	SET("Score", "text", "Score: " + score)
 	>> Keep the best score between runs (the menu shows it).
 	best = LOAD_DATA("best")

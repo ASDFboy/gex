@@ -87,6 +87,7 @@ mod tests {
         let score = t.find_path(None, "Level/Score").unwrap();
         assert_ne!(t.nodes[score].text("text"), "Score: 0", "a coin was collected");
         assert!(t.in_group("coins").len() >= 2, "coins keep spawning");
+        assert!(g.render_list().sprites.len() > 20, "the trail and the sparks draw");
         drop(t);
         // The 3D scene runs too.
         let mut g3 = Game::from_scene(p.clone(), "res://scenes/world3d.jscene", None).unwrap();
