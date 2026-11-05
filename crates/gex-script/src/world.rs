@@ -57,6 +57,19 @@ fn pausable(handler: &str) -> bool {
         .any(|p| handler.starts_with(p))
 }
 
+/// Where a frame's time went (for the editor's profiler).
+#[derive(Clone, Debug, Default)]
+pub struct FrameStats {
+    pub total_ms: f32,
+    pub scripts_ms: f32,
+    pub physics_ms: f32,
+    /// The slowest event handlers this frame: (script, handler, ms).
+    pub slowest: Vec<(String, String, f32)>,
+    pub nodes: usize,
+    pub sprites: usize,
+    pub meshes: usize,
+}
+
 /// One frame's input from the window.
 #[derive(Clone, Debug, Default)]
 pub struct FrameInput {
@@ -167,6 +180,10 @@ pub struct WorldState {
     pub shake: (f32, f32),
     shake_seed: u32,
     pub(crate) tweens: Vec<crate::tween::Tween>,
+    /// Animators playing a clip: node → (clip, seconds in).
+    pub(crate) clips_playing: HashMap<NodeId, (String, f32)>,
+    /// Loaded .anim files.
+    pub(crate) anim_files: HashMap<String, Arc<gex_core::anim::AnimFile>>,
     /// PAUSE: only nodes in the "while_paused" group keep getting frame, input and timer events.
     pub paused: bool,
     /// TIME_SCALE: 0.5 is slow motion, 2 is double speed.
@@ -177,6 +194,20 @@ pub struct WorldState {
 }
 
 impl WorldState {
+    /// An Animator's clips (loaded once).
+    pub fn anim_file(&mut self, animator: NodeId) -> Result<Arc<gex_core::anim::AnimFile>, String> {
+        let res = self.tree.nodes[animator].text("clips").to_string();
+        if res.is_empty() {
+            return Err(format!("the Animator {} has no clips file yet (make clips in the Timeline)", self.tree.nodes[animator].name));
+        }
+        if let Some(f) = self.anim_files.get(&res) {
+            return Ok(f.clone());
+        }
+        let f = Arc::new(gex_core::anim::AnimFile::parse(&self.project.read_text(&res)?).map_err(|e| format!("{}: {}", res, e))?);
+        self.anim_files.insert(res, f.clone());
+        Ok(f)
+    }
+
     /// Paused, and this node isn't one that runs while paused.
     pub fn frozen(&self, id: NodeId) -> bool {
         self.paused && !self.tree.get(id).is_some_and(|n| n.groups.iter().any(|g| g == PAUSE_GROUP))
@@ -197,6 +228,8 @@ struct ScriptInst {
 }
 
 pub struct Game {
+    /// Timings gathered during the frame.
+    pub stats: FrameStats,
     pub(crate) it: Interp,
     pub st: Rc<RefCell<WorldState>>,
     scripts: HashMap<NodeId, Vec<ScriptInst>>,
@@ -262,6 +295,8 @@ impl Game {
             particles: HashMap::new(),
             particles_3d: HashMap::new(),
             tweens: Vec::new(),
+            clips_playing: HashMap::new(),
+            anim_files: HashMap::new(),
             paused: false,
             time_scale: 1.0,
             shared: HashMap::new(),
@@ -274,7 +309,7 @@ impl Game {
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
         it.host = Some(Box::new(EngineHost { st: st.clone() }));
         it.cancel = cancel;
-        Game { it, st, scripts: HashMap::new(), physics_acc: 0.0, started: false }
+        Game { stats: FrameStats::default(), it, st, scripts: HashMap::new(), physics_acc: 0.0, started: false }
     }
 
     /// Loads a scene file as a fresh game.
@@ -300,6 +335,14 @@ impl Game {
         }
         self.started = true;
         self.spawn_map_props();
+        {
+            // Animators with an autoplay clip start it.
+            let mut st = self.st.borrow_mut();
+            let auto: Vec<(NodeId, String)> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Animator && !st.tree.nodes[*i].text("autoplay").is_empty()).map(|i| (i, st.tree.nodes[i].text("autoplay").to_string())).collect();
+            for (id, clip) in auto {
+                st.clips_playing.insert(id, (clip, 0.0));
+            }
+        }
         let ids = self.st.borrow().tree.walk();
         self.attach_all(&ids);
         self.autoplay(&ids);
@@ -651,7 +694,15 @@ impl Game {
         self.st.borrow_mut().current = Some(id);
         // Tasks this event STARTs belong to this node.
         self.it.event_tag = node_tag(id);
+        let t0 = std::time::Instant::now();
         let r = self.it.call_value(&f, args);
+        let ms = t0.elapsed().as_secs_f32() * 1000.0;
+        self.stats.scripts_ms += ms;
+        if ms > 0.05 {
+            self.stats.slowest.push((res.clone(), handler.to_string(), ms));
+            self.stats.slowest.sort_by(|a, b| b.2.total_cmp(&a.2));
+            self.stats.slowest.truncate(5);
+        }
         self.read_self_back(id, &env, &before);
         match r {
             Ok(v) => Some(v),
@@ -749,9 +800,11 @@ impl Game {
             steps += 1;
             self.broadcast("on_physics", vec![num(step)]);
             {
+                let t0 = std::time::Instant::now();
                 let mut st = self.st.borrow_mut();
                 let st = &mut *st;
                 st.physics.step(&mut st.tree);
+                self.stats.physics_ms += t0.elapsed().as_secs_f32() * 1000.0;
             }
             self.collisions();
         }
@@ -776,6 +829,7 @@ impl Game {
         for (id, prop) in finished {
             self.run(id, "on_tween_end", vec![Value::text(&prop)]);
         }
+        self.play_clips(dt as f32);
         if !self.st.borrow().paused {
             self.run_tasks();
         }
@@ -1066,6 +1120,55 @@ impl Game {
             st.physics.hulls.insert(id, (key, std::sync::Arc::new(pts)));
         }
         st.physics.hulls.retain(|k, _| keep.contains(k));
+    }
+
+    /// Animators move their clips on; a clip that ends tells the Animator's parent.
+    fn play_clips(&mut self, dt: f32) {
+        let mut ended = Vec::new();
+        {
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            let ids: Vec<NodeId> = st.clips_playing.keys().copied().collect();
+            for id in ids {
+                if !st.tree.contains(id) {
+                    st.clips_playing.remove(&id);
+                    continue;
+                }
+                if st.frozen(id) {
+                    continue;
+                }
+                let Ok(file) = st.anim_file(id) else { continue };
+                let (name, mut t) = st.clips_playing[&id].clone();
+                let Some(clip) = file.clip(&name) else {
+                    st.clips_playing.remove(&id);
+                    continue;
+                };
+                t += dt * st.tree.nodes[id].num("speed", 1.0) as f32;
+                let len = clip.length.max(0.001);
+                let mut done = false;
+                if t >= len {
+                    if clip.looped {
+                        t %= len;
+                    } else {
+                        t = len;
+                        done = true;
+                    }
+                }
+                gex_core::anim::apply(&mut st.tree, id, clip, t);
+                if done {
+                    st.clips_playing.remove(&id);
+                    ended.push((st.tree.nodes[id].parent.unwrap_or(id), id, name));
+                } else {
+                    st.clips_playing.insert(id, (name, t));
+                }
+            }
+        }
+        for (owner, id, name) in ended {
+            self.run(owner, "on_clip_end", vec![Value::text(&name)]);
+            if owner != id {
+                self.run(id, "on_clip_end", vec![Value::text(&name)]);
+            }
+        }
     }
 
     /// Smooths and limits the 2D camera, runs down SHAKE, and moves fades along.

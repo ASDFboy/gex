@@ -53,6 +53,7 @@ outside variables.
 | `on_pressed()` | on a Button's own scripts: it was clicked |
 | `on_pressed_<button name>()` | on every script: a Button with that name was clicked (`Start Game` → `on_pressed_start_game`) |
 | `on_text_changed(text)` / `on_text_submitted(text)` | on a TextInput's scripts |
+| `on_clip_end(clip)` | on an Animator's parent (and the Animator): its clip finished |
 | `on_tween_end(property)` | a `TWEEN` on this node finished |
 | `on_animation_end(name)` | a non-looping sprite or model animation finished |
 | `on_<event>(...)` | `SEND(node, "<event>", ...)` or `EMIT("<event>", ...)` |
@@ -142,6 +143,9 @@ The script editor completes these as you type and shows each one's inputs.
 | `RAGDOLL(node, vx, vy, vz)` | a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it |
 | `USE_DOOR(door, open)` | opens or closes one of a map's doors (in the group map_doors); with no second input, toggles it |
 | `MAP_ENTITIES(map, classname)` | the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:, bounds:] (keys holds every setting as written; bounds is a brush entity's box, like a ladder's); classname picks one kind, "info_player*" any that start so |
+| `PLAY_CLIP(animator, clip)` | an Animator plays one of its clips (made in the Timeline) from the start; on_clip_end(clip) runs on its parent when it ends |
+| `STOP_CLIP(animator)` | stops an Animator's clip where it is |
+| `CLIP_PLAYING(animator)` | the name of the clip an Animator is playing, or NULL |
 | `ANIMATE(node, name, restart)` | plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE |
 | `ANIMATIONS(node)` | the names of a Mesh3D model's animations |
 | `TILE(node, col, row)` | a TileMap2D's tile id at a cell (-1 = empty) |
@@ -268,7 +272,9 @@ view to grab it again.
 
 Click the gutter next to a line in the script editor to set a breakpoint. When the game reaches it, it pauses: the Console's debugger shows the call
 stack, the function's locals and the script's outside variables; F8 continues, F10 runs one
-line. A script error shows in the Console with its file and line (click to jump there); that
+line. Right-click the gutter for a conditional breakpoint (it stops only when an expression like
+`hp < 10` is TRUE), and add watch expressions under the debugger: they're worked out, in the
+stopped function, each time the game stops. A script error shows in the Console with its file and line (click to jump there); that
 script stops until the game restarts while the rest keeps running. Saving a script while the
 game runs reloads it in place, keeping its outside variables.
 

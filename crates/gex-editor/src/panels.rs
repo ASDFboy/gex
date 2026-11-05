@@ -13,6 +13,7 @@ pub fn kind_icon(k: NodeKind) -> &'static str {
         NodeKind::Node => "○",
         NodeKind::Sound => "🔊",
         NodeKind::Node2D => "⊞",
+        NodeKind::Animator => "🎞",
         NodeKind::Sprite2D => "▣",
         NodeKind::Label2D => "🔤",
         NodeKind::Camera2D => "⌖",
@@ -483,7 +484,10 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.label(RichText::new(format!("{} nodes selected (editing this one; drag in the view moves them all)", n_sel)).small().color(theme::ACCENT));
     }
     ui.separator();
-    if kind != NodeKind::Node {
+    if kind == NodeKind::Animator && ui.button("🎞 Edit clips in the Timeline").clicked() {
+        st.open_timeline = true;
+    }
+    if kind != NodeKind::Node && kind != NodeKind::Animator {
         egui::CollapsingHeader::new("Transform").default_open(true).show(ui, |ui| transform_ui(ui, st, id));
     }
     egui::CollapsingHeader::new("Properties").default_open(true).show(ui, |ui| {
@@ -788,7 +792,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             }
         }));
         ui.separator();
-        ui.vertical(|ui| {
+        egui::ScrollArea::vertical().id_salt("asset preview").auto_shrink([true, false]).show(ui, |ui| ui.vertical(|ui| {
             ui.set_width(preview_w);
             let Some(sel) = st.asset_selected.clone() else {
                 ui.label(RichText::new("Select a file to preview it. Drag files onto the scene or onto texture fields.").color(theme::TEXT_DIM).small());
@@ -813,6 +817,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                     }
                 }
             } else if gex_assets::model::is_model(&sel) {
+                st.previews.model(ui, &st.project, &sel, preview_w);
                 if let Some(id) = st.selected.filter(|_| st.playing.is_none()) {
                     if st.tree.nodes.get(id).is_some_and(|n| n.kind == NodeKind::Mesh3D) && ui.button("Use on selected").clicked() {
                         st.will_change("model");
@@ -820,6 +825,8 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                     }
                 }
                 ui.label(RichText::new("Drag into the 3D view to place it.").small().color(theme::TEXT_DIM));
+            } else if [".wav", ".mp3", ".ogg", ".flac"].iter().any(|e| sel.to_ascii_lowercase().ends_with(e)) {
+                st.previews.sound(ui, &st.vfs, &sel);
             } else if sel.ends_with(".jscene") {
                 if st.playing.is_none() && ui.button("Instance into scene").clicked() {
                     st.instance_scene(&sel);
@@ -831,7 +838,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             if !st.vfs.redistributable(&sel) {
                 ui.label(RichText::new("From a mounted game install: read in place, never copied or exported.").small().color(theme::WARN));
             }
-        });
+        }));
     });
 }
 
@@ -865,6 +872,40 @@ fn debugger(ui: &mut egui::Ui, st: &mut EditorState) {
                 c[2].label(RichText::new(format!("{} = {}", k, v)).monospace());
             }
         });
+    });
+    watches(ui, st, &at);
+}
+
+/// Watch expressions: worked out each time the game stops.
+fn watches(ui: &mut egui::Ui, st: &mut EditorState, at: &gex_script::thread::Paused) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Watch").small().color(theme::TEXT_DIM));
+        let mut remove = None;
+        for (i, w) in st.watches.iter().enumerate() {
+            let shown = at.watches.iter().find(|(k, _)| k == w).map(|(_, v)| v.clone()).unwrap_or_else(|| "(at the next stop)".into());
+            let color = if shown.starts_with('⚠') { theme::BAD } else { theme::TEXT };
+            ui.label(RichText::new(format!("{} = {}", w, shown)).monospace().color(color));
+            if ui.small_button("✖").clicked() {
+                remove = Some(i);
+            }
+        }
+        if let Some((_, e)) = at.watches.iter().find(|(k, _)| k == "⚠") {
+            ui.label(RichText::new(e).color(theme::BAD));
+        }
+        let r = ui.add(egui::TextEdit::singleline(&mut st.watch_input).hint_text("+ watch: hp * 2").desired_width(140.0).font(egui::TextStyle::Monospace));
+        let mut changed = false;
+        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !st.watch_input.trim().is_empty() {
+            st.watches.push(st.watch_input.trim().to_string());
+            st.watch_input.clear();
+            changed = true;
+        }
+        if let Some(i) = remove {
+            st.watches.remove(i);
+            changed = true;
+        }
+        if changed {
+            st.sync_breakpoints();
+        }
     });
 }
 
@@ -952,6 +993,11 @@ fn asset_toolbar(ui: &mut egui::Ui, st: &mut EditorState) {
         if ui.button("Open folder").on_hover_text("open this folder in the file manager (drop files on the window to import them)").clicked() {
             if let Some(p) = st.project.res_to_path(&dir) {
                 crate::files::reveal(&p);
+            }
+        }
+        if let Some(last) = st.file_undo.last() {
+            if ui.button("↶").on_hover_text(format!("undo file change: {}", last.describe())).clicked() {
+                st.undo_file_op();
             }
         }
     });

@@ -45,11 +45,13 @@ cargo test --workspace                         # everything's tests, including t
 - **The editor:** dockable panels (hierarchy, inspector, events, assets, console), scene tabs,
   2D/3D view with move / rotate / scale tools and box select, undo/redo, copy/paste, a Neovim-style
   `:` command line, optional Vim keys in the script editor, completion, go to definition,
-  find/replace, breakpoints with a debugger, Play/Stop with live values in the inspector, and
-  scripts that reload while the game runs.
+  find/replace, find in files, breakpoints (with conditions and watches) and a debugger, a
+  profiler, an animation Timeline, Play/Stop with live values in the inspector, and scripts that
+  reload while the game runs.
 - **Project files:** the Assets panel makes folders, scenes and scripts, imports files dropped on
   the window, and renames (fixing every scene and script that uses the file) or deletes (into a
-  hidden `.trash` folder) with a right-click.
+  hidden `.trash` folder) with a right-click; every one of those can be undone. It previews
+  pictures, models and sounds.
 - **Export:** File → Export game makes a folder with the game and a player that runs it.
 - **Half-Life 2 assets**, read in place from your own Steam install (`hl2://`): VPK archives,
   VTF textures, VMT materials, models, maps and sounds. They are never copied into exports.
@@ -70,6 +72,7 @@ cargo test --workspace                         # everything's tests, including t
 | Right-drag / middle-drag (or Shift+right-drag) / wheel | look around (3D) or pan (2D) / pan / zoom in the scene view |
 | F12 or Ctrl+click | go to a function's definition (script editor) |
 | Ctrl+F | find and replace (script editor) |
+| Ctrl+Shift+F | find in every script and scene |
 
 ## Learn it
 

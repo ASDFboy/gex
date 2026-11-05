@@ -297,7 +297,9 @@ fn breakpoints_pause_and_scripts_reload() {
     let tree = gex_core::scene::load(&text, &|q: &str| p.read_text(q)).unwrap();
     let mut h = GameHandle::start(p.clone(), tree.clone());
     let file = p.res_to_path("res://s.jlb").unwrap().canonicalize().unwrap();
-    h.breakpoints.set(file, [4].into());
+    h.breakpoints.set(file.clone(), [3, 4].into());
+    h.breakpoints.set_condition(file, 3, "count > 5");
+    h.breakpoints.set_watches(vec!["x * 2".into(), "count +".into()]);
     h.request_frame(crate::FrameInput { dt: 0.016, ..Default::default() });
     let mut paused = None;
     for _ in 0..200 {
@@ -316,6 +318,8 @@ fn breakpoints_pause_and_scripts_reload() {
     assert!(p2.locals.iter().any(|(k, v)| k == "x" && v == "41"), "{:?}", p2.locals);
     assert!(p2.outside.iter().any(|(k, v)| k == "count" && v == "0"), "{:?}", p2.outside);
     assert_eq!(p2.stack.first().map(|s| s.0.as_str()), Some("on_step"));
+    assert_eq!(p2.watches[0], ("x * 2".to_string(), "82".to_string()), "{:?}", p2.watches);
+    assert!(p2.watches[1].1.starts_with('⚠'), "a watch that can't be worked out says why: {:?}", p2.watches);
     h.breakpoints.set(p.res_to_path("res://s.jlb").unwrap().canonicalize().unwrap(), Default::default());
     h.resume();
     let mut got_frame = false;
@@ -785,4 +789,40 @@ fn ragdoll_falls() {
     assert!(moved > 0.1);
     let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
     assert!(errs.is_empty(), "{:?}", errs);
+}
+
+#[test]
+fn animator_clips_play_and_end() {
+    use gex_core::anim::{AnimFile, Clip, Key, Track};
+    let k = |t: f32, v: f64| Key { t, value: Variant::Num(v), ease: "linear".into() };
+    let file = AnimFile {
+        clips: vec![
+            Clip { name: "slide".into(), length: 1.0, looped: false, tracks: vec![Track { target: "Box".into(), prop: "x".into(), keys: vec![k(0.0, 0.0), k(1.0, 100.0)] }] },
+            Clip { name: "spin".into(), length: 0.5, looped: true, tracks: vec![Track { target: String::new(), prop: "rotation".into(), keys: vec![k(0.0, 0.0), k(0.5, 90.0)] }] },
+        ],
+    };
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), scripts: ["res://a.jlb"], children: [
+        (name: "Box", kind: Some(Sprite2D)),
+        (name: "Anim", kind: Some(Animator), props: {"clips": Res("res://a.anim"), "autoplay": Text("slide")}),
+    ]))"#;
+    let script = "DEF on_clip_end(c) {\n    PRINT(\"ended \" + c)\n    PLAY_CLIP(\"Anim\", \"spin\")\n}\n";
+    let text = file.to_text();
+    let p = project("animator", &[("main.jscene", scene), ("a.jlb", script), ("a.anim", &text)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..30 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let bx = g.tree().find_path(None, "Root/Box").unwrap();
+    let x = g.tree().nodes[bx].transform.position.x;
+    assert!((x - 50.0).abs() < 3.0, "autoplayed halfway: {}", x);
+    for _ in 0..45 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert_eq!(g.tree().nodes[bx].transform.position.x, 100.0);
+    let logs: Vec<String> = g.take_logs().into_iter().map(|l| l.text).collect();
+    assert!(logs.iter().any(|l| l == "ended slide"), "{:?}", logs);
+    assert!(!logs.iter().any(|l| l == "ended spin"), "looping clips don't end");
+    let root = g.tree().find_path(None, "Root").unwrap();
+    let r = g.tree().nodes[root].transform.rotation;
+    assert!(r.z.abs() > 1.0, "the spin clip turns the Animator's parent");
 }

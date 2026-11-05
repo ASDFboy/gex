@@ -33,6 +33,27 @@ impl Script {
     }
 }
 
+/// A file change made in the editor that can be undone.
+pub enum FileOp {
+    Renamed { old: String, new: String },
+    /// Moved to the project's .trash folder.
+    Trashed { res: String, at: PathBuf },
+    /// New files (imported or made).
+    Created(Vec<String>),
+}
+
+impl FileOp {
+    pub fn describe(&self) -> String {
+        let short = |r: &str| r.rsplit('/').next().unwrap_or(r).to_string();
+        match self {
+            FileOp::Renamed { old, new } => format!("rename {} → {}", short(old), short(new)),
+            FileOp::Trashed { res, .. } => format!("delete {}", short(res)),
+            FileOp::Created(l) if l.len() == 1 => format!("make {}", short(&l[0])),
+            FileOp::Created(l) => format!("import {} files", l.len()),
+        }
+    }
+}
+
 pub struct Playing {
     pub handle: GameHandle,
     pub list: RenderList,
@@ -50,6 +71,9 @@ pub struct Playing {
     pub game_camera: bool,
     /// Raw mouse movement since the last frame request.
     pub mouse_delta: [f32; 2],
+    /// The last few seconds of frames: (time between frames, where the game's time went).
+    pub stats: std::collections::VecDeque<(f32, gex_script::world::FrameStats)>,
+    pub last_frame: Instant,
     /// The mouse is held for the game (MOUSE_LOCK), or Escape let it go for now.
     pub locked: bool,
     pub lock_suspended: bool,
@@ -122,8 +146,22 @@ pub struct EditorState {
     pub preview_particles: HashMap<NodeId, gex_script::particles::Emitter>,
     pub preview_particles_3d: HashMap<NodeId, gex_script::particles::Emitter3>,
     pub particle_clock: Instant,
+    pub search: crate::tools::Search,
     /// Script tabs whose file was renamed: (old, new), for the dock to follow.
     pub renamed_scripts: Vec<(String, String)>,
+    pub timeline: crate::timeline::TimelineState,
+    /// Breakpoint conditions: (script, line) → expression.
+    pub bp_conditions: HashMap<(String, usize), String>,
+    /// A breakpoint condition being edited: (script, line, text).
+    pub bp_edit: Option<(String, usize, String)>,
+    /// Expressions the debugger shows whenever the game stops.
+    pub watches: Vec<String>,
+    pub watch_input: String,
+    pub previews: crate::preview::Previews,
+    /// File changes made in the Assets panel, newest last, for "Undo file change".
+    pub file_undo: Vec<FileOp>,
+    /// Something asked for the Timeline panel to be shown.
+    pub open_timeline: bool,
     /// Something asked for the command line to open (":" in Vim normal mode).
     pub open_command: bool,
 }
@@ -166,6 +204,15 @@ impl EditorState {
             preview_particles: HashMap::new(),
             preview_particles_3d: HashMap::new(),
             renamed_scripts: Vec::new(),
+            timeline: Default::default(),
+            bp_conditions: HashMap::new(),
+            bp_edit: None,
+            watches: Vec::new(),
+            watch_input: String::new(),
+            previews: Default::default(),
+            file_undo: Vec::new(),
+            open_timeline: false,
+            search: Default::default(),
             particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
             open_command: false,
@@ -610,6 +657,8 @@ impl EditorState {
             self.asset_dir = x;
         }
         self.renderer.as_mut().map(|r| r.reload_textures());
+        self.file_undo.push(FileOp::Renamed { old: old.to_string(), new: new.clone() });
+        self.previews.forget(old);
         let msg = if fixed.is_empty() { format!("renamed to {}", new) } else { format!("renamed to {} (fixed {} file(s): {})", new, fixed.len(), fixed.join(", ")) };
         self.log(LogKind::Info, msg);
         Ok(new)
@@ -628,7 +677,9 @@ impl EditorState {
         if self.asset_selected.as_deref() == Some(res) {
             self.asset_selected = None;
         }
-        self.log(LogKind::Info, format!("moved {} to {} (move it back to undo)", res, to.display()));
+        self.log(LogKind::Info, format!("moved {} to {} (Undo file change puts it back)", res, to.display()));
+        self.file_undo.push(FileOp::Trashed { res: res.to_string(), at: to });
+        self.previews.forget(res);
         Ok(())
     }
 
@@ -645,6 +696,7 @@ impl EditorState {
                     self.asset_selected = Some(last.clone());
                 }
                 self.log(LogKind::Info, format!("imported {}", made.join(", ")));
+                self.file_undo.push(FileOp::Created(made));
             }
             Err(e) => self.log(LogKind::Error, format!("import: {}", e)),
         }
@@ -660,6 +712,7 @@ impl EditorState {
             return None;
         }
         self.open_scene(&res);
+        self.file_undo.push(FileOp::Created(vec![res.clone()]));
         Some(res)
     }
 
@@ -672,7 +725,47 @@ impl EditorState {
             return None;
         }
         self.open_script(&res, None);
+        self.file_undo.push(FileOp::Created(vec![res.clone()]));
         Some(res)
+    }
+
+    /// Undoes the newest file change from the Assets panel.
+    pub fn undo_file_op(&mut self) {
+        let Some(op) = self.file_undo.pop() else { return };
+        let depth = self.file_undo.len();
+        let r = match &op {
+            FileOp::Renamed { old, new } => {
+                let name = old.rsplit('/').next().unwrap_or(old).to_string();
+                self.rename_asset(new, &name).map(|_| ())
+            }
+            FileOp::Trashed { res, at } => match self.project.res_to_path(res) {
+                Some(to) if to.exists() => Err(format!("{} exists again, so it wasn't put back", res)),
+                Some(to) => {
+                    let _ = std::fs::create_dir_all(to.parent().unwrap());
+                    std::fs::rename(at, &to).map_err(|e| e.to_string()).map(|_| {
+                        self.asset_selected = Some(res.clone());
+                        self.log(LogKind::Info, format!("put {} back", res));
+                    })
+                }
+                None => Err("not a project path".into()),
+            },
+            FileOp::Created(list) => {
+                let mut r = Ok(());
+                for res in list.iter().rev() {
+                    // Close a tab showing it first.
+                    self.scripts.remove(res);
+                    if let Err(e) = self.delete_asset(res) {
+                        r = Err(e);
+                    }
+                }
+                r
+            }
+        };
+        // Undoing doesn't itself become something to undo.
+        self.file_undo.truncate(depth);
+        if let Err(e) = r {
+            self.log(LogKind::Error, format!("couldn't undo the file change: {}", e));
+        }
     }
 
     /// Selects just this node.
@@ -824,6 +917,23 @@ impl EditorState {
         let set = self.breakpoints.entry(res.to_string()).or_default();
         if !set.remove(&line) {
             set.insert(line);
+        } else {
+            self.bp_conditions.remove(&(res.to_string(), line));
+        }
+        self.sync_breakpoints();
+    }
+
+    /// Gives a breakpoint a condition (making the breakpoint if needed); empty removes it.
+    pub fn set_breakpoint_condition(&mut self, res: &str, line: usize, expr: &str) {
+        let key = (res.to_string(), line);
+        if expr.trim().is_empty() {
+            self.bp_conditions.remove(&key);
+        } else {
+            self.breakpoints.entry(res.to_string()).or_default().insert(line);
+            self.bp_conditions.insert(key, expr.trim().to_string());
+        }
+        if let Some(p) = self.project.res_to_path(res).and_then(|p| p.canonicalize().ok()) {
+            self.game_breakpoints.set_condition(p, line, expr);
         }
         self.sync_breakpoints();
     }
@@ -832,9 +942,13 @@ impl EditorState {
     pub fn sync_breakpoints(&self) {
         for (res, lines) in &self.breakpoints {
             if let Some(p) = self.project.res_to_path(res).and_then(|p| p.canonicalize().ok()) {
-                self.game_breakpoints.set(p, lines.iter().copied().collect());
+                self.game_breakpoints.set(p.clone(), lines.iter().copied().collect());
+                for l in lines {
+                    self.game_breakpoints.set_condition(p.clone(), *l, self.bp_conditions.get(&(res.clone(), *l)).map(|s| s.as_str()).unwrap_or(""));
+                }
             }
         }
+        self.game_breakpoints.set_watches(self.watches.clone());
     }
 
     /// The text of a script: the open buffer if it's open, else the file.
@@ -927,6 +1041,8 @@ impl EditorState {
             buttons: HashSet::new(),
             game_camera: true,
             mouse_delta: [0.0; 2],
+            stats: Default::default(),
+            last_frame: Instant::now(),
             locked: false,
             lock_suspended: false,
         });
@@ -952,7 +1068,12 @@ impl EditorState {
         let mut paused_at = None;
         for m in p.handle.poll() {
             match m {
-                FromGame::Frame { list, tree, logs } => {
+                FromGame::Frame { list, tree, logs, stats } => {
+                    p.stats.push_back((p.last_frame.elapsed().as_secs_f32() * 1000.0, stats));
+                    p.last_frame = Instant::now();
+                    while p.stats.len() > 240 {
+                        p.stats.pop_front();
+                    }
                     p.list = list;
                     if let Some(t) = tree {
                         p.tree = t;

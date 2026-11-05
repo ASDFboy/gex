@@ -229,5 +229,18 @@ mod tests {
         st.delete_asset("res://code/player.jlb").unwrap();
         assert!(!st.scripts.contains_key("res://code/player.jlb"));
         assert!(st.delete_asset("res://scenes/main.jscene").is_err(), "open scenes can't be deleted");
+        // Undo: the delete, then the rename, then a new script.
+        st.undo_file_op();
+        assert!(dir.join("code/player.jlb").exists(), "put back from the trash");
+        st.undo_file_op();
+        assert!(dir.join("scripts/player.jlb").exists() && !dir.join("code").exists());
+        let player = st.tree.find_path(None, "Level/Player").unwrap();
+        assert_eq!(st.tree.nodes[player].scripts, vec!["res://scripts/player.jlb".to_string()]);
+        assert!(std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap().contains("res://scripts/player.jlb"));
+        assert!(st.file_undo.is_empty());
+        let made = st.new_script_file("res://scripts").unwrap();
+        assert!(st.project.res_to_path(&made).unwrap().exists());
+        st.undo_file_op();
+        assert!(!st.project.res_to_path(&made).unwrap().exists());
     }
 }

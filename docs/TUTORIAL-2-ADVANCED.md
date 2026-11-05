@@ -150,6 +150,34 @@ IF dx !== 0 {
 playing carries on rather than restarting it, so it's fine every frame; `ANIMATE(NULL, "attack",
 TRUE)` starts over.
 
+## Animating anything: the Timeline
+
+Sprite sheets cover frames; for everything else (a door sliding, a light pulsing, a title
+bouncing in, a boss's attack pattern) use an **Animator**.
+
+1. Select the node to animate and add a child **Animator** (+ Node → General). In the
+   Inspector, press **Edit clips in the Timeline**.
+2. **+ Clip** makes a clip. Set its `length` and whether it loops.
+3. Under **+ Track**, pick a node (the Animator's parent, or anything under it) and a property
+   (`x`, `y`, `rotation`, `color`, `visible`, any number...), then **Add**.
+4. Move the playhead (drag the slider or click in a track), set the value in the Inspector or
+   the scene view, and press **+key** on the track. Do that at a few times and press ▶: the
+   values blend between keys. Drag a key (the yellow diamond) to move it; right-click it to
+   change its easing (`linear`, `in`, `out`, `in_out`, `step`) or delete it.
+5. Tick **autoplay** to start the clip with the scene, or play it from a script:
+
+```
+DEF on_pressed_open() {
+	PLAY_CLIP("Door/Animator", "open")
+}
+
+DEF on_clip_end(clip) {
+	PRINT(clip + " finished")
+}
+```
+
+Clips are saved in `animations/` as `.anim` files, so several Animators can share one.
+
 ## Cameras
 
 A **Camera2D** shows the world from where it is, so make it a child of the player to follow
@@ -328,12 +356,23 @@ export. Keep `hl2://` projects for yourself. More in [HL2.md](HL2.md).
   line it stops, opens the script there, and the Console's debugger shows the call stack, the
   function's variables and the script's outside variables. **F8** carries on, **F10** runs one
   line.
+- Right-click the margin for a breakpoint with a condition (a dot with `?`): `hp < 10` stops only
+  when that's TRUE. Handy inside `on_step`, which runs every frame.
+- Under the debugger, **+ watch** takes any expression (`self.x + 5`, `LEN(enemies)`); every
+  watch is worked out each time the game stops.
+- **View → Profiler** (or the FPS in the status bar) shows each frame's time, split into
+  scripts, physics and the rest, and which script was slowest.
 - Save a script while the game runs (Ctrl+S) and it reloads in place, keeping its outside
   variables. Great for tuning numbers.
 - A script with an error stops (the rest of the game doesn't); click the red Console line to
   jump to it.
 
 ## Working faster in the editor
+
+- **Ctrl+Shift+F** finds text in every script and scene; click a result to open it there.
+- The Assets panel previews models (drag to turn them; it lists their animations) and plays
+  sounds. Its **↶** button (or Edit → Undo file change) undoes the last rename, delete, new file
+  or import.
 
 - **The command line**: press `:` anywhere outside a text box. `:w` saves, `:play`, `:stop`,
   `:add Sprite2D`, `:e scenes/level2.jscene`, `:find Player`, `:rename Hero`, `:branch` (save

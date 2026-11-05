@@ -13,6 +13,8 @@ use crate::variant::Variant;
 /// like GameMaker) and `rotation.z` in degrees; 3D kinds use metres, y up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NodeKind {
+    /// Plays animation clips (made in the Timeline) on the nodes around it.
+    Animator,
     /// A plain grouping node (no transform effect beyond passing it on).
     Node,
     /// Plays a sound file (with autoplay, or PLAY(node) from a script).
@@ -63,6 +65,7 @@ pub enum NodeKind {
 
 pub const ALL_KINDS: &[NodeKind] = &[
     NodeKind::Node,
+    NodeKind::Animator,
     NodeKind::Sound,
     NodeKind::Node2D,
     NodeKind::Sprite2D,
@@ -95,6 +98,7 @@ impl NodeKind {
     pub fn name(self) -> &'static str {
         match self {
             NodeKind::Node => "Node",
+            NodeKind::Animator => "Animator",
             NodeKind::Sound => "Sound",
             NodeKind::Node2D => "Node2D",
             NodeKind::Sprite2D => "Sprite2D",
@@ -344,6 +348,7 @@ impl NodeKind {
                 ("bloom", Num(0.0)),
                 ("bloom_threshold", Num(0.9)),
             ],
+            NodeKind::Animator => vec![("clips", Res(String::new())), ("autoplay", Text(String::new())), ("speed", Num(1.0))],
             NodeKind::Sound => vec![
                 ("stream", Res(String::new())),
                 ("volume", Num(1.0)),

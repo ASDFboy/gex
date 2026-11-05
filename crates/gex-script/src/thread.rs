@@ -24,7 +24,7 @@ pub enum ToGame {
 
 pub enum FromGame {
     /// `tree` (a copy for the editor's inspector) comes about ten times a second.
-    Frame { list: RenderList, tree: Option<SceneTree>, logs: Vec<LogLine> },
+    Frame { list: RenderList, tree: Option<SceneTree>, logs: Vec<LogLine>, stats: crate::world::FrameStats },
     /// A breakpoint (or a step) stopped the game; it waits for `resume` / `step`.
     Paused(Paused),
     Stopped { logs: Vec<LogLine> },
@@ -38,6 +38,8 @@ pub struct Paused {
     pub stack: Vec<(String, usize)>,
     pub locals: Vec<(String, String)>,
     pub outside: Vec<(String, String)>,
+    /// Watch expressions and their values.
+    pub watches: Vec<(String, String)>,
 }
 
 pub enum Debug {
@@ -155,6 +157,7 @@ fn pause_hook(bp: Arc<Breakpoints>, tx: Sender<FromGame>, debug: Arc<std::sync::
                 stack: p.stack,
                 locals: p.locals,
                 outside: p.outside,
+                watches: p.watches,
             }));
             match debug.lock().unwrap().recv() {
                 Ok(Debug::Continue) => true,
@@ -184,6 +187,7 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                 game.reload_script(&res);
             }
             ToGame::Frame(input) => {
+                let started = std::time::Instant::now();
                 game.step(input);
                 if cancel.load(Ordering::Relaxed) {
                     break;
@@ -212,10 +216,15 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                 }
                 let quit = game.st.borrow().quit;
                 let list = game.render_list();
+                let mut stats = std::mem::take(&mut game.stats);
+                stats.total_ms = started.elapsed().as_secs_f32() * 1000.0;
+                stats.nodes = game.tree().nodes.len();
+                stats.sprites = list.sprites.len();
+                stats.meshes = list.meshes.len();
                 frames += 1;
                 let tree = (frames % 6 == 1).then(|| game.tree().clone());
                 let logs = game.take_logs();
-                if tx.send(FromGame::Frame { list, tree, logs }).is_err() || quit {
+                if tx.send(FromGame::Frame { list, tree, logs, stats }).is_err() || quit {
                     break;
                 }
             }

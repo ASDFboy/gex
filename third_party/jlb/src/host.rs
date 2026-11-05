@@ -72,6 +72,10 @@ pub struct Breakpoints {
     pub lines: RwLock<HashMap<PathBuf, HashSet<usize>>>,
     /// Pause at the very next statement (stepping).
     pub step: AtomicBool,
+    /// Breakpoints that only stop when an expression is true: (file, line) → expression.
+    pub conditions: RwLock<HashMap<(PathBuf, usize), String>>,
+    /// Expressions worked out and shown whenever code stops.
+    pub watches: RwLock<Vec<String>>,
 }
 
 impl Breakpoints {
@@ -92,6 +96,48 @@ impl Breakpoints {
         let l = self.lines.read().unwrap();
         self.refresh(&l);
     }
+    /// Sets (or, with an empty expression, removes) the condition on one breakpoint.
+    pub fn set_condition(&self, file: PathBuf, line: usize, expr: &str) {
+        let mut c = self.conditions.write().unwrap();
+        if expr.trim().is_empty() {
+            c.remove(&(file, line));
+        } else {
+            c.insert((file, line), expr.trim().to_string());
+        }
+    }
+    pub fn set_watches(&self, w: Vec<String>) {
+        *self.watches.write().unwrap() = w;
+    }
+}
+
+/// Works out an expression where code is running now (its local and outside variables).
+/// Breakpoints don't stop code it calls.
+pub fn eval_here(it: &mut Interp, text: &str) -> Result<Value, String> {
+    let toks = crate::lexer::lex(text).map_err(|e| e.msg)?;
+    let prog = crate::parser::Parser::new(toks).program().map_err(|e| e.msg)?;
+    let e = match prog.as_slice() {
+        [s] => match &s.kind {
+            crate::ast::StmtKind::Expr(e) => e,
+            _ => return Err("not an expression".into()),
+        },
+        _ => return Err("one expression only".into()),
+    };
+    let saved = it.pause.take();
+    let line = it.frames.last().map(|f| f.line);
+    let depth = it.frames.len();
+    let scopes = it.frames.last().map(|f| f.scopes.len());
+    let r = it.eval(e);
+    it.frames.truncate(depth);
+    if let (Some(f), Some(l), Some(n)) = (it.frames.last_mut(), line, scopes) {
+        f.line = l;
+        f.scopes.truncate(n);
+    }
+    it.pause = saved;
+    r.map_err(|f| match f {
+        Fault::Error(e) | Fault::TaskError(e) => e.msg,
+        Fault::End => "END".into(),
+        Fault::Cancelled => "cancelled".into(),
+    })
 }
 
 /// Where code stopped, for the host to show.
@@ -103,6 +149,8 @@ pub struct Paused {
     /// The innermost function's local variables, then the file's outside variables.
     pub locals: Vec<(String, String)>,
     pub outside: Vec<(String, String)>,
+    /// Each watch expression and its value (or the error working it out).
+    pub watches: Vec<(String, String)>,
 }
 
 pub struct PauseHook {
@@ -123,7 +171,20 @@ pub(crate) fn check_pause(it: &mut Interp, line: usize) -> R<()> {
     if !hit {
         return Ok(());
     }
+    let mut cond_error = None;
+    if !stepping {
+        let cond = hook.breakpoints.conditions.read().unwrap().get(&(file.clone(), line)).cloned();
+        if let Some(c) = cond {
+            match eval_here(it, &c).and_then(|v| crate::ops::truth(&v).map_err(|_| "it isn't TRUE or FALSE".to_string())) {
+                Ok(false) => return Ok(()),
+                Ok(true) => {}
+                Err(e) => cond_error = Some(format!("the condition `{}` didn't work: {}", c, e)),
+            }
+        }
+    }
+    let hook = it.pause.as_ref().unwrap();
     hook.breakpoints.set_step(false);
+    let watch_list = hook.breakpoints.watches.read().unwrap().clone();
     let short = |v: &Value| {
         let mut s = crate::value::display(v);
         if s.chars().count() > 200 {
@@ -149,7 +210,18 @@ pub(crate) fn check_pause(it: &mut Interp, line: usize) -> R<()> {
         .rev()
         .map(|f| (f.func.as_ref().and_then(|x| x.decl.name.as_ref().map(|n| n.to_string())).unwrap_or_else(|| "(file)".into()), f.line))
         .collect();
-    let paused = Paused { file, line, stack, locals, outside };
+    let mut watches: Vec<(String, String)> = Vec::new();
+    if let Some(e) = cond_error {
+        watches.push(("⚠".into(), e));
+    }
+    for w in watch_list {
+        let v = match eval_here(it, &w) {
+            Ok(v) => short(&v),
+            Err(e) => format!("⚠ {}", e),
+        };
+        watches.push((w, v));
+    }
+    let paused = Paused { file, line, stack, locals, outside, watches };
     let go_on = (it.pause.as_mut().unwrap().on_pause)(paused);
     if go_on {
         Ok(())

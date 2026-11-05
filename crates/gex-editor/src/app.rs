@@ -9,7 +9,7 @@ use gex_core::project::{MountConfig, MountKind, Project};
 use gex_script::LogKind;
 
 use crate::state::{self, EditorState};
-use crate::{code, panels, templates, theme, viewport};
+use crate::{code, panels, templates, theme, tools, viewport};
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
@@ -20,6 +20,9 @@ pub enum Tab {
     Assets,
     Console,
     Script(String),
+    Profiler,
+    Search,
+    Timeline,
 }
 
 struct Viewer<'a> {
@@ -56,6 +59,9 @@ impl TabViewer for Viewer<'_> {
                 let dirty = self.st.scripts.get(r).is_some_and(|s| s.dirty());
                 format!("📜 {}{}", r.rsplit('/').next().unwrap_or(r), if dirty { " *" } else { "" }).into()
             }
+            Tab::Profiler => "📈 Profiler".into(),
+            Tab::Search => "🔍 Find in files".into(),
+            Tab::Timeline => "🎞 Timeline".into(),
         }
     }
 
@@ -75,11 +81,16 @@ impl TabViewer for Viewer<'_> {
             Tab::Assets => panels::assets(ui, self.st, self.previews),
             Tab::Console => panels::console(ui, self.st),
             Tab::Script(r) => code::script_ui(ui, self.st, r),
+            Tab::Profiler => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| tools::profiler(ui, self.st));
+            }
+            Tab::Search => tools::search(ui, self.st),
+            Tab::Timeline => crate::timeline::timeline(ui, self.st),
         }
     }
 
     fn is_closeable(&self, tab: &Tab) -> bool {
-        matches!(tab, Tab::Script(_))
+        matches!(tab, Tab::Script(_) | Tab::Profiler | Tab::Search | Tab::Timeline)
     }
 
     fn on_close(&mut self, tab: &mut Tab) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
@@ -139,13 +150,26 @@ fn save_dock(d: &DockState<Tab>) {
     }
 }
 
+/// Brings a panel to the front, opening it if it was closed (tool panels go with the Console).
+fn show_tab(dock: &mut DockState<Tab>, t: Tab) {
+    if let Some(p) = dock.find_tab(&t) {
+        let _ = dock.set_active_tab(p);
+        return;
+    }
+    let tool = matches!(t, Tab::Timeline | Tab::Profiler | Tab::Search | Tab::Console | Tab::Assets);
+    if let Some(p) = dock.find_tab(&Tab::Console).filter(|_| tool) {
+        dock.set_focused_node_and_surface(egui_dock::NodePath { surface: p.surface, node: p.node });
+    }
+    dock.push_to_focused_leaf(t);
+}
+
 fn default_dock() -> DockState<Tab> {
     let mut d = DockState::new(vec![Tab::Scene]);
     let t = d.main_surface_mut();
     let [center, _left] = t.split_left(NodeIndex::root(), 0.18, vec![Tab::Hierarchy]);
     let [center, right] = t.split_right(center, 0.74, vec![Tab::Inspector, Tab::Events]);
     let _ = right;
-    let [_c, _b] = t.split_below(center, 0.72, vec![Tab::Console, Tab::Assets]);
+    let [_c, _b] = t.split_below(center, 0.72, vec![Tab::Console, Tab::Assets, Tab::Timeline]);
     d
 }
 
@@ -404,6 +428,11 @@ impl EditorApp {
                     st.redo();
                     ui.close();
                 }
+                let file_op = st.file_undo.last().map(|o| o.describe());
+                if ui.add_enabled(file_op.is_some() && st.playing.is_none(), egui::Button::new(format!("Undo file change{}", file_op.map(|d| format!(": {}", d)).unwrap_or_default()))).clicked() {
+                    st.undo_file_op();
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Duplicate  (Ctrl+D)").clicked() {
                     st.duplicate_selected();
@@ -416,13 +445,9 @@ impl EditorApp {
             });
             ui.menu_button("Node", |ui| panels::add_node_menu(ui, st));
             ui.menu_button("View", |ui| {
-                for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console] {
+                for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler, Tab::Search] {
                     if ui.button(format!("{:?}", t)).clicked() {
-                        if let Some(p) = self.dock.find_tab(&t) {
-                            let _ = self.dock.set_active_tab(p);
-                        } else {
-                            self.dock.push_to_focused_leaf(t);
-                        }
+                        show_tab(&mut self.dock, t);
                         ui.close();
                     }
                 }
@@ -467,6 +492,7 @@ impl EditorApp {
                 i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == ":")),
             )
         });
+        let mut find_in_files = false;
         let (copy, paste, close_scene, tool) = ctx.input_mut(|i| {
             let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
             let paste = i.events.iter().find_map(|e| match e {
@@ -474,6 +500,9 @@ impl EditorApp {
                 _ => None,
             });
             let close = i.consume_key(egui::Modifiers::COMMAND, egui::Key::W);
+            if i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F) {
+                find_in_files = true;
+            }
             let plain = !i.modifiers.command && !i.modifiers.alt;
             let tool = if plain && i.key_pressed(egui::Key::W) {
                 Some(state::Tool::Move)
@@ -504,6 +533,13 @@ impl EditorApp {
         }
         if save {
             st.save_all();
+        }
+        if find_in_files {
+            show_tab(&mut self.dock, Tab::Search);
+            st.search.focus = true;
+        }
+        if std::mem::take(&mut st.open_timeline) {
+            show_tab(&mut self.dock, Tab::Timeline);
         }
         if typing {
             return;
@@ -567,6 +603,15 @@ impl EditorApp {
                     ui.label(RichText::new(&st.status).monospace().color(theme::TEXT_DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new("press : for commands").small().color(theme::TEXT_DIM));
+                        if let Some(p) = &st.playing {
+                            let n = p.stats.len().min(30);
+                            if n > 0 {
+                                let avg: f32 = p.stats.iter().rev().take(n).map(|(ms, _)| *ms).sum::<f32>() / n as f32;
+                                let fps = if avg > 0.0 { 1000.0 / avg } else { 0.0 };
+                                let c = if fps >= 55.0 { theme::GOOD } else if fps >= 30.0 { theme::WARN } else { theme::BAD };
+                                ui.label(RichText::new(format!("{:.0} FPS", fps)).monospace().small().color(c)).on_hover_text("frames per second (View → Profiler for more)");
+                            }
+                        }
                         if let Some(sel) = st.selected.filter(|s| st.view_tree().contains(*s)) {
                             ui.label(RichText::new(st.view_tree().path_of(sel)).monospace().small());
                         }

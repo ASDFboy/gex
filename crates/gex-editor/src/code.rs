@@ -196,6 +196,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
         (std::path::Path::new(&p.file) == path).then_some(p.line)
     });
     let bps: Vec<usize> = st.breakpoints.get(res).map(|b| b.iter().copied().collect()).unwrap_or_default();
+    let conditional: Vec<usize> = st.bp_conditions.keys().filter(|(r, _)| r == res).map(|(_, l)| *l).collect();
     let Some(s) = st.scripts.get_mut(res) else {
         ui.label("This script isn't open.");
         return;
@@ -399,6 +400,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
         scroll = scroll.vertical_scroll_offset(((l as f32 - 6.0).max(0.0)) * row_h);
     }
     let mut toggle_bp: Option<usize> = None;
+    let mut edit_condition: Option<usize> = None;
     let mut cursor_rect: Option<egui::Rect> = None;
     let mut typed = false;
     scroll.show(ui, |ui| {
@@ -414,7 +416,11 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                     painter.rect_filled(r, 0.0, theme::WARN.gamma_multiply(0.35));
                 }
                 if bps.contains(&n) {
-                    painter.circle_filled(egui::pos2(r.left() + row_h * 0.45, r.center().y), row_h * 0.3, theme::BAD);
+                    let c = egui::pos2(r.left() + row_h * 0.45, r.center().y);
+                    painter.circle_filled(c, row_h * 0.3, theme::BAD);
+                    if conditional.contains(&n) {
+                        painter.text(c, egui::Align2::CENTER_CENTER, "?", egui::FontId::monospace(row_h * 0.55), Color32::WHITE);
+                    }
                 }
                 let c = if bad_lines.contains(&n) { theme::BAD } else { theme::C_COMMENT };
                 painter.text(egui::pos2(r.right() - 6.0, r.center().y), egui::Align2::RIGHT_CENTER, n.to_string(), font.clone(), c);
@@ -422,7 +428,13 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
             if let Some(p) = g_resp.interact_pointer_pos().filter(|_| g_resp.clicked()) {
                 toggle_bp = Some(((p.y - g_rect.top()) / row_h).floor() as usize + 1);
             }
-            let g_resp = g_resp.on_hover_text("click a line number for a breakpoint (the game stops there)");
+            if let Some(p) = g_resp.interact_pointer_pos().filter(|_| g_resp.secondary_clicked()) {
+                let l = ((p.y - g_rect.top()) / row_h).floor() as usize + 1;
+                if l >= 1 && l <= lines {
+                    edit_condition = Some(l);
+                }
+            }
+            let g_resp = g_resp.on_hover_text("click a line number for a breakpoint (the game stops there); right-click for one that stops only when something is true");
             let _ = g_resp;
             let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
                 let job = highlight(text.as_str(), font.clone());
@@ -535,6 +547,11 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
             st.toggle_breakpoint(res, l);
         }
     }
+    if let Some(l) = edit_condition {
+        let now = st.bp_conditions.get(&(res.to_string(), l)).cloned().unwrap_or_default();
+        st.bp_edit = Some((res.to_string(), l, now));
+    }
+    condition_window(ui.ctx(), st);
     if save {
         st.save_script(res);
     }
@@ -562,4 +579,35 @@ fn find_definition_text(text: &str, name: &str) -> Option<usize> {
 
 fn st_open_command(ui: &egui::Ui) {
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("vim wants command"), true));
+}
+
+/// The little window for a breakpoint's condition (right-click a line number).
+fn condition_window(ctx: &egui::Context, st: &mut EditorState) {
+    let Some((res, line, mut text)) = st.bp_edit.take() else { return };
+    let mut open = true;
+    let mut done = None;
+    egui::Window::new(format!("Breakpoint on line {}", line)).id(egui::Id::new("bp condition")).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+        ui.label("Stop only when this is TRUE (empty: always stop):");
+        let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text("hp < 10 AND self.x > 300").font(egui::TextStyle::Monospace).desired_width(280.0));
+        r.request_focus();
+        ui.horizontal(|ui| {
+            if ui.button("Set").clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                done = Some(true);
+            }
+            if ui.button("Remove breakpoint").clicked() {
+                done = Some(false);
+            }
+        });
+    });
+    match done {
+        Some(true) => st.set_breakpoint_condition(&res, line, &text),
+        Some(false) => {
+            st.set_breakpoint_condition(&res, line, "");
+            if st.breakpoints.get(&res).is_some_and(|b| b.contains(&line)) {
+                st.toggle_breakpoint(&res, line);
+            }
+        }
+        None if open => st.bp_edit = Some((res, line, text)),
+        None => {}
+    }
 }
