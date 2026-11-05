@@ -17,6 +17,7 @@ pub const DEMO: &[(&str, &str)] = &[
     ("scripts/world.jlb", include_str!("demo/scripts/world.jlb")),
     ("scenes/menu.jscene", include_str!("demo/scenes/menu.jscene")),
     ("scenes/platformer.jscene", include_str!("demo/scenes/platformer.jscene")),
+    ("scenes/crate3d.jscene", include_str!("demo/scenes/crate3d.jscene")),
     ("scripts/menu.jlb", include_str!("demo/scripts/menu.jlb")),
     ("scripts/hero.jlb", include_str!("demo/scripts/hero.jlb")),
     ("scripts/back_to_menu.jlb", include_str!("demo/scripts/back_to_menu.jlb")),
@@ -97,6 +98,17 @@ mod tests {
         let t = g3.tree();
         let cube = t.find_path(None, "World/Cube").unwrap();
         assert!(t.nodes[cube].transform.rotation.y > 10.0);
+        drop(t);
+        // Clicking drops a crate that falls and lands on the ground.
+        g3.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], ["left".to_string()].into());
+        for _ in 0..240 {
+            g3.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        }
+        let t = g3.tree();
+        let crates = t.in_group("crates");
+        assert_eq!(crates.len(), 1);
+        let y = t.nodes[crates[0]].transform.position.y;
+        assert!((y - 0.5).abs() < 0.1, "resting on the ground: {}", y);
         drop(t);
         // The platformer: the hero lands on the tiles, runs right and jumps.
         let mut gp = Game::from_scene(p.clone(), "res://scenes/platformer.jscene", None).unwrap();

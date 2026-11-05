@@ -1,3 +1,24 @@
+>> The 3D demo: orbit the camera, drop physics crates, and keep the count sane.
+
+DEF on_step(dt) {
+	turn = 0
+	IF KEY_DOWN("left") OR KEY_DOWN("a") { turn -= 1 }
+	IF KEY_DOWN("right") OR KEY_DOWN("d") { turn += 1 }
+	turn += AXIS("right_x")
+	SET("Pivot", "rotation_y", GET("Pivot", "rotation_y") + turn * 60 * dt)
+}
+
+DEF on_mouse_pressed(button, x, y) {
+	IF button == "left" {
+		SPAWN("res://scenes/crate3d.jscene", RANDOM(-3, 3), 8, RANDOM(-2, 2))
+		>> Too many? Remove the oldest.
+		crates = NODES("crates")
+		IF LEN(crates) > 25 {
+			DESTROY(crates[1])
+		}
+	}
+}
+
 DEF on_press_tab() {
 	CHANGE_SCENE("res://scenes/main.jscene")
 }

@@ -848,6 +848,10 @@ pub struct PlayerApp {
     ui_events: Vec<gex_script::UiEvent>,
     ui_images: HashMap<String, egui::TextureHandle>,
     pads: crate::gamepad::Pads,
+    /// Keys and buttons that went down since the last game frame, so a quick tap (down and
+    /// up between two frames) still counts as pressed once.
+    taps: std::collections::HashSet<String>,
+    tap_buttons: std::collections::HashSet<String>,
 }
 
 impl PlayerApp {
@@ -857,7 +861,7 @@ impl PlayerApp {
         let tree = gex_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let list = gex_core::render::extract(&tree);
-        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new() })
+        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default() })
     }
 }
 
@@ -886,7 +890,24 @@ impl eframe::App for PlayerApp {
             return;
         }
         let now = std::time::Instant::now();
-        let (mut keys, buttons) = ctx.input(|i| (viewport::input_keys(i), viewport::mouse_buttons(i)));
+        let (mut keys, mut buttons) = ctx.input(|i| (viewport::input_keys(i), viewport::mouse_buttons(i)));
+        ctx.input(|i| {
+            for e in &i.events {
+                match e {
+                    egui::Event::Key { key, pressed: true, .. } => self.taps.extend(viewport::key_name(*key)),
+                    egui::Event::PointerButton { button, pressed: true, .. } => {
+                        let b = match button {
+                            egui::PointerButton::Primary => "left",
+                            egui::PointerButton::Secondary => "right",
+                            egui::PointerButton::Middle => "middle",
+                            _ => continue,
+                        };
+                        self.tap_buttons.insert(b.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        });
         let (pad_keys, axes) = self.pads.poll();
         keys.extend(pad_keys);
         let Some(rs) = frame.wgpu_render_state() else { return };
@@ -897,6 +918,8 @@ impl eframe::App for PlayerApp {
             let cams = gex_render::Cameras::for_game(&self.list, px, self.design);
             let m = ctx.input(|i| i.pointer.hover_pos()).map(|p| cams.screen_to_2d(gex_core::glam::Vec2::new(p.x * ppp, p.y * ppp))).unwrap_or_default();
             if !self.handle.waiting {
+                keys.extend(self.taps.drain());
+                buttons.extend(self.tap_buttons.drain());
                 self.handle.request_frame(gex_script::FrameInput {
                     dt: now.duration_since(self.last).as_secs_f64(),
                     keys,

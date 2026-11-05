@@ -1,0 +1,12 @@
+(
+  format: 1,
+  root: (
+    name: "Crate",
+    kind: Some(Body3D),
+    props: {"bounce": Num(0.2)},
+    groups: ["crates"],
+    children: [
+      (name: "Look", kind: Some(Mesh3D), props: {"color": Color((0.75, 0.55, 0.3, 1.0))}),
+    ],
+  ),
+)
