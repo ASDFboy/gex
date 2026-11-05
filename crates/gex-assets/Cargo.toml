@@ -1,0 +1,11 @@
+[package]
+name = "gex-assets"
+description = "Asset access for GEX: res:// project files and mounted game installs (VPK, VTF, VMT)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+gex-core.workspace = true
+image.workspace = true
+steamlocate.workspace = true

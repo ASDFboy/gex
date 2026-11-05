@@ -1,0 +1,16 @@
+[package]
+name = "gex-render"
+description = "wgpu renderer for GEX: 2D sprites and 3D meshes from a RenderList"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+gex-core.workspace = true
+gex-assets.workspace = true
+egui-wgpu.workspace = true
+bytemuck.workspace = true
+
+[dev-dependencies]
+pollster = "1"
+image.workspace = true

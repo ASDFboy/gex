@@ -9,10 +9,10 @@ edition = "2021"
 authors = ["ASDFboy", "Claude"]
 
 [workspace.dependencies]
-jle-core = { path = "crates/jle-core" }
-jle-script = { path = "crates/jle-script" }
-jle-assets = { path = "crates/jle-assets" }
-jle-render = { path = "crates/jle-render" }
+gex-core = { path = "crates/gex-core" }
+gex-script = { path = "crates/gex-script" }
+gex-assets = { path = "crates/gex-assets" }
+gex-render = { path = "crates/gex-render" }
 jlb = { path = "third_party/jlb" }
 glam = { version = "0.30", features = ["serde", "bytemuck"] }
 serde = { version = "1", features = ["derive"] }

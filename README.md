@@ -1,4 +1,4 @@
-# JLB Engine
+# GEX
 
 A 2D and 3D game engine with a docked editor, Godot-style scenes, and game logic written in
 [.jlb](https://github.com/ASDFboy/jlb-rust), using GameMaker-style events.
@@ -8,15 +8,15 @@ By ASDFboy and Claude.
 ## Run it
 
 ```
-jlb-engine                       the project library (new / open / demo)
-jlb-engine <project folder>      open a project in the editor
-jlb-engine --play <folder>       run a project's main scene, no editor
+gex                       the project library (new / open / demo)
+gex <project folder>      open a project in the editor
+gex --play <folder>       run a project's main scene, no editor
 ```
 
 Build from source (Rust 1.85+):
 
 ```
-cargo run --release -p jle-editor              # the editor
+cargo run --release -p gex-editor              # the editor
 cargo test --workspace                         # everything's tests, including the demo game
 ```
 
@@ -45,11 +45,11 @@ cargo test --workspace                         # everything's tests, including t
 
 | Crate | What it is |
 |---|---|
-| `crates/jle-core` | node tree, scene files and instancing, projects, input state, render extraction |
-| `crates/jle-script` | runs .jlb scripts: events, engine commands, the game loop, the game thread |
-| `crates/jle-assets` | the virtual file system: `res://`, mounted game installs, VPK, VTF, VMT, images |
-| `crates/jle-render` | wgpu renderer: 2D sprites, lit 3D meshes, lines; draws to a texture |
-| `crates/jle-editor` | the `jlb-engine` program: editor and player, built with egui |
+| `crates/gex-core` | node tree, scene files and instancing, projects, input state, render extraction |
+| `crates/gex-script` | runs .jlb scripts: events, engine commands, the game loop, the game thread |
+| `crates/gex-assets` | the virtual file system: `res://`, mounted game installs, VPK, VTF, VMT, images |
+| `crates/gex-render` | wgpu renderer: 2D sprites, lit 3D meshes, lines; draws to a texture |
+| `crates/gex-editor` | the `gex` program: editor and player, built with egui |
 | `third_party/jlb` | the .jlb interpreter (jlb-rust), with an embedding API added |
 
 How the pieces fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

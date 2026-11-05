@@ -1,0 +1,24 @@
+[package]
+name = "gex-editor"
+description = "The GEX editor (and game player)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "gex"
+path = "src/main.rs"
+
+[dependencies]
+gex-core.workspace = true
+gex-script.workspace = true
+gex-assets.workspace = true
+gex-render.workspace = true
+jlb.workspace = true
+eframe.workspace = true
+egui_dock.workspace = true
+egui-wgpu.workspace = true
+ron.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+rfd.workspace = true

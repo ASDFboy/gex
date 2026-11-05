@@ -27,7 +27,7 @@ base** (its own scripting and scene formats would compete with JLB everywhere).
                          ▲   input each frame          │ RenderList + tree copy + log lines
                          └──────── editor ◀────────────┘
                                     │
-                    render::extract(tree) ─▶ RenderList ─▶ jle-render ─▶ texture ─▶ egui viewport
+                    render::extract(tree) ─▶ RenderList ─▶ gex-render ─▶ texture ─▶ egui viewport
 ```
 
 - **One building block.** `Node { name, kind, transform, props, scripts, groups, children }`.

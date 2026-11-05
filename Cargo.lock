@@ -1281,6 +1281,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "gex-assets"
+version = "0.1.0"
+dependencies = [
+ "gex-core",
+ "image",
+ "steamlocate",
+]
+
+[[package]]
+name = "gex-core"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "ron",
+ "serde",
+ "slotmap",
+]
+
+[[package]]
+name = "gex-editor"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui-wgpu",
+ "egui_dock",
+ "gex-assets",
+ "gex-core",
+ "gex-render",
+ "gex-script",
+ "jlb",
+ "rfd",
+ "ron",
+]
+
+[[package]]
+name = "gex-render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "egui-wgpu",
+ "gex-assets",
+ "gex-core",
+ "image",
+ "pollster 1.0.1",
+]
+
+[[package]]
+name = "gex-script"
+version = "0.1.0"
+dependencies = [
+ "gex-core",
+ "jlb",
+ "slotmap",
+]
+
+[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1624,62 +1680,6 @@ name = "jlb"
 version = "0.1.0"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "jle-assets"
-version = "0.1.0"
-dependencies = [
- "image",
- "jle-core",
- "steamlocate",
-]
-
-[[package]]
-name = "jle-core"
-version = "0.1.0"
-dependencies = [
- "glam",
- "ron",
- "serde",
- "slotmap",
-]
-
-[[package]]
-name = "jle-editor"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui-wgpu",
- "egui_dock",
- "jlb",
- "jle-assets",
- "jle-core",
- "jle-render",
- "jle-script",
- "rfd",
- "ron",
-]
-
-[[package]]
-name = "jle-render"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "egui-wgpu",
- "image",
- "jle-assets",
- "jle-core",
- "pollster 1.0.1",
-]
-
-[[package]]
-name = "jle-script"
-version = "0.1.0"
-dependencies = [
- "jlb",
- "jle-core",
- "slotmap",
 ]
 
 [[package]]

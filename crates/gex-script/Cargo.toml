@@ -1,0 +1,11 @@
+[package]
+name = "gex-script"
+description = "Runs JLB scripts on nodes: events, engine commands, the game loop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+gex-core.workspace = true
+jlb.workspace = true
+slotmap.workspace = true
