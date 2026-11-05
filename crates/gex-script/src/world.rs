@@ -788,12 +788,16 @@ impl Game {
             let playing: Vec<(NodeId, bool)> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Sound).map(|i| (i, st.audio.by_node.contains_key(&i))).collect();
             // Where the "ears" are: the 3D camera, else the 2D camera (or the screen's middle).
             let cam3 = st.tree.walk().into_iter().find(|i| st.tree.nodes[*i].kind == NodeKind::Camera3D && st.tree.nodes[*i].prop("current").is_none_or(|v| v.as_bool()));
-            let ear = match cam3 {
-                Some(c) => Some((st.tree.global_matrix(c).w_axis.truncate(), true)),
+            // ...and which way is right, for the balance.
+            let (ear, right) = match cam3 {
+                Some(c) => {
+                    let m = st.tree.global_matrix(c);
+                    (Some((m.w_axis.truncate(), true)), m.x_axis.truncate().normalize_or(glam::Vec3::X))
+                }
                 None => {
                     let [w, h] = st.project.config.window_size;
                     let c = st.cam2_center.unwrap_or(glam::Vec2::new(w as f32 / 2.0, h as f32 / 2.0));
-                    Some((c.extend(0.0), false))
+                    (Some((c.extend(0.0), false)), glam::Vec3::X)
                 }
             };
             for (i, p) in playing {
@@ -810,6 +814,14 @@ impl Game {
                         let d = if three { at.distance(ear) } else { at.truncate().distance(ear.truncate()) };
                         let g = (1.0 - d / range).clamp(0.0, 1.0);
                         vol *= g * g;
+                        // Left or right of the listener.
+                        let off = at - ear;
+                        let side = if three { off.normalize_or_zero().dot(right) } else { (off.x / (range * 0.5)).clamp(-1.0, 1.0) };
+                        if let Some(id) = st.audio.by_node.get(&i).copied() {
+                            st.audio.set_pan(id, (side * 0.9).clamp(-1.0, 1.0));
+                        }
+                    } else if let Some(id) = st.audio.by_node.get(&i).copied() {
+                        st.audio.set_pan(id, n.num("pan", 0.0) as f32);
                     }
                     if let Some(id) = st.audio.by_node.get(&i).copied() {
                         st.audio.set_volume(id, vol);

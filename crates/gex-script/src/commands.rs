@@ -39,7 +39,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("RAYCAST", "(x, y, dx, dy, length, ignore, layers)", "the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL; layers (like \"world, enemies\") limits what it can hit"),
     ("RAYCAST_3D", "(x, y, z, dx, dy, dz, length, ignore, layers)", "the same in 3D"),
     ("DISTANCE", "(a, b)", "how far apart two nodes are"),
-    ("PLAY_SOUND", "(file, volume, pitch)", "plays a sound file once (res:// or hl2://...); gives its id"),
+    ("PLAY_SOUND", "(file, volume, pitch, pan, echo)", "plays a sound file once (res:// or hl2://...); pan -1 left to 1 right, echo 0 to 1; gives its id"),
     ("STOP_SOUND", "(id)", "stops a sound from PLAY_SOUND (NULL stops every sound)"),
     ("PLAY", "(node)", "starts a Sound node"),
     ("STOP", "(node)", "stops a Sound node"),
@@ -296,7 +296,9 @@ pub fn play_node(st: &mut WorldState, id: NodeId) -> Result<(), String> {
     if let Some(old) = st.audio.by_node.remove(&id) {
         st.audio.stop(old);
     }
-    let r = st.audio.play(&st.vfs, &file, vol, pitch, looped);
+    let echo = n.num("echo", 0.0) as f32;
+    let fx = crate::audio::SoundFx { pan: n.num("pan", 0.0) as f32, echo: (echo > 0.0).then_some((n.num("echo_delay", 0.15) as f32, echo)) };
+    let r = st.audio.play_fx(&st.vfs, &file, vol, pitch, looped, fx);
     let s = r?;
     if s != 0 {
         st.audio.by_node.insert(id, s);
@@ -496,7 +498,9 @@ impl Host for EngineHost {
             }
             "PLAY_SOUND" => {
                 let f = text_arg(name, &a, 0)?;
-                let r = st.audio.play(&st.vfs, &f, num_arg(&a, 1, 1.0) as f32, num_arg(&a, 2, 1.0) as f32, false);
+                let echo = num_arg(&a, 4, 0.0) as f32;
+                let fx = crate::audio::SoundFx { pan: num_arg(&a, 3, 0.0) as f32, echo: (echo > 0.0).then_some((0.18, echo)) };
+                let r = st.audio.play_fx(&st.vfs, &f, num_arg(&a, 1, 1.0) as f32, num_arg(&a, 2, 1.0) as f32, false, fx);
                 Ok(num(r.map_err(jlb::value::fault)? as f64))
             }
             "STOP_SOUND" => {

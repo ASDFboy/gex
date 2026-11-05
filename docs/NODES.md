@@ -13,7 +13,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | Kind | What it is | Main properties |
 |---|---|---|
 | `Node` | an empty node: a folder, or a holder for scripts (game managers) | |
-| `Sound` | a sound you can start and stop | `stream` (a .wav/.ogg/.mp3/.flac file), `volume`, `pitch`, `loop`, `autoplay`; `spatial` makes it quieter the farther it is from the camera, silent at `range` (0 = 25 m in 3D, 1000 px in 2D). Put it under the thing making the noise. |
+| `Sound` | a sound you can start and stop | `stream` (a .wav/.ogg/.mp3/.flac file), `volume`, `pitch`, `loop`, `autoplay`; `spatial` makes it quieter the farther it is from the camera (silent at `range`: 0 = 25 m in 3D, 1000 px in 2D) and moves it left or right to where it is; `pan` (-1 left to 1 right) when not spatial; `echo` (0 to 1) and `echo_delay` (seconds) for caves and halls. Put it under the thing making the noise. |
 
 ## 2D
 

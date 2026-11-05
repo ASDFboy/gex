@@ -127,7 +127,7 @@ The script editor completes these as you type and shows each one's inputs.
 
 | Command | |
 |---|---|
-| `PLAY_SOUND(file, volume, pitch)` | plays a sound file once (res:// or hl2://...); gives its id |
+| `PLAY_SOUND(file, volume, pitch, pan, echo)` | plays a sound file once (res:// or hl2://...); pan -1 left to 1 right, echo 0 to 1; gives its id |
 | `STOP_SOUND(id)` | stops a sound from PLAY_SOUND (NULL stops every sound) |
 | `PLAY(node)` | starts a Sound node |
 | `STOP(node)` | stops a Sound node |
