@@ -184,13 +184,14 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
         }
         for id in tree.walk() {
             let n = &tree.nodes[id];
-            if n.kind == NodeKind::Body3D {
+            if matches!(n.kind, NodeKind::Body3D | NodeKind::Collider3D) {
+                let color = if n.kind == NodeKind::Collider3D { [0.95, 0.75, 0.3, 0.8] } else { [0.3, 0.9, 0.5, 0.7] };
                 let size = if matches!(n.text("shape"), "sphere" | "ball") {
                     Vec3::splat(n.num("radius", 0.5) as f32 * 2.0)
                 } else {
                     Vec3::new(n.num("width", 1.0) as f32, n.num("height", 1.0) as f32, n.num("depth", 1.0) as f32)
                 };
-                box_lines(&mut o, tree.global_matrix(id) * Mat4::from_scale(size), [0.3, 0.9, 0.5, 0.7]);
+                box_lines(&mut o, tree.global_matrix(id) * Mat4::from_scale(size), color);
             }
         }
         if let Some(sel) = st.selected.filter(|s| tree.contains(*s)) {

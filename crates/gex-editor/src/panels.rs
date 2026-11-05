@@ -31,6 +31,7 @@ pub fn kind_icon(k: NodeKind) -> &'static str {
         NodeKind::ProgressBar => "📊",
         NodeKind::Image => "🖼",
         NodeKind::Body3D => "🔲",
+        NodeKind::Collider3D => "⬜",
         NodeKind::Environment => "⛅",
     }
 }

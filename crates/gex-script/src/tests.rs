@@ -677,3 +677,35 @@ fn tasks_wait_in_game_time() {
     assert_eq!(errs.len(), 1, "{:?}", errs);
     assert!(errs[0].contains("START"), "{}", errs[0]);
 }
+
+#[test]
+fn collision_layers_and_3d_areas() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node3D), children: [
+        (name: "Floor", kind: Some(Body3D), props: {"body": Text("static"), "width": Num(20.0), "height": Num(1.0), "depth": Num(20.0)}),
+        (name: "Ghost", kind: Some(Body3D), transform: Some((position: (0.0, 3.0, 0.0))), props: {"layer": Text("ghosts"), "mask": Text("ghosts")}),
+        (name: "Crate", kind: Some(Body3D), transform: Some((position: (3.0, 3.0, 0.0)))),
+        (name: "Zone", kind: Some(Collider3D), transform: Some((position: (3.0, 0.9, 0.0))), props: {"width": Num(2.0), "height": Num(0.5), "depth": Num(2.0)}, scripts: ["res://zone.jlb"]),
+        (name: "Picky", kind: Some(Collider3D), transform: Some((position: (3.0, 0.9, 0.0))), props: {"shape": Text("sphere"), "radius": Num(1.0), "mask": Text("ghosts")}, scripts: ["res://picky.jlb"]),
+    ]))"#;
+    let zone = "DEF on_collide_start(other) {\n\tPRINT(\"zone \" + NAME_OF(other))\n}\n";
+    let picky = "DEF on_collide_start(other) {\n\tPRINT(\"picky \" + NAME_OF(other))\n}\n";
+    let p = project("layers", &[("main.jscene", scene), ("zone.jlb", zone), ("picky.jlb", picky)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..180 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let t = g.tree();
+    let y = |n: &str| t.nodes[t.find_path(None, &format!("Root/{}", n)).unwrap()].transform.position.y;
+    assert!(y("Ghost") < -5.0, "the ghost falls through the floor: {}", y("Ghost"));
+    assert!((y("Crate") - 1.0).abs() < 0.1, "the crate lands: {}", y("Crate"));
+    drop(t);
+    let logs: Vec<String> = g.take_logs().into_iter().map(|l| l.text).collect();
+    assert!(logs.contains(&"zone Crate".to_string()), "{:?}", logs);
+    assert!(!logs.iter().any(|l| l.starts_with("picky")), "Picky only notices ghosts: {:?}", logs);
+    // Raycasts can be limited to layers.
+    let st = g.st.borrow();
+    let all = st.physics.raycast_3d(glam::Vec3::new(3.0, 10.0, 0.0), glam::Vec3::NEG_Y, 100.0, None, u32::MAX).unwrap();
+    assert_eq!(st.tree.nodes[all.node].name, "Crate");
+    let ghosts = st.physics.layers.bits("ghosts", 0);
+    assert!(st.physics.raycast_3d(glam::Vec3::new(3.0, 10.0, 0.0), glam::Vec3::NEG_Y, 100.0, None, ghosts).is_none());
+}

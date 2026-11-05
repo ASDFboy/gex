@@ -12,6 +12,74 @@ use gex_core::{NodeId, NodeKind, SceneTree, Variant};
 
 pub const PIXELS_PER_METRE: f32 = 50.0;
 
+/// Collision layers by name. A node's `layer` names what it is ("player", "enemies"; empty
+/// means "default"), and its `mask` what it bumps into (empty means everything). Names get a
+/// bit each the first time they're seen (up to 32).
+#[derive(Debug)]
+pub struct Layers {
+    names: std::cell::RefCell<Vec<String>>,
+}
+
+impl Default for Layers {
+    fn default() -> Self {
+        Layers { names: std::cell::RefCell::new(vec!["default".to_string()]) }
+    }
+}
+
+impl Layers {
+    fn bit(&self, name: &str) -> u32 {
+        let mut names = self.names.borrow_mut();
+        let i = match names.iter().position(|n| n == name) {
+            Some(i) => i,
+            None if names.len() < 32 => {
+                names.push(name.to_string());
+                names.len() - 1
+            }
+            None => 31,
+        };
+        1 << i
+    }
+
+    /// The bits for a list like "player, enemies". Empty: `empty`. "all" / "none" work too.
+    pub fn bits(&self, spec: &str, empty: u32) -> u32 {
+        let mut out = 0;
+        let mut any = false;
+        for part in spec.split([',', ' ', ';']).map(|p| p.trim().to_lowercase()).filter(|p| !p.is_empty()) {
+            any = true;
+            match part.as_str() {
+                "all" | "everything" => out |= u32::MAX,
+                "none" | "nothing" => {}
+                p => out |= self.bit(p),
+            }
+        }
+        if any {
+            out
+        } else {
+            empty
+        }
+    }
+
+    /// A node's (what it is, what it collides with).
+    pub fn of(&self, tree: &SceneTree, id: NodeId) -> (u32, u32) {
+        let n = &tree.nodes[id];
+        (self.bits(n.text("layer"), 1), self.bits(n.text("mask"), u32::MAX))
+    }
+
+    /// Whether two (layer, mask) pairs touch: each has to be in the other's mask.
+    pub fn meet(a: (u32, u32), b: (u32, u32)) -> bool {
+        a.0 & b.1 != 0 && b.0 & a.1 != 0
+    }
+}
+
+fn groups2(g: (u32, u32)) -> rapier2d::prelude::InteractionGroups {
+    use rapier2d::prelude::*;
+    InteractionGroups::new(Group::from_bits_retain(g.0), Group::from_bits_retain(g.1), InteractionTestMode::And)
+}
+fn groups3(g: (u32, u32)) -> rapier3d::prelude::InteractionGroups {
+    use rapier3d::prelude::*;
+    InteractionGroups::new(Group::from_bits_retain(g.0), Group::from_bits_retain(g.1), InteractionTestMode::And)
+}
+
 /// A static shape that isn't a node of its own (tilemap tiles): world-space 2D box.
 #[derive(Clone, Copy, Debug)]
 pub struct StaticBox2 {
@@ -38,7 +106,7 @@ fn num(tree: &SceneTree, id: NodeId, k: &str, d: f64) -> f32 {
 fn shape_key(tree: &SceneTree, id: NodeId, scale: Vec3) -> String {
     let n = &tree.nodes[id];
     let mut s = format!("{:?}", scale);
-    for k in ["body", "shape", "width", "height", "depth", "radius", "gravity_scale", "friction", "bounce", "density", "fixed_rotation"] {
+    for k in ["body", "shape", "width", "height", "depth", "radius", "gravity_scale", "friction", "bounce", "density", "fixed_rotation", "layer", "mask"] {
         s.push_str(&format!("|{:?}", n.props.get(k)));
     }
     s
@@ -91,7 +159,7 @@ impl World2 {
         World2 { world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
     }
 
-    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String) {
+    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers) {
         let n = &tree.nodes[id];
         let (pos, angle, scale) = pose2(tree, id);
         let p = pos / PIXELS_PER_METRE;
@@ -117,6 +185,7 @@ impl World2 {
             "capsule" => d2::ColliderBuilder::capsule_y((h / 2.0 - r).max(0.001), r),
             _ => d2::ColliderBuilder::cuboid(w / 2.0, h / 2.0),
         }
+        .collision_groups(groups2(layers.of(tree, id)))
         .friction(num(tree, id, "friction", 0.5))
         .restitution(num(tree, id, "bounce", 0.0))
         .density(num(tree, id, "density", 1.0).max(0.001));
@@ -145,6 +214,7 @@ impl World2 {
         for b in boxes {
             let c = d2::ColliderBuilder::cuboid(b.half.x / PIXELS_PER_METRE, b.half.y / PIXELS_PER_METRE)
                 .translation(d2::Vector::new(b.center.x, b.center.y) / PIXELS_PER_METRE)
+                .collision_groups(groups2((1, u32::MAX)))
                 .friction(0.5);
             let h = self.world.insert_collider(c, None);
             self.owners.insert(h, b.owner);
@@ -153,7 +223,7 @@ impl World2 {
     }
 
     /// Makes the physics match the tree.
-    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId]) {
+    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers) {
         let alive: HashSet<NodeId> = ids.iter().copied().collect();
         let gone: Vec<NodeId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
         for g in gone {
@@ -166,7 +236,7 @@ impl World2 {
                 self.remove(id);
             }
             let Some(e) = self.bodies.get_mut(&id) else {
-                self.build(tree, id, key);
+                self.build(tree, id, key, layers);
                 continue;
             };
             let b = &mut self.world.bodies[e.body];
@@ -261,9 +331,9 @@ impl World2 {
     /// and whether it ended up on the floor.
     fn move_body(&mut self, id: NodeId, delta: Vec2) -> Option<(Vec2, bool)> {
         let e = self.bodies.get_mut(&id)?;
-        let filter = d2::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors();
-        let qp = self.world.query_pipeline_with_filter(filter);
         let col = self.world.colliders.get(e.collider)?;
+        let filter = d2::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors().groups(col.collision_groups());
+        let qp = self.world.query_pipeline_with_filter(filter);
         let pose = *self.world.bodies[e.body].position();
         let d = d2::Vector::new(delta.x, delta.y) / PIXELS_PER_METRE;
         let m = self.controller.move_shape(1.0 / 60.0, &qp, col.shape(), &pose, d, |_| {});
@@ -288,13 +358,13 @@ impl World2 {
         }
     }
 
-    fn raycast(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<NodeId>) -> Option<RayHit> {
+    fn raycast(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
         let dir = dir.normalize_or_zero();
         if dir == Vec2::ZERO {
             return None;
         }
         let ray = d2::Ray::new(d2::Vector::new(from.x, from.y) / PIXELS_PER_METRE, d2::Vector::new(dir.x, dir.y));
-        let mut filter = d2::QueryFilter::default().exclude_sensors();
+        let mut filter = d2::QueryFilter::default().exclude_sensors().groups(groups2((u32::MAX, mask)));
         if let Some(e) = ignore.and_then(|i| self.bodies.get(&i)) {
             filter = filter.exclude_rigid_body(e.body);
         }
@@ -358,7 +428,7 @@ impl World3 {
         World3 { world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
     }
 
-    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String) {
+    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers) {
         let n = &tree.nodes[id];
         let (pos, rot, scale) = pose3(tree, id);
         let builder = match n.text("body") {
@@ -382,6 +452,7 @@ impl World3 {
             "capsule" => d3::ColliderBuilder::capsule_y((half.y - r).max(0.001), r),
             _ => d3::ColliderBuilder::cuboid(half.x, half.y, half.z),
         }
+        .collision_groups(groups3(layers.of(tree, id)))
         .friction(num(tree, id, "friction", 0.5))
         .restitution(num(tree, id, "bounce", 0.0))
         .density(num(tree, id, "density", 1.0).max(0.001));
@@ -408,21 +479,21 @@ impl World3 {
             self.world.remove_collider(c);
         }
         for b in boxes {
-            let c = d3::ColliderBuilder::cuboid(b.half.x, b.half.y, b.half.z).translation(b.center);
+            let c = d3::ColliderBuilder::cuboid(b.half.x, b.half.y, b.half.z).translation(b.center).collision_groups(groups3((1, u32::MAX)));
             let h = self.world.insert_collider(c, None);
             self.owners.insert(h, b.owner);
             self.statics.push(h);
         }
         for (owner, v, i) in meshes {
             if let Ok(c) = d3::ColliderBuilder::trimesh(v.to_vec(), i.to_vec()) {
-                let h = self.world.insert_collider(c, None);
+                let h = self.world.insert_collider(c.collision_groups(groups3((1, u32::MAX))), None);
                 self.owners.insert(h, *owner);
                 self.statics.push(h);
             }
         }
     }
 
-    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId]) {
+    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers) {
         let alive: HashSet<NodeId> = ids.iter().copied().collect();
         let gone: Vec<NodeId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
         for g in gone {
@@ -435,7 +506,7 @@ impl World3 {
                 self.remove(id);
             }
             let Some(e) = self.bodies.get_mut(&id) else {
-                self.build(tree, id, key);
+                self.build(tree, id, key, layers);
                 continue;
             };
             let b = &mut self.world.bodies[e.body];
@@ -527,9 +598,9 @@ impl World3 {
 
     fn move_body(&mut self, id: NodeId, delta: Vec3) -> Option<(Vec3, bool)> {
         let e = self.bodies.get_mut(&id)?;
-        let filter = d3::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors();
-        let qp = self.world.query_pipeline_with_filter(filter);
         let col = self.world.colliders.get(e.collider)?;
+        let filter = d3::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors().groups(col.collision_groups());
+        let qp = self.world.query_pipeline_with_filter(filter);
         let pose = *self.world.bodies[e.body].position();
         let m = self.controller.move_shape(1.0 / 60.0, &qp, col.shape(), &pose, delta, |_| {});
         let new_t = pose.translation + m.translation;
@@ -552,13 +623,13 @@ impl World3 {
         }
     }
 
-    fn raycast(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<NodeId>) -> Option<RayHit> {
+    fn raycast(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
         let dir = dir.normalize_or_zero();
         if dir == Vec3::ZERO {
             return None;
         }
         let ray = d3::Ray::new(from, dir);
-        let mut filter = d3::QueryFilter::default().exclude_sensors();
+        let mut filter = d3::QueryFilter::default().exclude_sensors().groups(groups3((u32::MAX, mask)));
         if let Some(e) = ignore.and_then(|i| self.bodies.get(&i)) {
             filter = filter.exclude_rigid_body(e.body);
         }
@@ -579,6 +650,7 @@ pub struct Physics {
     pub statics_2d: Vec<StaticBox2>,
     pub statics_3d: Vec<StaticBox3>,
     pub meshes_3d: Vec<StaticMesh>,
+    pub layers: Layers,
 }
 
 impl Physics {
@@ -601,13 +673,13 @@ impl Physics {
             let g = self.gravity_2d;
             let w = self.w2.get_or_insert_with(|| World2::new(g));
             w.set_statics(&self.statics_2d);
-            w.sync(tree, &b2);
+            w.sync(tree, &b2, &self.layers);
         }
         if !b3.is_empty() || !self.statics_3d.is_empty() || !self.meshes_3d.is_empty() || self.w3.is_some() {
             let g = self.gravity_3d;
             let w = self.w3.get_or_insert_with(|| World3::new(g));
             w.set_statics(&self.statics_3d, &self.meshes_3d);
-            w.sync(tree, &b3);
+            w.sync(tree, &b3, &self.layers);
         }
     }
 
@@ -682,11 +754,11 @@ impl Physics {
         }
     }
 
-    pub fn raycast_2d(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<NodeId>) -> Option<RayHit> {
-        self.w2.as_ref()?.raycast(from, dir, max, ignore)
+    pub fn raycast_2d(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
+        self.w2.as_ref()?.raycast(from, dir, max, ignore, mask)
     }
 
-    pub fn raycast_3d(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<NodeId>) -> Option<RayHit> {
-        self.w3.as_ref()?.raycast(from, dir, max, ignore)
+    pub fn raycast_3d(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
+        self.w3.as_ref()?.raycast(from, dir, max, ignore, mask)
     }
 }

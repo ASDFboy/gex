@@ -36,8 +36,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("COLLIDING", "(node)", "the nodes touching this one now, as a table of ids"),
     ("MOVE", "(node, dx, dy, dz)", "moves a body, sliding along walls; gives TRUE when it's on the floor after"),
     ("IMPULSE", "(node, x, y, z)", "adds to a dynamic body's velocity at once (a kick or a jump), whatever its mass"),
-    ("RAYCAST", "(x, y, dx, dy, length, ignore)", "the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL"),
-    ("RAYCAST_3D", "(x, y, z, dx, dy, dz, length, ignore)", "the same in 3D"),
+    ("RAYCAST", "(x, y, dx, dy, length, ignore, layers)", "the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL; layers (like \"world, enemies\") limits what it can hit"),
+    ("RAYCAST_3D", "(x, y, z, dx, dy, dz, length, ignore, layers)", "the same in 3D"),
     ("DISTANCE", "(a, b)", "how far apart two nodes are"),
     ("PLAY_SOUND", "(file, volume, pitch)", "plays a sound file once (res:// or hl2://...); gives its id"),
     ("STOP_SOUND", "(id)", "stops a sound from PLAY_SOUND (NULL stops every sound)"),
@@ -457,10 +457,14 @@ impl Host for EngineHost {
                     None | Some(Value::Null) => None,
                     v => Some(target(st, v)?),
                 };
+                let mask = match a.get(ign_i + 1) {
+                    Some(Value::Text(t)) => st.physics.layers.bits(t, u32::MAX),
+                    _ => u32::MAX,
+                };
                 let hit = if three {
-                    st.physics.raycast_3d(glam::Vec3::new(n(0), n(1), n(2)), glam::Vec3::new(n(3), n(4), n(5)), max, ignore)
+                    st.physics.raycast_3d(glam::Vec3::new(n(0), n(1), n(2)), glam::Vec3::new(n(3), n(4), n(5)), max, ignore, mask)
                 } else {
-                    st.physics.raycast_2d(glam::Vec2::new(n(0), n(1)), glam::Vec2::new(n(2), n(3)), max, ignore)
+                    st.physics.raycast_2d(glam::Vec2::new(n(0), n(1)), glam::Vec2::new(n(2), n(3)), max, ignore, mask)
                 };
                 Ok(match hit {
                     None => Value::Null,

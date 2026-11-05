@@ -118,8 +118,8 @@ The script editor completes these as you type and shows each one's inputs.
 | `COLLIDING(node)` | the nodes touching this one now, as a table of ids |
 | `MOVE(node, dx, dy, dz)` | moves a body, sliding along walls; gives TRUE when it's on the floor after |
 | `IMPULSE(node, x, y, z)` | adds to a dynamic body's velocity at once (a kick or a jump), whatever its mass |
-| `RAYCAST(x, y, dx, dy, length, ignore)` | the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL |
-| `RAYCAST_3D(x, y, z, dx, dy, dz, length, ignore)` | the same in 3D |
+| `RAYCAST(x, y, dx, dy, length, ignore, layers)` | the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL; layers (like "world, enemies") limits what it can hit |
+| `RAYCAST_3D(x, y, z, dx, dy, dz, length, ignore, layers)` | the same in 3D |
 | `DISTANCE(a, b)` | how far apart two nodes are |
 | `FIND_PATH(tilemap, x1, y1, x2, y2)` | a walkable path through a TileMap2D: a table of [x:, y:] points, or NULL |
 

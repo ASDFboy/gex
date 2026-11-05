@@ -47,6 +47,8 @@ pub enum NodeKind {
     Light3D,
     /// A 3D physics body (box, sphere or capsule).
     Body3D,
+    /// A 3D area (box or sphere) that reports what enters it (on_collide events): triggers, pickups.
+    Collider3D,
     /// Sky, ambient light and fog for 3D scenes (the first one in the tree is used).
     Environment,
 }
@@ -73,6 +75,7 @@ pub const ALL_KINDS: &[NodeKind] = &[
     NodeKind::Camera3D,
     NodeKind::Light3D,
     NodeKind::Body3D,
+    NodeKind::Collider3D,
     NodeKind::Environment,
 ];
 
@@ -100,6 +103,7 @@ impl NodeKind {
             NodeKind::Camera3D => "Camera3D",
             NodeKind::Light3D => "Light3D",
             NodeKind::Body3D => "Body3D",
+            NodeKind::Collider3D => "Collider3D",
             NodeKind::Environment => "Environment",
         }
     }
@@ -113,7 +117,7 @@ impl NodeKind {
         matches!(self, NodeKind::Panel | NodeKind::Button | NodeKind::Label | NodeKind::TextInput | NodeKind::ProgressBar | NodeKind::Image)
     }
     pub fn is_3d(self) -> bool {
-        matches!(self, NodeKind::Node3D | NodeKind::Mesh3D | NodeKind::Camera3D | NodeKind::Light3D | NodeKind::Body3D | NodeKind::Environment)
+        matches!(self, NodeKind::Node3D | NodeKind::Mesh3D | NodeKind::Camera3D | NodeKind::Light3D | NodeKind::Body3D | NodeKind::Collider3D | NodeKind::Environment)
     }
     /// The built-in properties this kind has, with their defaults. Scene files only
     /// store values that differ from these.
@@ -226,7 +230,16 @@ impl NodeKind {
                 ("limit_right", Num(1280.0)),
                 ("limit_bottom", Num(720.0)),
             ],
-            NodeKind::Collider2D => vec![("width", Num(32.0)), ("height", Num(32.0)), ("group", Text(String::new()))],
+            NodeKind::Collider2D => vec![("width", Num(32.0)), ("height", Num(32.0)), ("layer", Text(String::new())), ("mask", Text(String::new()))],
+            NodeKind::Collider3D => vec![
+                ("shape", Text("box".into())),
+                ("width", Num(1.0)),
+                ("height", Num(1.0)),
+                ("depth", Num(1.0)),
+                ("radius", Num(0.5)),
+                ("layer", Text(String::new())),
+                ("mask", Text(String::new())),
+            ],
             NodeKind::Mesh3D => vec![
                 ("mesh", Text("cube".into())),
                 ("color", Color([0.8, 0.8, 0.8, 1.0])),
@@ -284,6 +297,8 @@ impl NodeKind {
                 ("vx", Num(0.0)),
                 ("vy", Num(0.0)),
                 ("on_floor", Bool(false)),
+                ("layer", Text(String::new())),
+                ("mask", Text(String::new())),
             ],
             NodeKind::Body3D => vec![
                 ("body", Text("dynamic".into())),
@@ -301,6 +316,8 @@ impl NodeKind {
                 ("vy", Num(0.0)),
                 ("vz", Num(0.0)),
                 ("on_floor", Bool(false)),
+                ("layer", Text(String::new())),
+                ("mask", Text(String::new())),
             ],
             _ => vec![],
         }

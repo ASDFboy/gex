@@ -23,7 +23,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | `Sprite2D` | a picture or a colored rectangle | `texture`, `width`, `height`, `color` (tint), `layer` (higher draws on top), `flip_h`, `flip_v` |
 | `Label2D` | text in the world (moves with the camera) | `text`, `size`, `color` |
 | `Camera2D` | what the game shows; follows its parent | `zoom`, `current`, `smoothing` (0 = locked on, higher = catches up faster), `limits` with `limit_left/top/right/bottom` (the view stays inside) |
-| `Collider2D` | an area that reports overlaps (pickups, triggers) | `width`, `height` |
+| `Collider2D` | an area that reports overlaps (pickups, triggers) with other colliders and bodies | `width`, `height`, `layer`, `mask` |
 | `Body2D` | a physics object | `body` (dynamic / kinematic / static), `shape` (box / circle), `width`, `height`, `radius`, `friction`, `bounce`, `density`, `gravity_scale`, `fixed_rotation`; live: `vx`, `vy`, `on_floor` |
 | `TileMap2D` | a grid of tiles from one tileset picture | `tileset`, `tile_width`, `tile_height`, `solid`, `solid_tiles` |
 | `Particles2D` | sparks, smoke, dust, trails | `emitting`, `rate` (per second), `lifetime`, `direction` (degrees, -90 = up), `spread`, `speed`, `speed_random`, `gravity`, `size` → `size_end`, `color` → `color_end`, `spin`, `area` (radius they start in), `texture` (a soft dot if empty) |
@@ -67,10 +67,24 @@ window changes size.
 | `Camera3D` | what the game shows | `fov`, `near`, `far`, `current` |
 | `Light3D` | a light | `type` (directional / point / spot), `color`, `energy`, `range`, `angle`, `shadows` (the first directional light casts shadows) |
 | `Body3D` | a physics object | like Body2D, plus `depth`, `vz`; `shape` box / sphere / capsule |
+| `Collider3D` | a 3D area that reports what enters it (triggers, pickups, damage zones) | `shape` (box / sphere), `width`, `height`, `depth`, `radius`, `layer`, `mask` |
 | `Environment` | the sky, ambient light and fog | `sky_top`, `sky_horizon`, `ground`, `sky_texture` (a panorama), `ambient`, `ambient_energy`, `fog_color`, `fog_start`, `fog_end` |
 
 Drag a model, picture or sound from the Assets panel into the scene view to make the right node
 for it.
+
+## Collision layers
+
+Bodies and colliders have `layer` (what they are) and `mask` (what they bump into or notice),
+both as names: `layer` = `player`, `mask` = `world, enemies`. An empty `layer` is `default`
+(which is also what tilemaps and level geometry are), and an empty `mask` means everything. Two
+things touch only when each is in the other's mask. Some uses:
+
+- enemies that walk through each other: their `layer` = `enemies`, `mask` = `default, player`;
+- a ghost that floats through walls: `mask` = `player`;
+- a pickup that only the player can take: the Collider2D's `mask` = `player`.
+
+`RAYCAST` and `RAYCAST_3D` take the same kind of list as a last input to choose what a ray can hit.
 
 ## Scenes inside scenes
 

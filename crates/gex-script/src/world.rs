@@ -1044,15 +1044,7 @@ impl Game {
         let (now, before) = {
             let st = self.st.borrow();
             let tree = &st.tree;
-            let mut boxes: Vec<(NodeId, [f32; 4])> = Vec::new();
-            for id in tree.walk() {
-                let n = &tree.nodes[id];
-                if n.kind != NodeKind::Collider2D || !tree.visible_in_tree(id) {
-                    continue;
-                }
-                let owner = if self.scripts.contains_key(&id) || n.parent.is_none() { id } else { n.parent.unwrap() };
-                boxes.push((owner, aabb(tree, id)));
-            }
+            let areas = collect_areas(tree, &st.physics.layers, |id| self.scripts.contains_key(&id));
             let mut now = HashSet::new();
             // Physics bodies touching each other, reported for their owners.
             let owner_of = |id: NodeId| -> NodeId {
@@ -1071,13 +1063,12 @@ impl Game {
                     now.insert((b, a));
                 }
             }
-            for i in 0..boxes.len() {
-                for j in i + 1..boxes.len() {
-                    let (a, ra) = boxes[i];
-                    let (b, rb) = boxes[j];
-                    if a != b && ra[0] < rb[2] && rb[0] < ra[2] && ra[1] < rb[3] && rb[1] < ra[3] {
-                        now.insert((a, b));
-                        now.insert((b, a));
+            for i in 0..areas.len() {
+                for j in i + 1..areas.len() {
+                    let (a, b) = (&areas[i], &areas[j]);
+                    if a.owner != b.owner && !(a.body && b.body) && crate::physics::Layers::meet(a.groups, b.groups) && a.shape.overlaps(&b.shape) {
+                        now.insert((a.owner, b.owner));
+                        now.insert((b.owner, a.owner));
                     }
                 }
             }
@@ -1141,6 +1132,80 @@ impl Game {
 }
 
 /// A collider's box in world space: [left, top, right, bottom].
+/// Something that reports touches without being a physics body (Collider2D / Collider3D), or a
+/// body seen as an area so colliders notice it.
+struct Area {
+    owner: NodeId,
+    body: bool,
+    groups: (u32, u32),
+    shape: AreaShape,
+}
+
+enum AreaShape {
+    Rect([f32; 4]),
+    Box(glam::Vec3, glam::Vec3),
+    Ball(glam::Vec3, f32),
+}
+
+impl AreaShape {
+    fn overlaps(&self, o: &AreaShape) -> bool {
+        use AreaShape::*;
+        let box_ball = |lo: glam::Vec3, hi: glam::Vec3, c: glam::Vec3, r: f32| c.clamp(lo, hi).distance_squared(c) < r * r;
+        match (self, o) {
+            (Rect(a), Rect(b)) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3],
+            (Box(al, ah), Box(bl, bh)) => al.cmplt(*bh).all() && bl.cmplt(*ah).all(),
+            (Ball(a, ra), Ball(b, rb)) => a.distance(*b) < ra + rb,
+            (Box(l, h), Ball(c, r)) | (Ball(c, r), Box(l, h)) => box_ball(*l, *h, *c, *r),
+            _ => false,
+        }
+    }
+}
+
+fn collect_areas(tree: &SceneTree, layers: &crate::physics::Layers, has_scripts: impl Fn(NodeId) -> bool) -> Vec<Area> {
+    let mut out = Vec::new();
+    for id in tree.walk() {
+        let n = &tree.nodes[id];
+        if !matches!(n.kind, NodeKind::Collider2D | NodeKind::Collider3D | NodeKind::Body2D | NodeKind::Body3D) || !tree.visible_in_tree(id) {
+            continue;
+        }
+        let body = matches!(n.kind, NodeKind::Body2D | NodeKind::Body3D);
+        // A collider speaks for its parent, unless it has scripts itself.
+        let owner = if body || has_scripts(id) || n.parent.is_none() { id } else { n.parent.unwrap() };
+        let groups = layers.of(tree, id);
+        let shape = match n.kind {
+            NodeKind::Collider2D => AreaShape::Rect(aabb(tree, id)),
+            NodeKind::Body2D => {
+                let mut r = aabb(tree, id);
+                if matches!(n.text("shape"), "circle" | "ball") {
+                    let c = tree.global_matrix(id).w_axis;
+                    let rad = n.num("radius", 16.0) as f32;
+                    r = [c.x - rad, c.y - rad, c.x + rad, c.y + rad];
+                }
+                AreaShape::Rect(r)
+            }
+            _ => {
+                let m = tree.global_matrix(id);
+                let (scale, _, pos) = m.to_scale_rotation_translation();
+                if matches!(n.text("shape"), "sphere" | "ball") {
+                    AreaShape::Ball(pos, n.num("radius", 0.5) as f32 * scale.abs().max_element())
+                } else {
+                    let half = glam::Vec3::new(n.num("width", 1.0) as f32, n.num("height", 1.0) as f32, n.num("depth", 1.0) as f32) / 2.0;
+                    let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+                    for k in 0..8 {
+                        let c = glam::Vec3::new(if k & 1 == 0 { -half.x } else { half.x }, if k & 2 == 0 { -half.y } else { half.y }, if k & 4 == 0 { -half.z } else { half.z });
+                        let p = m.transform_point3(c);
+                        lo = lo.min(p);
+                        hi = hi.max(p);
+                    }
+                    AreaShape::Box(lo, hi)
+                }
+            }
+        };
+        out.push(Area { owner, body, groups, shape });
+    }
+    out
+}
+
 pub fn aabb(tree: &SceneTree, id: NodeId) -> [f32; 4] {
     let n = &tree.nodes[id];
     let m = tree.global_matrix(id);
