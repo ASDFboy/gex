@@ -354,6 +354,63 @@ impl Game {
                 look.props.insert("mesh".into(), Variant::Text(format!("{}://{}", scheme, file.to_ascii_lowercase())));
                 st.tree.add(Some(b), look);
             }
+            // Doors and other moving brushes become nodes of their own (USE_DOOR opens them),
+            // and the map itself is drawn without them.
+            let base = gex_assets::model::map_base(&mesh).to_string();
+            for e in &model.entities {
+                let get = |k: &str| e.iter().find(|(a, _)| a.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str()).unwrap_or("");
+                let class = get("classname").to_ascii_lowercase();
+                let brush = gex_assets::model::MOVERS.contains(&class.as_str());
+                if !brush && class != "prop_door_rotating" {
+                    continue;
+                }
+                let name = match get("targetname") {
+                    "" => class.clone(),
+                    n => n.to_string(),
+                };
+                let mut door = gex_core::Node::new(name, NodeKind::Mesh3D);
+                let place = gex_assets::model::entity_transform(e);
+                let (_, r, t) = place.to_scale_rotation_translation();
+                let (y, x, z) = r.to_euler(glam::EulerRot::YXZ);
+                door.transform.position = t;
+                if !brush {
+                    door.transform.rotation = glam::Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+                }
+                let model_path = if brush {
+                    format!("{}{}", base, get("model").replace('*', "#*"))
+                } else {
+                    format!("{}://{}", scheme, get("model").replace('\\', "/").to_ascii_lowercase())
+                };
+                door.props.insert("mesh".into(), Variant::Text(model_path.clone()));
+                door.props.insert("collision".into(), Variant::Bool(true));
+                door.props.insert("door".into(), Variant::Text(class.clone()));
+                door.props.insert("door_open".into(), Variant::Bool(false));
+                let num = |k: &str, d: f64| get(k).trim().parse::<f64>().unwrap_or(d);
+                if class == "func_door" || class == "func_movelinear" || class == "func_button" {
+                    // Slides along movedir by its own size, less the lip.
+                    let a: Vec<f32> = get("movedir").split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                    let (pitch, yaw) = (a.first().copied().unwrap_or(0.0).to_radians(), a.get(1).copied().unwrap_or(0.0).to_radians());
+                    let d = glam::Vec3::new(yaw.cos() * pitch.cos(), -pitch.sin(), -(yaw.sin() * pitch.cos()));
+                    let size = gex_assets::model::cached(&st.vfs, &model_path).map(|m| m.max - m.min).unwrap_or(glam::Vec3::ONE);
+                    let travel = if class == "func_door" || class == "func_button" {
+                        (d.abs().dot(size) - num("lip", 0.0) as f32 * 0.0254).max(0.0)
+                    } else {
+                        num("movedistance", 100.0) as f32 * 0.0254
+                    };
+                    let m = d * travel;
+                    door.props.insert("door_move_x".into(), Variant::Num(m.x as f64));
+                    door.props.insert("door_move_y".into(), Variant::Num(m.y as f64));
+                    door.props.insert("door_move_z".into(), Variant::Num(m.z as f64));
+                    door.props.insert("door_time".into(), Variant::Num((travel as f64 / (num("speed", 100.0).max(1.0) * 0.0254)).clamp(0.1, 20.0)));
+                } else {
+                    let turn = num("distance", 90.0);
+                    door.props.insert("door_turn".into(), Variant::Num(turn));
+                    door.props.insert("door_time".into(), Variant::Num((turn.abs() / num("speed", 100.0).max(1.0)).clamp(0.1, 20.0)));
+                }
+                door.groups.push("map_doors".into());
+                st.tree.add(Some(map), door);
+            }
+            st.tree.nodes[map].props.insert("mesh".into(), Variant::Text(format!("{}?static", base)));
         }
     }
 

@@ -47,7 +47,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
     ("BURST", "(node, count)", "a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff)"),
     ("RAGDOLL", "(node, vx, vy, vz)", "a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it"),
-    ("MAP_ENTITIES", "(map, classname)", "the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:] (keys holds every setting as written); classname picks one kind, \"info_player*\" any that start so"),
+    ("USE_DOOR", "(door, open)", "opens or closes one of a map's doors (in the group map_doors); with no second input, toggles it"),
+    ("MAP_ENTITIES", "(map, classname)", "the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:, bounds:] (keys holds every setting as written; bounds is a brush entity's box, like a ladder's); classname picks one kind, \"info_player*\" any that start so"),
     ("ANIMATE", "(node, name, restart)", "plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE"),
     ("ANIMATIONS", "(node)", "the names of a Mesh3D model's animations"),
     ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
@@ -551,10 +552,50 @@ impl Host for EngineHost {
                 st.physics.ragdoll(&st.tree, id, &joints, &parents, &ibs, v);
                 Ok(Value::Null)
             }
+            "USE_DOOR" => {
+                let id = target(st, a.first())?;
+                let n = &st.tree.nodes[id];
+                if n.text("door").is_empty() {
+                    return err(format!("{} isn't one of a map's doors", n.name));
+                }
+                let open_now = n.prop("door_open").is_some_and(|v| v.as_bool());
+                let want = match a.get(1) {
+                    Some(Value::Bool(b)) => *b,
+                    _ => !open_now,
+                };
+                if want == open_now {
+                    return Ok(Value::Null);
+                }
+                let time = n.num("door_time", 1.0);
+                // Remember where it started, the first time.
+                let n = &mut st.tree.nodes[id];
+                if n.prop("door_home_x").is_none() {
+                    let t = n.transform;
+                    for (k, v) in [("door_home_x", t.position.x), ("door_home_y", t.position.y), ("door_home_z", t.position.z), ("door_home_ry", t.rotation.y)] {
+                        n.props.insert(k.into(), gex_core::Variant::Num(v as f64));
+                    }
+                }
+                n.props.insert("door_open".into(), gex_core::Variant::Bool(want));
+                let k = if want { 1.0 } else { 0.0 };
+                let mut go: Vec<(&str, f64)> = Vec::new();
+                if n.prop("door_turn").is_some() {
+                    go.push(("rotation_y", n.num("door_home_ry", 0.0) + n.num("door_turn", 90.0) * k));
+                } else {
+                    for (axis, key) in [("x", "door_move_x"), ("y", "door_move_y"), ("z", "door_move_z")] {
+                        go.push((axis, n.num(&format!("door_home_{}", axis), 0.0) + n.num(key, 0.0) * k));
+                    }
+                }
+                for (prop, to) in go {
+                    let from = crate::tween::read(&st.tree, id, prop).unwrap_or(crate::tween::Val::Num(0.0));
+                    st.tweens.retain(|t| !(t.node == id && t.prop == prop));
+                    st.tweens.push(crate::tween::Tween { node: id, prop: prop.to_string(), from, to: crate::tween::Val::Num(to), time: 0.0, length: time, ease: "in_out".into() });
+                }
+                Ok(Value::Null)
+            }
             "MAP_ENTITIES" => {
                 let id = target(st, a.first())?;
                 let mesh = st.tree.nodes[id].text("mesh").to_string();
-                if !mesh.to_ascii_lowercase().ends_with(".bsp") {
+                if !gex_assets::model::map_base(&mesh).to_ascii_lowercase().ends_with(".bsp") {
                     return err(format!("{} doesn't show a map (.bsp)", st.tree.nodes[id].name));
                 }
                 let want = match a.get(1) {
@@ -578,6 +619,17 @@ impl Host for EngineHost {
                     let (_, r, t) = m.to_scale_rotation_translation();
                     let yaw = r.to_euler(glam::EulerRot::YXZ).0.to_degrees();
                     let keys = jlb::embed::named_table(e.iter().map(|(k, v)| (k.as_str(), Value::text(v))).collect());
+                    // Brush entities (ladders, triggers): their box in the world.
+                    let mut bounds = Value::Null;
+                    if let Some(n) = get("model").strip_prefix('*') {
+                        let sub = format!("{}#*{}", gex_assets::model::map_base(&mesh), n);
+                        if let Ok(b) = gex_assets::model::cached(&st.vfs, &sub) {
+                            let o = world * gex_assets::model::entity_transform(e);
+                            let (lo, hi) = (o.transform_point3(b.min), o.transform_point3(b.max));
+                            let (lo, hi) = (lo.min(hi), lo.max(hi));
+                            bounds = jlb::embed::named_table(vec![("min_x", num(lo.x as f64)), ("min_y", num(lo.y as f64)), ("min_z", num(lo.z as f64)), ("max_x", num(hi.x as f64)), ("max_y", num(hi.y as f64)), ("max_z", num(hi.z as f64))]);
+                        }
+                    }
                     out.push(jlb::embed::named_table(vec![
                         ("classname", Value::text(&class)),
                         ("name", Value::text(&get("targetname"))),
@@ -586,6 +638,7 @@ impl Host for EngineHost {
                         ("z", num(t.z as f64)),
                         ("rotation_y", num(yaw as f64)),
                         ("keys", keys),
+                        ("bounds", bounds),
                     ]));
                 }
                 Ok(list_table(out))

@@ -140,7 +140,8 @@ The script editor completes these as you type and shows each one's inputs.
 |---|---|
 | `BURST(node, count)` | a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff) |
 | `RAGDOLL(node, vx, vy, vz)` | a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it |
-| `MAP_ENTITIES(map, classname)` | the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:] (keys holds every setting as written); classname picks one kind, "info_player*" any that start so |
+| `USE_DOOR(door, open)` | opens or closes one of a map's doors (in the group map_doors); with no second input, toggles it |
+| `MAP_ENTITIES(map, classname)` | the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:, bounds:] (keys holds every setting as written; bounds is a brush entity's box, like a ladder's); classname picks one kind, "info_player*" any that start so |
 | `ANIMATE(node, name, restart)` | plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE |
 | `ANIMATIONS(node)` | the names of a Mesh3D model's animations |
 | `TILE(node, col, row)` | a TileMap2D's tile id at a cell (-1 = empty) |

@@ -227,6 +227,30 @@ fn flat_normals(pos: &[Vec3], idx: &[u32]) -> Vec<Vec3> {
 
 static CACHE: OnceLock<Mutex<HashMap<String, Arc<ModelData>>>> = OnceLock::new();
 
+/// A parsed map file and its unpacked lighting, shared by the map and its brush entities.
+struct ParsedMap {
+    bsp: vbsp::Bsp,
+    lighting: Vec<u8>,
+}
+static MAPS: OnceLock<Mutex<HashMap<String, Arc<ParsedMap>>>> = OnceLock::new();
+
+fn parsed_map(vfs: &Vfs, path: &str) -> Result<Arc<ParsedMap>, String> {
+    let maps = MAPS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(m) = maps.lock().unwrap().get(path) {
+        return Ok(m.clone());
+    }
+    let data = vfs.read(path)?;
+    let bsp = vbsp::Bsp::read(&data).map_err(|e| format!("{}: {}", path, e))?;
+    // The baked light: LDR lump 8, or the HDR one (53) when that's all there is.
+    let mut lighting = bsp_lump(&data, 8);
+    if lighting.is_empty() {
+        lighting = bsp_lump(&data, 53);
+    }
+    let m = Arc::new(ParsedMap { bsp, lighting });
+    maps.lock().unwrap().insert(path.to_string(), m.clone());
+    Ok(m)
+}
+
 /// Loads a model once and shares it.
 pub fn cached(vfs: &Vfs, path: &str) -> Result<Arc<ModelData>, String> {
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -243,15 +267,24 @@ pub fn clear_cache() {
     if let Some(c) = CACHE.get() {
         c.lock().unwrap().clear();
     }
+    if let Some(c) = MAPS.get() {
+        c.lock().unwrap().clear();
+    }
+}
+
+/// A map path without its "#*3" (one brush entity) or "?static" (no moving parts) ending.
+pub fn map_base(path: &str) -> &str {
+    let cut = path.find(['#', '?']).unwrap_or(path.len());
+    &path[..cut]
 }
 
 pub fn is_model(path: &str) -> bool {
-    let l = path.to_ascii_lowercase();
+    let l = map_base(path).to_ascii_lowercase();
     [".glb", ".gltf", ".obj", ".mdl", ".bsp"].iter().any(|e| l.ends_with(e))
 }
 
 pub fn load(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
-    let l = path.to_ascii_lowercase();
+    let l = map_base(path).to_ascii_lowercase();
     let m = if l.ends_with(".glb") || l.ends_with(".gltf") {
         load_gltf(vfs, path)
     } else if l.ends_with(".obj") {
@@ -644,9 +677,17 @@ fn pack(sizes: &[(u32, u32)], width: u32) -> (Vec<(u32, u32)>, u32) {
     (spots, (y + row).max(1))
 }
 
-fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
-    let data = vfs.read(path)?;
-    let bsp = vbsp::Bsp::read(&data).map_err(|e| format!("{}: {}", path, e))?;
+/// Brush entities that move (drawn by their own nodes while a game runs).
+pub const MOVERS: &[&str] = &["func_door", "func_door_rotating", "func_movelinear", "func_rotating", "func_tracktrain", "func_physbox", "func_button"];
+
+fn load_bsp(vfs: &Vfs, full: &str) -> Result<ModelData, String> {
+    // "map.bsp#*3": only brush model 3, around its own origin. "map.bsp?static": the map
+    // without its moving parts (a running game makes those separately).
+    let only: Option<usize> = full.split_once("#*").and_then(|(_, n)| n.parse().ok());
+    let static_only = full.ends_with("?static");
+    let path = map_base(full);
+    let parsed = parsed_map(vfs, path)?;
+    let bsp = &parsed.bsp;
     let scheme = path.split_once("://").map(|s| s.0).unwrap_or("res").to_string();
     // Files inside the map's own pak come first (cubemap-patched materials live there).
     let mut read = |p: &str| -> Result<Vec<u8>, String> {
@@ -666,17 +707,15 @@ fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
         if c.starts_with("trigger_") || c == "func_areaportal" || c == "func_occluder" || c == "func_viscluster" {
             continue;
         }
+        if static_only && MOVERS.contains(&c.as_str()) {
+            continue;
+        }
         if let Some(n) = e.iter().find(|(k, _)| k == "model").and_then(|(_, v)| v.strip_prefix('*')).and_then(|n| n.parse::<usize>().ok()) {
             let o = e.iter().find(|(k, _)| k == "origin").and_then(|(_, v)| parse_vec(v)).unwrap_or(Vec3::ZERO);
             sub_origin.insert(n, o);
         }
     }
-    // The baked light: LDR lump 8, or the HDR one (53) when that's all there is.
-    let mut lighting = bsp_lump(&data, 8);
-    if lighting.is_empty() {
-        lighting = bsp_lump(&data, 53);
-    }
-    let lighting = &lighting[..];
+    let lighting = &parsed.lighting[..];
 
     struct FaceGeo {
         name: String,
@@ -690,6 +729,9 @@ fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
     let mut subs: Vec<(usize, Vec3)> = sub_origin.into_iter().collect();
     subs.sort_by_key(|s| s.0);
     models.extend(subs);
+    if let Some(n) = only {
+        models = vec![(n, Vec3::ZERO)];
+    }
     let all_models: Vec<_> = bsp.models().collect();
     for (mi, origin) in models {
         let Some(model) = all_models.get(mi) else { continue };
@@ -840,14 +882,14 @@ fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
     // Props that don't move: static props, and dynamic ones that are only there to look at.
     let mut props: HashMap<String, Option<Arc<ModelData>>> = HashMap::new();
     let mut placed: Vec<(String, Mat4)> = Vec::new();
-    for sp in bsp.static_props() {
+    for sp in bsp.static_props().filter(|_| only.is_none()) {
         let o = sp.origin;
         let a = sp.angles;
         placed.push((sp.model().to_string(), Mat4::from_translation(src(Vec3::new(o.x, o.y, o.z))) * source_rotation(a.pitch, a.yaw, a.roll)));
     }
-    for e in &entities {
+    for e in entities.iter().filter(|_| only.is_none()) {
         let c = class(e);
-        if c == "prop_dynamic" || c == "prop_dynamic_override" || c == "prop_door_rotating" {
+        if c == "prop_dynamic" || c == "prop_dynamic_override" || (c == "prop_door_rotating" && !static_only) {
             if let Some((_, m)) = e.iter().find(|(k, _)| k == "model") {
                 placed.push((m.clone(), entity_transform(e)));
             }

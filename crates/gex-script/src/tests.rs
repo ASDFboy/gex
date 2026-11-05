@@ -734,6 +734,26 @@ fn real_map_entities_and_props() {
     }
     let props = g.tree().in_group("map_props").len();
     println!("{} physics props", props);
+    let doors = g.tree().in_group("map_doors");
+    println!("{} doors", doors.len());
+    if let Some(d) = doors.first().copied() {
+        let before = g.tree().nodes[d].transform;
+        let root = g.tree().root.unwrap();
+        std::fs::write(dir.join("probe.jlb"), "DEF on_press_o() {\n\tUSE_DOOR(NODES(\"map_doors\")[1])\n}\n").unwrap();
+        g.reload_script("res://probe.jlb");
+        let _ = root;
+        g.frame(1.0 / 60.0, ["o".to_string()].into(), [0.0; 2], HashSet::new());
+        for _ in 0..240 {
+            g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        }
+        let after = g.tree().nodes[d].transform;
+        println!("door {} moved {:?} -> {:?}", g.tree().nodes[d].name, before.position, after.position);
+        for l in g.take_logs() {
+            println!("{:?}: {}", l.kind, l.text);
+        }
+    }
+    let map = g.tree().find_path(None, "Root/Map").unwrap();
+    println!("map mesh while playing: {}", g.tree().nodes[map].text("mesh"));
 }
 
 /// With a skinned model: `GEX_TEST_SKINNED=/folder/Fox.glb cargo test -p gex-script ragdoll -- --ignored`.

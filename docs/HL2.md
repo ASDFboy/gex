@@ -63,8 +63,26 @@ skeleton. `RAGDOLL(node)` makes one go limp and fall; `IMPULSE(node, x, y, z)` s
 bodies are worked out from the skeleton (a capsule per bone), not from the model's own `.phy`
 file, so they're a rough fit.
 
-What isn't there yet: Source models' animations (they stand in their reference pose), doors
-that open (they're drawn shut), NPC behaviour and map logic (triggers, outputs).
+**Doors.** While the game runs, each door (`func_door`, `func_door_rotating`,
+`prop_door_rotating`, and `func_movelinear` / `func_button`) is a node of its own in the group
+`map_doors`, named after the door's name in the map. `USE_DOOR(door)` opens or closes it the way
+the map says (sliding by its size, or swinging by its angle):
+
+```
+DEF on_press_e() {
+	>> Open the nearest door within 2 metres.
+	FOR d IN NODES("map_doors") {
+		IF DISTANCE(d, "Player") < 2 { USE_DOOR(d) }
+	}
+}
+```
+
+**Ladders and other brush volumes.** `MAP_ENTITIES("Map", "func_ladder")` gives each ladder's
+`bounds` (`min_x` ... `max_z`): when the player is inside one and walks forward, move them up.
+
+What isn't there yet: Source models' animations (they stand in their reference pose), the
+models' own `.phy` collision shapes (hulls and ragdoll capsules are worked out instead), NPC
+behaviour and map logic (triggers, outputs).
 
 Big maps take a few seconds to load the first time; the model cache keeps them after that.
 

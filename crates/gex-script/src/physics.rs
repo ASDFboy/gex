@@ -405,6 +405,8 @@ struct Ragdoll {
 
 pub struct World3 {
     ragdolls: HashMap<NodeId, Ragdoll>,
+    /// Static triangle meshes by node: which vertex list they were made from, and the collider.
+    static_meshes: HashMap<NodeId, (usize, d3::ColliderHandle)>,
     world: d3::PhysicsWorld,
     bodies: HashMap<NodeId, Entry3>,
     owners: HashMap<d3::ColliderHandle, NodeId>,
@@ -434,7 +436,7 @@ impl World3 {
         let mut controller = d3::KinematicCharacterController::default();
         controller.offset = d3::CharacterLength::Absolute(0.01);
         controller.snap_to_ground = Some(d3::CharacterLength::Absolute(0.1));
-        World3 { ragdolls: HashMap::new(), world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
+        World3 { ragdolls: HashMap::new(), static_meshes: HashMap::new(), world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
     }
 
     fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>) {
@@ -482,26 +484,42 @@ impl World3 {
     }
 
     fn set_statics(&mut self, boxes: &[StaticBox3], meshes: &[StaticMesh]) {
-        let key = format!("{:?}{:?}", boxes, meshes.iter().map(|m| (m.0, Arc::as_ptr(&m.1))).collect::<Vec<_>>());
-        if key == self.statics_key {
-            return;
+        let key = format!("{:?}", boxes);
+        if key != self.statics_key {
+            self.statics_key = key;
+            for c in self.statics.drain(..) {
+                self.owners.remove(&c);
+                self.world.remove_collider(c);
+            }
+            for b in boxes {
+                let c = d3::ColliderBuilder::cuboid(b.half.x, b.half.y, b.half.z).translation(b.center).collision_groups(groups3((1, u32::MAX)));
+                let h = self.world.insert_collider(c, None);
+                self.owners.insert(h, b.owner);
+                self.statics.push(h);
+            }
         }
-        self.statics_key = key;
-        for c in self.statics.drain(..) {
-            self.owners.remove(&c);
-            self.world.remove_collider(c);
-        }
-        for b in boxes {
-            let c = d3::ColliderBuilder::cuboid(b.half.x, b.half.y, b.half.z).translation(b.center).collision_groups(groups3((1, u32::MAX)));
-            let h = self.world.insert_collider(c, None);
-            self.owners.insert(h, b.owner);
-            self.statics.push(h);
+        // Meshes one by one, so a moving door doesn't rebuild the whole map.
+        let live: HashSet<NodeId> = meshes.iter().map(|m| m.0).collect();
+        let gone: Vec<NodeId> = self.static_meshes.keys().filter(|k| !live.contains(k)).copied().collect();
+        for g in gone {
+            if let Some((_, h)) = self.static_meshes.remove(&g) {
+                self.owners.remove(&h);
+                self.world.remove_collider(h);
+            }
         }
         for (owner, v, i) in meshes {
+            let ptr = Arc::as_ptr(v) as usize;
+            if self.static_meshes.get(owner).is_some_and(|(p, _)| *p == ptr) {
+                continue;
+            }
+            if let Some((_, h)) = self.static_meshes.remove(owner) {
+                self.owners.remove(&h);
+                self.world.remove_collider(h);
+            }
             if let Ok(c) = d3::ColliderBuilder::trimesh(v.to_vec(), i.to_vec()) {
                 let h = self.world.insert_collider(c.collision_groups(groups3((1, u32::MAX))), None);
                 self.owners.insert(h, *owner);
-                self.statics.push(h);
+                self.static_meshes.insert(*owner, (ptr, h));
             }
         }
     }
