@@ -11,7 +11,7 @@ use gex_script::LogKind;
 use crate::state::{self, EditorState};
 use crate::{code, panels, templates, theme, viewport};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Scene,
     Hierarchy,
@@ -61,7 +61,10 @@ impl TabViewer for Viewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
-            Tab::Scene => viewport::viewport(ui, self.st, self.rs, self.viewport_tex),
+            Tab::Scene => {
+                scene_tabs(ui, self.st);
+                viewport::viewport(ui, self.st, self.rs, self.viewport_tex)
+            }
             Tab::Hierarchy => panels::hierarchy(ui, self.st),
             Tab::Inspector => {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::inspector(ui, self.st));
@@ -84,6 +87,55 @@ impl TabViewer for Viewer<'_> {
             self.closed.push(r.clone());
         }
         egui_dock::widgets::tab_viewer::OnCloseResponse::Close
+    }
+}
+
+/// The strip of open scenes above the scene view.
+fn scene_tabs(ui: &mut egui::Ui, st: &mut EditorState) {
+    if st.docs.is_empty() {
+        return;
+    }
+    let mut switch = None;
+    let mut close = false;
+    ui.horizontal(|ui| {
+        let name = |r: &Option<String>| r.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
+        ui.add(egui::Button::selectable(true, name(&st.scene_res)));
+        if ui.small_button("✖").on_hover_text("close this scene (Ctrl+W)").clicked() {
+            close = true;
+        }
+        for (i, d) in st.docs.iter().enumerate() {
+            if ui.add(egui::Button::selectable(false, name(&d.scene_res))).clicked() {
+                switch = Some(i);
+            }
+        }
+    });
+    if let Some(i) = switch {
+        st.switch_scene(i);
+    }
+    if close {
+        st.close_scene();
+    }
+}
+
+fn layout_file() -> PathBuf {
+    state::config_dir().join("layout.ron")
+}
+
+fn saved_dock() -> Option<DockState<Tab>> {
+    let text = std::fs::read_to_string(layout_file()).ok()?;
+    let mut d: DockState<Tab> = ron::from_str(&text).ok()?;
+    // Script tabs from last time don't carry over (their buffers aren't open).
+    d.retain_tabs(|t| !matches!(t, Tab::Script(_)));
+    d.find_tab(&Tab::Scene)?;
+    Some(d)
+}
+
+fn save_dock(d: &DockState<Tab>) {
+    let mut d = d.clone();
+    d.retain_tabs(|t| !matches!(t, Tab::Script(_)));
+    if let Ok(t) = ron::to_string(&d) {
+        let _ = std::fs::create_dir_all(state::config_dir());
+        let _ = std::fs::write(layout_file(), t);
     }
 }
 
@@ -151,7 +203,7 @@ impl EditorApp {
             Ok(p) => {
                 state::remember_project(&p.dir);
                 self.st = Some(EditorState::new(p));
-                self.dock = default_dock();
+                self.dock = saved_dock().unwrap_or_else(default_dock);
                 self.viewport_tex = None;
                 self.previews.clear();
                 self.settings.loaded = false;
@@ -358,7 +410,9 @@ impl EditorApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let Some(st) = &mut self.st else { return };
-        let typing = ctx.egui_wants_keyboard_input();
+        let view: Option<egui::Id> = ctx.data(|d| d.get_temp(egui::Id::new("gex viewport id")));
+        let focused = ctx.memory(|m| m.focused());
+        let typing = ctx.egui_wants_keyboard_input() && (focused.is_none() || focused != view);
         let (f5, shift, save, undo, redo, dup, del, colon) = ctx.input_mut(|i| {
             (
                 i.key_pressed(egui::Key::F5),
@@ -371,6 +425,34 @@ impl EditorApp {
                 i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == ":")),
             )
         });
+        let (copy, paste, close_scene, tool) = ctx.input_mut(|i| {
+            let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
+            let paste = i.events.iter().find_map(|e| match e {
+                egui::Event::Paste(t) => Some(t.clone()),
+                _ => None,
+            });
+            let close = i.consume_key(egui::Modifiers::COMMAND, egui::Key::W);
+            let plain = !i.modifiers.command && !i.modifiers.alt;
+            let tool = if plain && i.key_pressed(egui::Key::W) {
+                Some(state::Tool::Move)
+            } else if plain && i.key_pressed(egui::Key::E) {
+                Some(state::Tool::Rotate)
+            } else if plain && i.key_pressed(egui::Key::R) {
+                Some(state::Tool::Scale)
+            } else {
+                None
+            };
+            (copy, paste, close, tool)
+        });
+        let (f8, f10) = ctx.input(|i| (i.key_pressed(egui::Key::F8), i.key_pressed(egui::Key::F10)));
+        if let Some(p) = &mut st.playing {
+            if f8 {
+                p.handle.resume();
+            }
+            if f10 {
+                p.handle.step();
+            }
+        }
         if f5 {
             if shift || st.playing.is_some() {
                 st.stop();
@@ -396,8 +478,27 @@ impl EditorApp {
         if del && st.playing.is_none() {
             st.delete_selected();
         }
-        if colon && st.playing.is_none() && self.cmd.is_none() {
+        if (colon || std::mem::take(&mut st.open_command)) && st.playing.is_none() && self.cmd.is_none() {
             self.cmd = Some(String::new());
+        }
+        if st.playing.is_none() {
+            if let Some(t) = tool {
+                st.tool = t;
+            }
+            if copy {
+                if let Some(t) = st.copy_text() {
+                    ctx.copy_text(t);
+                    st.status = format!("copied {} node(s)", st.selected_roots().len());
+                }
+            }
+            if let Some(t) = paste {
+                if st.paste_text(&t) {
+                    st.status = "pasted".into();
+                }
+            }
+            if close_scene {
+                st.close_scene();
+            }
         }
     }
 
@@ -651,6 +752,7 @@ impl eframe::App for EditorApp {
     }
 
     fn on_exit(&mut self) {
+        save_dock(&self.dock);
         if let Some(st) = &mut self.st {
             st.stop();
         }
@@ -701,6 +803,7 @@ impl eframe::App for PlayerApp {
                     }
                     self.ended = true;
                 }
+                gex_script::thread::FromGame::Paused(_) => self.handle.resume(),
             }
         }
         if self.ended {

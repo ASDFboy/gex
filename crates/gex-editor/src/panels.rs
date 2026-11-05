@@ -142,17 +142,36 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
         node_row(ui, st, &tree, root, &mut action, playing);
     });
     match action {
-        Some(Action::Select(id)) => st.selected = Some(id),
+        Some(Action::Select(id)) => st.select(Some(id)),
+        Some(Action::Toggle(id)) => st.toggle_select(id),
         Some(Action::Reparent(id, to)) if !playing => {
-            st.will_change("move");
-            st.tree.reparent(id, to, None);
+            if st.tree.nodes[id].from_instance {
+                st.status = "nodes inside an instanced scene can't be moved out of it".into();
+            } else {
+                st.will_change("move");
+                // Keep where it is in the world.
+                let world = st.tree.global_matrix(id);
+                if st.tree.reparent(id, to, None) {
+                    let local = st.tree.global_matrix(to).inverse() * world;
+                    let (s2, r, t) = local.to_scale_rotation_translation();
+                    let (ry, rx, rz) = r.to_euler(gex_core::glam::EulerRot::YXZ);
+                    let tr = &mut st.tree.nodes[id].transform;
+                    tr.position = t;
+                    tr.scale = s2;
+                    tr.rotation = gex_core::glam::Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
+                }
+            }
         }
         Some(Action::Delete(id)) if !playing => {
-            st.selected = Some(id);
+            if !st.is_selected(id) {
+                st.select(Some(id));
+            }
             st.delete_selected();
         }
         Some(Action::Duplicate(id)) if !playing => {
-            st.selected = Some(id);
+            if !st.is_selected(id) {
+                st.select(Some(id));
+            }
             st.duplicate_selected();
         }
         Some(Action::Move(id, up)) if !playing => {
@@ -167,7 +186,7 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
             }
         }
         Some(Action::AddChild(id, k)) if !playing => {
-            st.selected = Some(id);
+            st.select(Some(id));
             st.add_node(k);
         }
         _ => {}
@@ -176,6 +195,7 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
 
 enum Action {
     Select(NodeId),
+    Toggle(NodeId),
     Reparent(NodeId, NodeId),
     Delete(NodeId),
     Duplicate(NodeId),
@@ -185,7 +205,7 @@ enum Action {
 
 fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id: NodeId, action: &mut Option<Action>, playing: bool) {
     let n = &tree.nodes[id];
-    let selected = st.selected == Some(id);
+    let selected = st.is_selected(id);
     let mut label = format!("{} {}", kind_icon(n.kind), n.name);
     if n.instance_of.is_some() {
         label.push_str("  🎬");
@@ -197,7 +217,7 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
     let draw_label = |ui: &mut egui::Ui, action: &mut Option<Action>| {
         let r = ui.add(egui::Button::selectable(selected, RichText::new(&label).color(color))).interact(egui::Sense::click_and_drag());
         if r.clicked() {
-            *action = Some(Action::Select(id));
+            *action = Some(if ui.input(|i| i.modifiers.command) { Action::Toggle(id) } else { Action::Select(id) });
         }
         if !playing {
             r.dnd_set_drag_payload(id);
@@ -405,7 +425,8 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(kind_icon(kind)).size(18.0));
         let mut name = st.tree.nodes[id].name.clone();
-        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(160.0)).changed() && !name.is_empty() && !name.contains('/') {
+        let renamable = !st.tree.nodes[id].from_instance;
+        if ui.add_enabled(renamable, egui::TextEdit::singleline(&mut name).desired_width(160.0)).changed() && !name.is_empty() && !name.contains('/') {
             st.will_change(&format!("name {:?}", id));
             st.tree.nodes[id].name = name;
         }
@@ -425,7 +446,11 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         });
     }
     if st.tree.nodes[id].from_instance {
-        ui.label(RichText::new("Part of an instanced scene: changes here aren't saved. Edit the instanced scene instead.").color(theme::WARN));
+        ui.label(RichText::new("Inside an instanced scene: changes here are saved as overrides for this instance only.").small().color(theme::WARN));
+    }
+    let n_sel = st.selected_roots().len();
+    if n_sel > 1 {
+        ui.label(RichText::new(format!("{} nodes selected (editing this one; drag in the view moves them all)", n_sel)).small().color(theme::ACCENT));
     }
     ui.separator();
     if kind != NodeKind::Node {
@@ -748,7 +773,39 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
 
 // ---------------------------------------------------------------- console
 
+/// The debugger, while the game is stopped at a breakpoint.
+fn debugger(ui: &mut egui::Ui, st: &mut EditorState) {
+    let Some(p) = st.playing.as_mut() else { return };
+    let Some(at) = p.handle.paused.clone() else { return };
+    egui::Frame::group(ui.style()).fill(theme::WARN.gamma_multiply(0.08)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("⏸ paused at {} line {}", at.file.rsplit(['/', '\\']).next().unwrap_or(""), at.line)).strong().color(theme::WARN));
+            if ui.button("▶ Continue (F8)").clicked() {
+                p.handle.resume();
+            }
+            if ui.button("⏭ Step (F10)").clicked() {
+                p.handle.step();
+            }
+        });
+        ui.columns(3, |c| {
+            c[0].label(RichText::new("Calls").small().color(theme::TEXT_DIM));
+            for (f, l) in &at.stack {
+                c[0].label(RichText::new(format!("{}  line {}", f, l)).monospace());
+            }
+            c[1].label(RichText::new("Local variables").small().color(theme::TEXT_DIM));
+            for (k, v) in &at.locals {
+                c[1].label(RichText::new(format!("{} = {}", k, v)).monospace());
+            }
+            c[2].label(RichText::new("Script variables").small().color(theme::TEXT_DIM));
+            for (k, v) in &at.outside {
+                c[2].label(RichText::new(format!("{} = {}", k, v)).monospace());
+            }
+        });
+    });
+}
+
 pub fn console(ui: &mut egui::Ui, st: &mut EditorState) {
+    debugger(ui, st);
     ui.horizontal(|ui| {
         if ui.button("Clear").clicked() {
             st.logs.clear();

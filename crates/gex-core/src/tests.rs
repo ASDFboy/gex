@@ -100,3 +100,24 @@ fn render_extraction() {
     assert!(l.meshes.is_empty());
     assert!(l.camera3d.is_some());
 }
+
+#[test]
+fn editing_inside_an_instance_is_saved_as_overrides() {
+    let f = files();
+    let read = |p: &str| f.get(p).cloned().ok_or_else(|| "missing".to_string());
+    let text = r#"(root: (name: "Level", kind: Some(Node2D), children: [(name: "E", instance: Some("res://enemy.jscene"))]))"#;
+    let mut tree = scene::load(text, &read).unwrap();
+    let hit = tree.find_path(None, "Level/E/Hitbox").unwrap();
+    tree.nodes[hit].props.insert("width".into(), Variant::Num(99.0));
+    tree.nodes[hit].transform.position.x = 5.0;
+    tree.add(Some(hit), Node::new("Spark", NodeKind::Sprite2D));
+    let saved = scene::save(&tree, &read).unwrap();
+    assert!(saved.contains("overrides") && saved.contains("Spark"), "{}", saved);
+    let again = scene::load(&saved, &read).unwrap();
+    let hit2 = again.find_path(None, "Level/E/Hitbox").unwrap();
+    assert_eq!(again.nodes[hit2].props["width"], Variant::Num(99.0));
+    assert_eq!(again.nodes[hit2].transform.position.x, 5.0);
+    let spark = again.find_path(None, "Level/E/Hitbox/Spark").unwrap();
+    assert!(!again.nodes[spark].from_instance);
+    assert_eq!(scene::save(&again, &read).unwrap(), saved);
+}

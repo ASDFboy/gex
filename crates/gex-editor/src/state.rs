@@ -22,6 +22,9 @@ pub struct Script {
     pub checked_text: String,
     /// A line to scroll to and put the cursor on next frame.
     pub goto_line: Option<usize>,
+    pub vim: crate::vim::Vim,
+    /// The find/replace bar, when open: (find, replace).
+    pub find: Option<(String, String)>,
 }
 
 impl Script {
@@ -47,6 +50,27 @@ pub struct Playing {
     pub game_camera: bool,
 }
 
+/// What dragging a selected node does in the scene view.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Tool {
+    Move,
+    Rotate,
+    Scale,
+}
+
+/// A scene that's open but not the one being edited right now.
+pub struct SceneDoc {
+    pub tree: SceneTree,
+    pub scene_res: Option<String>,
+    pub scene_saved: String,
+    pub selected: Option<NodeId>,
+    pub undo: Vec<SceneTree>,
+    pub redo: Vec<SceneTree>,
+    pub mode_3d: bool,
+    pub cam2: EditorCamera2D,
+    pub cam3: EditorCamera3D,
+}
+
 pub struct EditorState {
     pub project: Project,
     pub vfs: Vfs,
@@ -54,6 +78,11 @@ pub struct EditorState {
     pub scene_res: Option<String>,
     pub scene_saved: String,
     pub selected: Option<NodeId>,
+    /// Every selected node (`selected` is the main one, shown in the inspector).
+    pub selection: Vec<NodeId>,
+    /// Other open scenes (the one being edited is in the fields above).
+    pub docs: Vec<SceneDoc>,
+    pub tool: Tool,
     undo: Vec<SceneTree>,
     redo: Vec<SceneTree>,
     last_change: Option<(String, Instant)>,
@@ -77,6 +106,14 @@ pub struct EditorState {
     pub asset_selected: Option<String>,
     pub show_settings: bool,
     pub status: String,
+    /// Breakpoints by script (res:// path) → line numbers.
+    pub breakpoints: HashMap<String, std::collections::BTreeSet<usize>>,
+    /// Shared with the running game, which checks it as it runs.
+    pub game_breakpoints: std::sync::Arc<gex_script::thread::Breakpoints>,
+    /// Vim keys in the script editor.
+    pub vim_enabled: bool,
+    /// Something asked for the command line to open (":" in Vim normal mode).
+    pub open_command: bool,
 }
 
 impl EditorState {
@@ -89,6 +126,9 @@ impl EditorState {
             scene_res: None,
             scene_saved: String::new(),
             selected: None,
+            selection: Vec::new(),
+            docs: Vec::new(),
+            tool: Tool::Move,
             undo: Vec::new(),
             redo: Vec::new(),
             last_change: None,
@@ -108,6 +148,10 @@ impl EditorState {
             asset_selected: None,
             show_settings: false,
             status: String::new(),
+            breakpoints: HashMap::new(),
+            game_breakpoints: Default::default(),
+            vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
+            open_command: false,
         };
         for w in st.vfs.warnings() {
             st.log(LogKind::Error, w);
@@ -141,7 +185,71 @@ impl EditorState {
 
     // ---------- scenes ----------
 
+    /// Opens a scene in its own tab (or switches to it if it's open).
     pub fn open_scene(&mut self, res: &str) {
+        if self.scene_res.as_deref() == Some(res) {
+            return;
+        }
+        if let Some(i) = self.docs.iter().position(|d| d.scene_res.as_deref() == Some(res)) {
+            self.switch_scene(i);
+            return;
+        }
+        if self.scene_res.is_some() || self.tree.nodes.len() > 1 {
+            let doc = self.take_doc();
+            self.docs.push(doc);
+        }
+        self.load_scene(res);
+    }
+
+    fn take_doc(&mut self) -> SceneDoc {
+        SceneDoc {
+            tree: std::mem::take(&mut self.tree),
+            scene_res: self.scene_res.take(),
+            scene_saved: std::mem::take(&mut self.scene_saved),
+            selected: self.selected.take(),
+            undo: std::mem::take(&mut self.undo),
+            redo: std::mem::take(&mut self.redo),
+            mode_3d: self.mode_3d,
+            cam2: self.cam2,
+            cam3: self.cam3,
+        }
+    }
+
+    fn put_doc(&mut self, d: SceneDoc) {
+        self.tree = d.tree;
+        self.scene_res = d.scene_res;
+        self.scene_saved = d.scene_saved;
+        self.selected = d.selected;
+        self.selection = d.selected.into_iter().collect();
+        self.undo = d.undo;
+        self.redo = d.redo;
+        self.mode_3d = d.mode_3d;
+        self.cam2 = d.cam2;
+        self.cam3 = d.cam3;
+        self.last_change = None;
+    }
+
+    /// Makes another open scene the one being edited.
+    pub fn switch_scene(&mut self, i: usize) {
+        if i >= self.docs.len() || self.playing.is_some() {
+            return;
+        }
+        let d = self.docs.remove(i);
+        let cur = self.take_doc();
+        self.docs.insert(i, cur);
+        self.put_doc(d);
+    }
+
+    /// Closes the scene being edited (unsaved changes are lost), switching to another.
+    pub fn close_scene(&mut self) {
+        if self.docs.is_empty() || self.playing.is_some() {
+            return;
+        }
+        let d = self.docs.remove(0);
+        self.put_doc(d);
+    }
+
+    fn load_scene(&mut self, res: &str) {
         let text = match self.project.read_text(res) {
             Ok(t) => t,
             Err(e) => return self.log(LogKind::Error, format!("couldn't open {}: {}", res, e)),
@@ -152,6 +260,8 @@ impl EditorState {
                 self.tree = t;
                 self.scene_res = Some(res.to_string());
                 self.selected = self.tree.root;
+                self.selection = self.selected.into_iter().collect();
+                self.cam_fitted = false;
                 self.undo.clear();
                 self.redo.clear();
                 self.scene_saved = self.scene_text().unwrap_or_default();
@@ -239,6 +349,8 @@ impl EditorState {
         }
     }
     fn fix_selection(&mut self) {
+        let tree = &self.tree;
+        self.selection.retain(|s| tree.contains(*s));
         if self.selected.is_some_and(|s| !self.tree.contains(s)) {
             self.selected = self.tree.root;
         }
@@ -249,6 +361,12 @@ impl EditorState {
     pub fn add_node(&mut self, kind: gex_core::NodeKind) -> NodeId {
         self.will_change("add");
         let mut n = gex_core::Node::new(kind.name(), kind);
+        if kind.is_ui() {
+            n.transform.position = gex_core::glam::Vec3::new(40.0, 40.0, 0.0);
+            let id = self.tree.add(self.selected.filter(|s| self.tree.nodes[*s].kind.is_ui()).or(self.tree.root), n);
+            self.select(Some(id));
+            return id;
+        }
         // New 2D nodes appear in the middle of the view.
         if kind.is_2d() && !self.mode_3d {
             let parent_m = self.selected.map(|p| self.tree.global_matrix(p)).unwrap_or_default();
@@ -256,7 +374,7 @@ impl EditorState {
             n.transform.position = local;
         }
         let id = self.tree.add(self.selected, n);
-        self.selected = Some(id);
+        self.select(Some(id));
         id
     }
 
@@ -283,25 +401,105 @@ impl EditorState {
         }
     }
 
+    /// Selects just this node.
+    pub fn select(&mut self, id: Option<NodeId>) {
+        self.selected = id;
+        self.selection = id.into_iter().collect();
+    }
+
+    /// Adds or removes a node from the selection (Ctrl+click).
+    pub fn toggle_select(&mut self, id: NodeId) {
+        if let Some(i) = self.selection.iter().position(|s| *s == id) {
+            self.selection.remove(i);
+            if self.selected == Some(id) {
+                self.selected = self.selection.last().copied();
+            }
+        } else {
+            self.selection.push(id);
+            self.selected = Some(id);
+        }
+    }
+
+    pub fn is_selected(&self, id: NodeId) -> bool {
+        self.selected == Some(id) || self.selection.contains(&id)
+    }
+
+    /// The selected nodes that still exist, without any whose parent is also selected.
+    pub fn selected_roots(&self) -> Vec<NodeId> {
+        let tree = &self.tree;
+        let mut all: Vec<NodeId> = self.selection.iter().copied().chain(self.selected).filter(|i| tree.contains(*i)).collect();
+        all.sort();
+        all.dedup();
+        let set = all.clone();
+        all.into_iter().filter(|i| !set.iter().any(|o| o != i && tree.is_ancestor(*o, *i))).collect()
+    }
+
     pub fn delete_selected(&mut self) {
-        let Some(id) = self.selected else { return };
-        if Some(id) == self.tree.root {
+        let ids = self.selected_roots();
+        if ids.is_empty() {
+            return;
+        }
+        if ids.iter().any(|i| Some(*i) == self.tree.root) {
             self.status = "the root node can't be deleted".into();
             return;
         }
+        if ids.iter().any(|i| self.tree.nodes[*i].from_instance) {
+            self.status = "nodes inside an instanced scene can't be deleted here (hide them, or edit that scene)".into();
+            return;
+        }
         self.will_change("delete");
-        let parent = self.tree.nodes[id].parent;
-        self.tree.remove(id);
-        self.selected = parent;
+        let parent = self.tree.nodes[ids[0]].parent;
+        for id in ids {
+            self.tree.remove(id);
+        }
+        self.select(parent);
     }
 
     pub fn duplicate_selected(&mut self) {
-        let Some(id) = self.selected else { return };
-        let Some(parent) = self.tree.nodes[id].parent else { return };
+        let ids = self.selected_roots();
+        if ids.is_empty() || ids.iter().any(|i| self.tree.nodes[*i].parent.is_none()) {
+            return;
+        }
         self.will_change("duplicate");
         let copy = self.tree.clone();
-        let new = self.tree.copy_subtree(&copy, id, Some(parent));
-        self.selected = Some(new);
+        let mut new = Vec::new();
+        for id in ids {
+            let parent = self.tree.nodes[id].parent;
+            new.push(self.tree.copy_subtree(&copy, id, parent));
+        }
+        self.selected = new.last().copied();
+        self.selection = new;
+    }
+
+    /// The selected nodes as text (for the clipboard): a list of scene-file node entries.
+    pub fn copy_text(&self) -> Option<String> {
+        let ids = self.selected_roots();
+        if ids.is_empty() {
+            return None;
+        }
+        let read = self.reader();
+        let descs: Vec<scene::NodeDesc> = ids.iter().filter_map(|i| scene::describe(&self.tree, *i, &read).ok()).collect();
+        ron::ser::to_string_pretty(&descs, ron::ser::PrettyConfig::new().struct_names(false)).ok()
+    }
+
+    /// Pastes nodes copied with `copy_text` (here or from another scene) next to the selection.
+    pub fn paste_text(&mut self, text: &str) -> bool {
+        let Ok(descs) = ron::from_str::<Vec<scene::NodeDesc>>(text) else { return false };
+        if descs.is_empty() || self.playing.is_some() {
+            return false;
+        }
+        self.will_change("paste");
+        let parent = self.selected.and_then(|s| self.tree.nodes.get(s).and_then(|n| n.parent)).or(self.tree.root);
+        let file = scene::SceneFile { format: scene::FORMAT, root: scene::NodeDesc { name: "Paste".into(), kind: Some(gex_core::NodeKind::Node), children: descs, ..Default::default() } };
+        let Ok(tmp) = scene::load(&scene::to_text(&file), &self.reader()) else { return false };
+        let troot = tmp.root.unwrap();
+        let mut new = Vec::new();
+        for c in tmp.nodes[troot].children.clone() {
+            new.push(self.tree.copy_subtree(&tmp, c, parent));
+        }
+        self.selected = new.last().copied();
+        self.selection = new;
+        true
     }
 
     // ---------- scripts ----------
@@ -311,7 +509,7 @@ impl EditorState {
             let text = self.project.read_text(res).unwrap_or_default();
             self.scripts.insert(
                 res.to_string(),
-                Script { res: res.to_string(), saved: text.clone(), text, problems: Vec::new(), checked_text: String::from("\0"), goto_line: None },
+                Script { res: res.to_string(), saved: text.clone(), text, problems: Vec::new(), checked_text: String::from("\0"), goto_line: None, vim: Default::default(), find: None },
             );
         }
         if let Some(s) = self.scripts.get_mut(res) {
@@ -330,10 +528,32 @@ impl EditorState {
             Ok(()) => {
                 s.saved = s.text.clone();
                 self.status = format!("saved {}", res);
+                // A running game picks the change up at once.
+                if let Some(p) = &self.playing {
+                    p.handle.reload(res);
+                }
             }
             Err(e) => {
                 let m = format!("couldn't save {}: {}", res, e);
                 self.log(LogKind::Error, m);
+            }
+        }
+    }
+
+    /// Toggles a breakpoint on a script line.
+    pub fn toggle_breakpoint(&mut self, res: &str, line: usize) {
+        let set = self.breakpoints.entry(res.to_string()).or_default();
+        if !set.remove(&line) {
+            set.insert(line);
+        }
+        self.sync_breakpoints();
+    }
+
+    /// Hands the breakpoints to the game (by the files' real paths).
+    pub fn sync_breakpoints(&self) {
+        for (res, lines) in &self.breakpoints {
+            if let Some(p) = self.project.res_to_path(res).and_then(|p| p.canonicalize().ok()) {
+                self.game_breakpoints.set(p, lines.iter().copied().collect());
             }
         }
     }
@@ -412,7 +632,8 @@ impl EditorState {
             self.save_script(&r);
         }
         self.logs.retain(|l| l.kind == LogKind::Error && l.file.is_none());
-        let handle = GameHandle::start(self.project.clone(), self.tree.clone());
+        self.sync_breakpoints();
+        let handle = GameHandle::start_with(self.project.clone(), self.tree.clone(), self.game_breakpoints.clone());
         self.playing = Some(Playing {
             handle,
             list: gex_core::render::extract(&self.tree),
@@ -434,8 +655,9 @@ impl EditorState {
         if let Some(mut p) = self.playing.take() {
             p.handle.stop();
             for m in p.handle.poll() {
-                let (FromGame::Stopped { logs } | FromGame::Frame { logs, .. }) = m;
-                self.logs.extend(logs);
+                if let FromGame::Stopped { logs } | FromGame::Frame { logs, .. } = m {
+                    self.logs.extend(logs);
+                }
             }
             self.status = "stopped".into();
         }
@@ -445,6 +667,7 @@ impl EditorState {
     pub fn pump_game(&mut self) {
         let Some(p) = &mut self.playing else { return };
         let mut stopped = false;
+        let mut paused_at = None;
         for m in p.handle.poll() {
             match m {
                 FromGame::Frame { list, tree, logs } => {
@@ -456,11 +679,24 @@ impl EditorState {
                     self.logs.extend(logs);
                     stopped = true;
                 }
+                FromGame::Paused(at) => paused_at = Some(at),
             }
         }
         if stopped {
             self.playing = None;
             self.status = "the game ended".into();
+            return;
+        }
+        if let Some(at) = paused_at {
+            // Show where it stopped.
+            if let Some(res) = self.project.dir.canonicalize().ok().and_then(|d| std::path::Path::new(&at.file).strip_prefix(&d).ok().map(|r| format!("res://{}", r.to_string_lossy().replace('\\', "/")))) {
+                self.open_script(&res, Some(at.line));
+            }
+            self.status = format!("paused at line {} — F8 continue, F10 step, Shift+F5 stop", at.line);
+            return;
+        }
+        let Some(p) = &mut self.playing else { return };
+        if p.handle.paused.is_some() {
             return;
         }
         let now = Instant::now();

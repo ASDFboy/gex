@@ -287,3 +287,56 @@ fn model_animation_and_mesh_collision() {
     let y = t.nodes[ball].transform.position.y;
     assert!((y - 0.5).abs() < 0.05, "the ball rests on the collision plane: {}", y);
 }
+
+#[test]
+fn breakpoints_pause_and_scripts_reload() {
+    use crate::thread::{FromGame, GameHandle};
+    let scene = r#"(root: (name: "R", kind: Some(Node2D), scripts: ["res://s.jlb"]))"#;
+    let p = project("debug", &[("main.jscene", scene), ("s.jlb", "count = 0\nDEF on_step(dt) {\n    x = 41\n    GLOBAL count += 1\n}\n")]);
+    let text = p.read_text("res://main.jscene").unwrap();
+    let tree = gex_core::scene::load(&text, &|q: &str| p.read_text(q)).unwrap();
+    let mut h = GameHandle::start(p.clone(), tree.clone());
+    let file = p.res_to_path("res://s.jlb").unwrap().canonicalize().unwrap();
+    h.breakpoints.set(file, [4].into());
+    h.request_frame(crate::FrameInput { dt: 0.016, ..Default::default() });
+    let mut paused = None;
+    for _ in 0..200 {
+        for m in h.poll() {
+            if let FromGame::Paused(p) = m {
+                paused = Some(p);
+            }
+        }
+        if paused.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let p2 = paused.expect("paused at the breakpoint");
+    assert_eq!(p2.line, 4);
+    assert!(p2.locals.iter().any(|(k, v)| k == "x" && v == "41"), "{:?}", p2.locals);
+    assert!(p2.outside.iter().any(|(k, v)| k == "count" && v == "0"), "{:?}", p2.outside);
+    assert_eq!(p2.stack.first().map(|s| s.0.as_str()), Some("on_step"));
+    h.breakpoints.set(p.res_to_path("res://s.jlb").unwrap().canonicalize().unwrap(), Default::default());
+    h.resume();
+    let mut got_frame = false;
+    for _ in 0..200 {
+        if h.poll().iter().any(|m| matches!(m, FromGame::Frame { .. })) {
+            got_frame = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(got_frame);
+    h.stop();
+
+    // Reloading keeps outside variables that still exist.
+    let mut g = Game::new(p.clone(), tree, None);
+    for _ in 0..3 {
+        g.frame(0.016, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    std::fs::write(p.dir.join("s.jlb"), "count = 0\nDEF on_step(dt) {\n    GLOBAL count += 10\n    self.seen = count\n}\n").unwrap();
+    assert_eq!(g.reload_script("res://s.jlb"), 1);
+    g.frame(0.016, HashSet::new(), [0.0; 2], HashSet::new());
+    let t = g.tree();
+    assert_eq!(t.nodes[t.root.unwrap()].props.get("seen"), Some(&Variant::Num(13.0)));
+}

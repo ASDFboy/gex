@@ -56,3 +56,104 @@ pub(crate) fn try_host(it: &mut Interp, name: &'static str, args: Vec<Value>) ->
     it.host = Some(h);
     r
 }
+
+// ---------- debugging from a host ----------
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
+
+/// Breakpoints a host can change at any time, from any thread.
+#[derive(Default)]
+pub struct Breakpoints {
+    /// Quick check: are there any breakpoints, or is a step asked for?
+    pub active: AtomicBool,
+    pub lines: RwLock<HashMap<PathBuf, HashSet<usize>>>,
+    /// Pause at the very next statement (stepping).
+    pub step: AtomicBool,
+}
+
+impl Breakpoints {
+    pub fn set(&self, file: PathBuf, lines: HashSet<usize>) {
+        let mut l = self.lines.write().unwrap();
+        if lines.is_empty() {
+            l.remove(&file);
+        } else {
+            l.insert(file, lines);
+        }
+        self.refresh(&l);
+    }
+    fn refresh(&self, l: &HashMap<PathBuf, HashSet<usize>>) {
+        self.active.store(!l.is_empty() || self.step.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+    pub fn set_step(&self, on: bool) {
+        self.step.store(on, Ordering::Relaxed);
+        let l = self.lines.read().unwrap();
+        self.refresh(&l);
+    }
+}
+
+/// Where code stopped, for the host to show.
+pub struct Paused {
+    pub file: PathBuf,
+    pub line: usize,
+    /// Running functions, innermost first: (name, line).
+    pub stack: Vec<(String, usize)>,
+    /// The innermost function's local variables, then the file's outside variables.
+    pub locals: Vec<(String, String)>,
+    pub outside: Vec<(String, String)>,
+}
+
+pub struct PauseHook {
+    pub breakpoints: Arc<Breakpoints>,
+    /// Called when code stops; blocks until the host says to go on. Returning false stops
+    /// the running code (as if cancelled).
+    pub on_pause: Box<dyn FnMut(Paused) -> bool>,
+}
+
+pub(crate) fn check_pause(it: &mut Interp, line: usize) -> R<()> {
+    let hook = it.pause.as_ref().unwrap();
+    if !hook.breakpoints.active.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let file = it.frames.last().map(|f| f.src.canon.clone()).unwrap_or_default();
+    let stepping = hook.breakpoints.step.load(Ordering::Relaxed);
+    let hit = stepping || hook.breakpoints.lines.read().unwrap().get(&file).is_some_and(|l| l.contains(&line));
+    if !hit {
+        return Ok(());
+    }
+    hook.breakpoints.set_step(false);
+    let short = |v: &Value| {
+        let mut s = crate::value::display(v);
+        if s.chars().count() > 200 {
+            s = s.chars().take(200).collect::<String>() + "…";
+        }
+        s
+    };
+    let frame = it.frames.last().unwrap();
+    let mut locals = Vec::new();
+    for scope in &frame.scopes {
+        for (k, v) in crate::interp::vars_of(scope) {
+            locals.push((k.to_string(), short(&v)));
+        }
+    }
+    let outside = crate::interp::vars_of(&frame.env.borrow())
+        .into_iter()
+        .filter(|(_, v)| !v.is_func())
+        .map(|(k, v)| (k.to_string(), short(&v)))
+        .collect();
+    let stack = it
+        .frames
+        .iter()
+        .rev()
+        .map(|f| (f.func.as_ref().and_then(|x| x.decl.name.as_ref().map(|n| n.to_string())).unwrap_or_else(|| "(file)".into()), f.line))
+        .collect();
+    let paused = Paused { file, line, stack, locals, outside };
+    let go_on = (it.pause.as_mut().unwrap().on_pause)(paused);
+    if go_on {
+        Ok(())
+    } else {
+        Err(Fault::Cancelled)
+    }
+}

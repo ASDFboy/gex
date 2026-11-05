@@ -259,6 +259,49 @@ impl Game {
         }
     }
 
+    /// Gives the interpreter a debugger hook (breakpoints and stepping).
+    pub fn set_pause_hook(&mut self, hook: jlb::host::PauseHook) {
+        self.it.pause = Some(hook);
+    }
+
+    /// Loads a changed script again on every node that uses it, keeping the values of
+    /// outside variables it still has (so a running game keeps its state).
+    pub fn reload_script(&mut self, res: &str) -> usize {
+        let Some(path) = self.st.borrow().project.res_to_path(res) else { return 0 };
+        let handlers = scan_handlers(&path);
+        let users: Vec<(NodeId, usize)> = self
+            .scripts
+            .iter()
+            .flat_map(|(id, list)| list.iter().enumerate().filter(|(_, s)| s.res == res).map(move |(i, _)| (*id, i)))
+            .collect();
+        let mut done = 0;
+        for (id, i) in users {
+            let old = self.scripts[&id][i].env.clone();
+            let (me, before) = self.self_table(id);
+            self.st.borrow_mut().current = Some(id);
+            match self.it.load_module(&path, &[("self", me)]) {
+                Ok(env) => {
+                    self.read_self_back(id, &env, &before);
+                    for (k, v) in Interp::env_vars(&old) {
+                        if !v.is_func() && &*k != "self" && Interp::env_get(&env, &k).is_some() {
+                            Interp::env_set(&env, &k, v);
+                        }
+                    }
+                    let s = &mut self.scripts.get_mut(&id).unwrap()[i];
+                    s.env = env;
+                    s.handlers = handlers.clone();
+                    s.dead = false;
+                    done += 1;
+                }
+                Err(f) => self.report(&f, res),
+            }
+        }
+        if done > 0 {
+            self.st.borrow_mut().log(LogKind::Info, format!("reloaded {} on {} node(s)", res, done));
+        }
+        done
+    }
+
     fn report(&mut self, f: &Fault, res: &str) {
         let mut st = self.st.borrow_mut();
         match f {

@@ -43,6 +43,34 @@ pub struct NodeDesc {
     pub groups: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<NodeDesc>,
+    /// For instances: changes to nodes inside the instanced scene, by path from this node
+    /// ("Hitbox", "Arm/Hand"), including children added under them.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, NodeOverride>,
+}
+
+/// Changes to one node inside an instanced scene.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NodeOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transform: Option<Transform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub props: BTreeMap<String, Variant>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<NodeDesc>,
+}
+
+impl NodeOverride {
+    fn is_empty(&self) -> bool {
+        self.transform.is_none() && self.visible.is_none() && self.props.is_empty() && self.scripts.is_empty() && self.groups.is_empty() && self.children.is_empty()
+    }
 }
 
 /// Reads scene files by `res://` path, for instancing.
@@ -135,7 +163,61 @@ fn build(tree: &mut SceneTree, parent: Option<NodeId>, d: &NodeDesc, read: Scene
     for c in &d.children {
         build(tree, Some(id), c, read, stack)?;
     }
+    for (path, ov) in &d.overrides {
+        // A node the instanced scene no longer has: its changes are dropped.
+        let Some(target) = tree.find_path(Some(id), path) else { continue };
+        let n = &mut tree.nodes[target];
+        if let Some(t) = ov.transform {
+            n.transform = t;
+        }
+        if let Some(v) = ov.visible {
+            n.visible = v;
+        }
+        for (k, v) in &ov.props {
+            n.props.insert(k.clone(), v.clone());
+        }
+        for s in &ov.scripts {
+            if !n.scripts.contains(s) {
+                n.scripts.push(s.clone());
+            }
+        }
+        for g in &ov.groups {
+            if !n.groups.contains(g) {
+                n.groups.push(g.clone());
+            }
+        }
+        for c in &ov.children {
+            build(tree, Some(target), c, read, stack)?;
+        }
+    }
     Ok(id)
+}
+
+/// The path from `root` down to `id` ("Arm/Hand").
+fn rel_path(tree: &SceneTree, root: NodeId, id: NodeId) -> String {
+    let mut parts = Vec::new();
+    let mut cur = id;
+    while cur != root {
+        parts.push(tree.nodes[cur].name.clone());
+        match tree.nodes[cur].parent {
+            Some(p) => cur = p,
+            None => break,
+        }
+    }
+    parts.reverse();
+    parts.join("/")
+}
+
+/// Differences between a node and the same node in the instanced scene.
+fn diff(n: &Node, base: &Node) -> NodeOverride {
+    NodeOverride {
+        transform: (n.transform != base.transform).then_some(n.transform),
+        visible: (n.visible != base.visible).then_some(n.visible),
+        props: n.props.iter().filter(|(k, v)| base.props.get(*k) != Some(*v)).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        scripts: n.scripts.iter().filter(|s| !base.scripts.contains(s)).cloned().collect(),
+        groups: n.groups.iter().filter(|g| !base.groups.contains(g)).cloned().collect(),
+        children: Vec::new(),
+    }
 }
 
 /// Turns a tree back into scene text. Instanced scenes are written as references with
@@ -178,6 +260,30 @@ pub fn describe(tree: &SceneTree, id: NodeId, read: SceneReader) -> Result<NodeD
     for c in &n.children {
         if !tree.nodes[*c].from_instance {
             d.children.push(describe(tree, *c, read)?);
+        }
+    }
+    if let Some(path) = &n.instance_of {
+        // Changes inside the instance, and children added under its nodes.
+        let mut bt = SceneTree::new();
+        let br = instance(&mut bt, None, path, read)?;
+        let mut stack: Vec<NodeId> = n.children.iter().copied().filter(|c| tree.nodes[*c].from_instance).collect();
+        while let Some(x) = stack.pop() {
+            let xn = &tree.nodes[x];
+            let rel = rel_path(tree, id, x);
+            let mut ov = match bt.find_path(Some(br), &rel) {
+                Some(b) => diff(xn, &bt.nodes[b]),
+                None => NodeOverride::default(),
+            };
+            for c in &xn.children {
+                if tree.nodes[*c].from_instance {
+                    stack.push(*c);
+                } else {
+                    ov.children.push(describe(tree, *c, read)?);
+                }
+            }
+            if !ov.is_empty() {
+                d.overrides.insert(rel, ov);
+            }
         }
     }
     Ok(d)

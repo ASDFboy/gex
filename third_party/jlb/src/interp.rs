@@ -73,6 +73,8 @@ pub struct Interp {
     pub host: Option<Box<dyn crate::host::Host>>,
     /// Set by the embedding program to stop the code that's running (see host.rs).
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Breakpoints and stepping for an embedding program's debugger (see host.rs).
+    pub pause: Option<crate::host::PauseHook>,
 }
 
 fn key_from(v: &Value) -> R<Key> {
@@ -407,6 +409,7 @@ impl Interp {
             gfx: Default::default(),
             host: None,
             cancel: None,
+            pause: None,
         }
     }
 
@@ -976,6 +979,9 @@ impl Interp {
             if c.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(Fault::Cancelled);
             }
+        }
+        if self.pause.is_some() {
+            crate::host::check_pause(self, s.line)?;
         }
         // With tasks running, each one gets a turn every so many statements.
         if self.baton.is_some() {
