@@ -630,3 +630,50 @@ fn pause_and_time_scale() {
     let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
     assert!(errs.is_empty(), "{:?}", errs);
 }
+
+#[test]
+fn tasks_wait_in_game_time() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), children: [
+        (name: "Actor", kind: Some(Sprite2D), scripts: ["res://actor.jlb"]),
+        (name: "Doomed", kind: Some(Node), scripts: ["res://doomed.jlb"]),
+    ]))"#;
+    let actor = "DEF on_create() {\n\tSTART intro()\n}\n\nDEF intro() {\n\tself.x = 10\n\tWAIT(1)\n\tself.x = 20\n\tSET(NULL, \"step\", 2)\n\tWAIT(1)\n\tTWEEN(NULL, \"x\", 100, 0.5)\n\tPRINT(\"intro done\")\n}\n\nDEF on_press_w() {\n\tWAIT(1)\n}\n";
+    let doomed = "DEF on_create() {\n\tSTART forever()\n}\nDEF forever() {\n\tn = 0\n\tWHILE TRUE {\n\t\tn += 1\n\t\tWAIT(0.1)\n\t}\n}\n";
+    let p = project("tasks", &[("main.jscene", scene), ("actor.jlb", actor), ("doomed.jlb", doomed)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    let x = |g: &Game| {
+        let t = g.tree();
+        let a = t.find_path(None, "Root/Actor").unwrap();
+        (t.nodes[a].transform.position.x, t.nodes[a].num("step", 0.0))
+    };
+    g.frame(0.1, HashSet::new(), [0.0; 2], HashSet::new());
+    assert_eq!(x(&g), (10.0, 0.0));
+    for _ in 0..11 {
+        g.frame(0.1, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert_eq!(x(&g), (20.0, 2.0), "a second of game time later: {:?}", g.take_logs());
+    // A paused game holds the task.
+    g.st.borrow_mut().paused = true;
+    for _ in 0..20 {
+        g.frame(0.1, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert_eq!(x(&g).0, 20.0);
+    g.st.borrow_mut().paused = false;
+    for _ in 0..20 {
+        g.frame(0.1, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert_eq!(x(&g).0, 100.0);
+    // Destroying a node stops its tasks.
+    let d = g.tree().find_path(None, "Root/Doomed").unwrap();
+    g.st.borrow_mut().queue.push_back(crate::world::Pending::Destroy(d));
+    g.frame(0.1, HashSet::new(), [0.0; 2], HashSet::new());
+    g.frame(0.1, HashSet::new(), [0.0; 2], HashSet::new());
+    assert!(g.it.live_task_tags().is_empty(), "{:?}", g.it.live_task_tags());
+    // WAIT straight in an event explains what to do.
+    g.frame(0.1, ["w".to_string()].into(), [0.0; 2], HashSet::new());
+    let logs = g.take_logs();
+    assert!(logs.iter().any(|l| l.text == "intro done"));
+    let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.clone()).collect();
+    assert_eq!(errs.len(), 1, "{:?}", errs);
+    assert!(errs[0].contains("START"), "{}", errs[0]);
+}

@@ -22,10 +22,12 @@
 
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::interp::{Frame, Interp};
 use crate::value::*;
+
+const HOST_WAIT: &str = "WAIT and AWAIT can't pause an event (the whole game would stop): put the waiting part in its own function and run it with START, e.g. START intro()";
 
 /// Statements a task runs before the next one gets a turn.
 pub const SLICE: u32 = 1000;
@@ -39,7 +41,8 @@ pub struct TaskHandle {
 #[derive(Clone, Copy, PartialEq)]
 pub enum State {
     Ready,
-    Sleeping(Instant),
+    /// Asleep until this time on the task clock (see `Interp::task_clock`).
+    Sleeping(f64),
     Awaiting(usize),
     Finished,
 }
@@ -54,11 +57,14 @@ pub struct TaskRec {
     pub try_depth: usize,
     /// An error from a task this one is AWAITing.
     pub error: Option<Fault>,
+    /// A number the embedding program gives the tasks an event starts (the engine: which
+    /// node they belong to). Tasks started by tasks inherit it.
+    pub tag: u64,
 }
 
 impl TaskRec {
     fn new(name: Rc<str>) -> Self {
-        TaskRec { name, state: State::Ready, cancelled: false, result: Value::Null, frames: Vec::new(), try_depth: 0, error: None }
+        TaskRec { name, state: State::Ready, cancelled: false, result: Value::Null, frames: Vec::new(), try_depth: 0, error: None, tag: 0 }
     }
 }
 
@@ -95,6 +101,7 @@ impl Interp {
         let id = self.tasks.len();
         let name: Rc<str> = Rc::from(func.decl.name.as_deref().unwrap_or("FUNCTION"));
         let mut rec = TaskRec::new(name.clone());
+        rec.tag = if self.current == 0 { self.event_tag } else { self.tasks[self.current].tag };
         // The task's first call, ready to go.
         rec.frames.push(Frame { func: Some(func.clone()), scopes: vec![OrdMap::new()], env: func.env.clone(), line, src: func.src.clone() });
         self.tasks.push(rec);
@@ -194,7 +201,7 @@ impl Interp {
                 self.tasks[0].state = State::Ready;
                 return Ok(0);
             }
-            let now = Instant::now();
+            let now = self.task_clock();
             for i in 0..self.tasks.len() {
                 match self.tasks[i].state {
                     State::Sleeping(t) if t <= now => self.tasks[i].state = State::Ready,
@@ -213,12 +220,16 @@ impl Interp {
                     return Ok(c);
                 }
             }
-            let wake = self.tasks.iter().filter_map(|t| if let State::Sleeping(w) = t.state { Some(w) } else { None }).min();
+            // Run by a host's game loop: the host's own code (task 0) has the next turn.
+            if self.game_clock.is_some() {
+                return Ok(0);
+            }
+            let wake = self.tasks.iter().filter_map(|t| if let State::Sleeping(w) = t.state { Some(w) } else { None }).min_by(|a, b| a.total_cmp(b));
             match wake {
                 Some(w) => {
                     use std::io::Write;
                     let _ = self.out.flush();
-                    std::thread::sleep(w.saturating_duration_since(now));
+                    std::thread::sleep(Duration::from_secs_f64((w - now).clamp(0.0, 1e9)));
                 }
                 None => return err("every task is waiting for another one to finish (AWAIT), so none of them can go on"),
             }
@@ -228,6 +239,13 @@ impl Interp {
     /// Counts a statement; every SLICE statements, the next task gets a turn.
     pub fn tick(&mut self) -> R<()> {
         self.steps += 1;
+        // Under a host's game loop, the host's own code only hands over in `run_tasks`.
+        if self.game_clock.is_some() && self.current == 0 {
+            if self.steps >= SLICE {
+                self.steps = 0;
+            }
+            return Ok(());
+        }
         if self.steps >= SLICE {
             self.take_turns()?;
         }
@@ -237,7 +255,10 @@ impl Interp {
     /// WAIT(seconds) while there are tasks: the others run meanwhile.
     pub fn task_sleep(&mut self, secs: f64) -> R<()> {
         let me = self.current;
-        self.tasks[me].state = State::Sleeping(Instant::now() + Duration::from_secs_f64(secs.clamp(0.0, 1e9)));
+        if self.game_clock.is_some() && me == 0 {
+            return err(HOST_WAIT);
+        }
+        self.tasks[me].state = State::Sleeping(self.task_clock() + secs.clamp(0.0, 1e9));
         let r = self.take_turns();
         self.tasks[me].state = State::Ready;
         r
@@ -261,6 +282,9 @@ impl Interp {
         }
         let id = self.task_id(v, "AWAIT")?;
         let me = self.current;
+        if self.game_clock.is_some() && me == 0 && !self.shutting_down {
+            return err(HOST_WAIT);
+        }
         if id == me {
             return err("a task can't AWAIT itself (it would wait forever)");
         }
@@ -315,5 +339,55 @@ impl Interp {
             self.await_tasks(&Value::Task(Rc::new(TaskHandle { id, name: self.tasks[id].name.clone() })))?;
         }
         Ok(())
+    }
+}
+
+impl Interp {
+    /// Seconds on the clock WAIT uses: the host's game clock when it runs the tasks, else real time.
+    pub fn task_clock(&self) -> f64 {
+        match self.game_clock {
+            Some(t) => t,
+            None => self.start.elapsed().as_secs_f64(),
+        }
+    }
+
+    /// For a host's game loop: gives every task that's ready one turn (until it WAITs, AWAITs
+    /// or has run a slice), with `clock` as the time WAIT counts in. Comes back right after.
+    pub fn run_tasks(&mut self, clock: f64) -> R<()> {
+        self.game_clock = Some(clock);
+        if self.tasks.len() <= 1 || self.current != 0 {
+            return Ok(());
+        }
+        self.take_turns()
+    }
+
+    /// The tag of the task running now (None for the host's own calls).
+    pub fn running_tag(&self) -> Option<u64> {
+        (self.current != 0).then(|| self.tasks[self.current].tag)
+    }
+
+    /// Tags of the tasks that haven't finished.
+    pub fn live_task_tags(&self) -> Vec<u64> {
+        self.tasks.iter().skip(1).filter(|t| t.state != State::Finished).map(|t| t.tag).collect()
+    }
+
+    /// Stops the tasks with this tag (at their next turn).
+    pub fn cancel_tagged(&mut self, tag: u64) {
+        for t in self.tasks.iter_mut().skip(1) {
+            if t.tag == tag && t.state != State::Finished {
+                t.cancelled = true;
+            }
+        }
+    }
+
+    /// Ends every task, so their threads finish (call before dropping the interpreter).
+    pub fn shutdown_tasks(&mut self) {
+        if self.tasks.len() <= 1 || self.current != 0 {
+            return;
+        }
+        self.game_clock.get_or_insert(0.0);
+        self.shutting_down = true;
+        self.cancel_all_tasks();
+        self.shutting_down = false;
     }
 }

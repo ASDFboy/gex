@@ -67,6 +67,11 @@ pub struct Interp {
     pub steps: u32,
     /// An error (or END) from a task, waiting for the program's own code to take it.
     pub task_fault: Option<Fault>,
+    /// Set by a host that runs tasks from its own loop (see `run_tasks`): the time WAIT counts in.
+    pub game_clock: Option<f64>,
+    /// The tag new tasks started by the host's own calls get (see `TaskRec::tag`).
+    pub event_tag: u64,
+    pub(crate) shutting_down: bool,
     /// Windows, the drawing target and frame rate (graphics.rs).
     pub gfx: crate::graphics::Gfx,
     /// A program embedding the interpreter (see host.rs) can add its own commands.
@@ -406,6 +411,9 @@ impl Interp {
             current: 0,
             steps: 0,
             task_fault: None,
+            game_clock: None,
+            event_tag: 0,
+            shutting_down: false,
             gfx: Default::default(),
             host: None,
             cancel: None,

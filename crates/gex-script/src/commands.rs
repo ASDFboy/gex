@@ -304,6 +304,10 @@ impl Host for EngineHost {
         }
         let mut st = self.st.borrow_mut();
         let st = &mut *st;
+        // Inside a task (START), NULL means the node the task belongs to.
+        if let Some(tag) = _it.running_tag() {
+            st.current = Some(crate::world::tag_node(tag));
+        }
         let r: R<Value> = (|| match name {
             "NODE" => {
                 let p = text_arg(name, &a, 0)?;

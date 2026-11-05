@@ -37,6 +37,15 @@ pub struct LogLine {
     pub line: usize,
 }
 
+/// A node as a task tag, and back.
+pub fn node_tag(id: NodeId) -> u64 {
+    use slotmap::Key;
+    id.data().as_ffi()
+}
+pub fn tag_node(tag: u64) -> NodeId {
+    NodeId::from(slotmap::KeyData::from_ffi(tag))
+}
+
 /// Nodes in this group keep running while the game is paused (a pause menu).
 pub const PAUSE_GROUP: &str = "while_paused";
 
@@ -183,11 +192,18 @@ struct ScriptInst {
 }
 
 pub struct Game {
-    it: Interp,
+    pub(crate) it: Interp,
     pub st: Rc<RefCell<WorldState>>,
     scripts: HashMap<NodeId, Vec<ScriptInst>>,
     physics_acc: f64,
     started: bool,
+}
+
+impl Drop for Game {
+    fn drop(&mut self) {
+        // Let task threads end rather than wait forever.
+        self.it.shutdown_tasks();
+    }
 }
 
 /// PRINT output goes to the game's log.
@@ -374,6 +390,41 @@ impl Game {
         done
     }
 
+    /// Gives every running task (START) its turn: up to its next WAIT, AWAIT or a slice of
+    /// statements. Tasks see their node's `self` like events do.
+    fn run_tasks(&mut self) {
+        let tags = self.it.live_task_tags();
+        if tags.is_empty() {
+            return;
+        }
+        let mut nodes: Vec<NodeId> = tags.into_iter().map(tag_node).collect();
+        nodes.sort();
+        nodes.dedup();
+        let mut envs = Vec::new();
+        for id in nodes {
+            if !self.st.borrow().tree.contains(id) {
+                continue;
+            }
+            let Some(list) = self.scripts.get(&id) else { continue };
+            let list: Vec<Env> = list.iter().map(|s| s.env.clone()).collect();
+            for env in list {
+                let (me, before) = self.self_table(id);
+                Interp::env_set(&env, "self", me);
+                envs.push((id, env, before));
+            }
+        }
+        self.st.borrow_mut().current = None;
+        let clock = self.st.borrow().time;
+        let r = self.it.run_tasks(clock);
+        for (id, env, before) in envs {
+            self.read_self_back(id, &env, &before);
+        }
+        if let Err(f) = r {
+            self.report(&f, "a task");
+        }
+        self.drain();
+    }
+
     fn report(&mut self, f: &Fault, res: &str) {
         let mut st = self.st.borrow_mut();
         match f {
@@ -483,6 +534,8 @@ impl Game {
         let (me, before) = self.self_table(id);
         Interp::env_set(&env, "self", me);
         self.st.borrow_mut().current = Some(id);
+        // Tasks this event STARTs belong to this node.
+        self.it.event_tag = node_tag(id);
         let r = self.it.call_value(&f, args);
         self.read_self_back(id, &env, &before);
         match r {
@@ -605,6 +658,9 @@ impl Game {
         };
         for (id, prop) in finished {
             self.run(id, "on_tween_end", vec![Value::text(&prop)]);
+        }
+        if !self.st.borrow().paused {
+            self.run_tasks();
         }
         self.camera_and_fade(dt as f32);
         {
@@ -1070,6 +1126,7 @@ impl Game {
                     let mut st = self.st.borrow_mut();
                     let gone = st.tree.remove(id);
                     for g in gone {
+                        self.it.cancel_tagged(node_tag(g));
                         self.scripts.remove(&g);
                         if let Some(s) = st.audio.by_node.remove(&g) {
                             st.audio.stop(s);

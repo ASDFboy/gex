@@ -193,6 +193,34 @@ The script editor completes these as you type and shows each one's inputs.
 | `TIME_SCALE(scale)` | how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale |
 | `SHAKE(strength, seconds)` | shakes the camera: strength in pixels (2D), dying away over seconds |
 
+## Waiting: tasks
+
+An event has to finish within its frame, so it can't `WAIT`. For anything that happens over
+time (a cutscene, an enemy's attack pattern, a countdown), put it in its own function and run
+it as a task with `START`:
+
+```
+DEF on_create() {
+	START intro()
+}
+
+DEF intro() {
+	SET("Caption", "text", "Long ago...")
+	WAIT(2)
+	TWEEN("Caption", "color", "#ffffff00", 1)
+	WAIT(1)
+	SET("Caption", "text", "Press space")
+}
+```
+
+- `WAIT(seconds)` counts game time: it slows with `TIME_SCALE` and holds while the game is paused.
+- `t = START f()` gives back the task; `AWAIT(t)` (inside another task) waits for it and gives
+  back what it returned; `DONE(t)` says whether it has finished; `CANCEL(t)` stops it.
+- A task belongs to the node whose event started it: `self` and `NULL` mean that node, and
+  destroying the node stops its tasks.
+- Tasks take turns with the game: each runs until its next `WAIT` (or a thousand statements),
+  then the game carries on and the task picks up next frame.
+
 ## Pausing
 
 `PAUSE(TRUE)` freezes the game: frame events (`on_step`, `on_physics`, `on_draw`), input
@@ -245,5 +273,5 @@ Everything else in .jlb works as usual: tables, IMPORT/LOAD (relative to the scr
 TRY/FAIL, the maths and text builtins. `PRINT` goes to the editor's console. `END` stops the
 game. Note that "not equal" in .jlb is `!==`.
 
-Not in the engine: `START`/tasks inside scripts, and .jlb's own windows and drawing commands
-(`WINDOW`, `RECT`...): use nodes and the `DRAW_*` commands instead.
+Not in the engine: .jlb's own windows and drawing commands (`WINDOW`, `RECT`...): use nodes and
+the `DRAW_*` commands instead.
