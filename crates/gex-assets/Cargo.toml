@@ -14,3 +14,4 @@ gltf.workspace = true
 tobj.workspace = true
 vmdl.workspace = true
 vbsp.workspace = true
+lzma-rs = "0.3"

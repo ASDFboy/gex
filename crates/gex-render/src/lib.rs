@@ -120,6 +120,8 @@ struct GpuPart {
 struct GpuModel {
     parts: Vec<GpuPart>,
     data: Arc<ModelData>,
+    /// Maps: the baked light atlas.
+    lightmap: Option<Tex>,
 }
 
 struct Tex {
@@ -153,6 +155,8 @@ enum Geo {
 struct Draw3 {
     /// In the view (off-screen draws still cast shadows).
     visible: bool,
+    /// The model whose lightmap this uses ("" for none).
+    lightmap: String,
     geo: Geo,
     texture: String,
     normal: String,
@@ -175,8 +179,8 @@ pub struct Renderer {
     custom: HashMap<String, Result<wgpu::RenderPipeline, String>>,
     mesh_pl: wgpu::PipelineLayout,
     mat_layout: wgpu::BindGroupLayout,
-    /// (texture, normal map) → the bind group meshes draw with.
-    materials: HashMap<(String, String), wgpu::BindGroup>,
+    /// (texture, normal map, lightmap's model) → the bind group meshes draw with.
+    materials: HashMap<(String, String, String), wgpu::BindGroup>,
     normals: HashMap<String, Result<Tex, String>>,
     flat_normal: Tex,
     glow: Tex,
@@ -342,6 +346,7 @@ impl Renderer {
                 tex_entry(0),
                 wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
                 tex_entry(2),
+                tex_entry(3),
             ],
         });
         let mesh_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -366,7 +371,7 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &instance_attrs,
         };
-        let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
+        let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 10 => Float32x2];
         let mesh_layout = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<mesh::Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -605,8 +610,8 @@ impl Renderer {
     }
 
     /// The bind group a mesh draws with: its texture and normal map.
-    fn material(&mut self, device: &wgpu::Device, texture: &str, normal: &str) {
-        let key = (texture.to_string(), normal.to_string());
+    fn material(&mut self, device: &wgpu::Device, texture: &str, normal: &str, lightmap: &str) {
+        let key = (texture.to_string(), normal.to_string(), lightmap.to_string());
         if self.materials.contains_key(&key) {
             return;
         }
@@ -615,6 +620,10 @@ impl Renderer {
             Some(Ok(t)) => &t.view,
             _ => &self.flat_normal.view,
         };
+        let lm = match self.models.get(lightmap) {
+            Some(Ok(GpuModel { lightmap: Some(t), .. })) => &t.view,
+            _ => &self.white_linear.view,
+        };
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material"),
             layout: &self.mat_layout,
@@ -622,6 +631,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(base) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.linear) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(nor) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(lm) },
             ],
         });
         self.materials.insert(key, bg);
@@ -635,7 +645,7 @@ impl Renderer {
         let r = (|| -> Result<wgpu::RenderPipeline, String> {
             let user = vfs.read_text(path)?;
             let src = format!(
-                "{}\n// ---- {} ----\n{}\n\n@fragment\nfn fs_custom(o: MeshOut) -> @location(0) vec4<f32> {{\n    var base = textureSample(tex, samp, o.uv) * o.color;\n    let nm = textureSample(normal_tex, samp, o.uv);\n    base = material(base, o.uv, o.world, normalize(o.normal), g.post.z);\n    if (base.a < 0.01) {{\n        discard;\n    }}\n    return encode(shade(o, base, nm));\n}}\n",
+                "{}\n// ---- {} ----\n{}\n\n@fragment\nfn fs_custom(o: MeshOut) -> @location(0) vec4<f32> {{\n    var base = textureSample(tex, samp, o.uv) * o.color;\n    let nm = textureSample(normal_tex, samp, o.uv);\n    let lm = textureSample(lightmap_tex, samp, o.uv2);\n    base = material(base, o.uv, o.world, normalize(o.normal), g.post.z);\n    if (base.a < 0.01) {{\n        discard;\n    }}\n    return encode(shade(o, base, nm, lm));\n}}\n",
                 include_str!("shaders.wgsl"),
                 path,
                 user
@@ -647,7 +657,7 @@ impl Renderer {
                 .map_err(|e| e.emit_to_string(&src))?;
             let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(path), source: wgpu::ShaderSource::Wgsl(src.into()) });
             let instance_attrs = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4, 9 => Float32x4];
-            let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
+            let mesh_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 10 => Float32x2];
             let bufs = [
                 Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<mesh::Vertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &mesh_attrs }),
                 Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Instance>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &instance_attrs }),
@@ -703,7 +713,7 @@ impl Renderer {
             let mut parts = Vec::new();
             for (i, p) in data.parts.iter().enumerate() {
                 let verts: Vec<mesh::Vertex> = (0..p.positions.len())
-                    .map(|k| mesh::Vertex { pos: p.positions[k].into(), normal: p.normals[k].into(), uv: p.uvs[k].into() })
+                    .map(|k| mesh::Vertex { pos: p.positions[k].into(), normal: p.normals[k].into(), uv: p.uvs[k].into(), uv2: p.uvs2.get(k).copied().unwrap_or_default().into() })
                     .collect();
                 let texture = match &p.texture {
                     None => String::new(),
@@ -720,7 +730,9 @@ impl Renderer {
                 let _ = i;
                 parts.push(GpuPart { mesh: upload_mesh(device, &mesh::MeshData { vertices: verts, indices: p.indices.clone() }), texture, color: p.color });
             }
-            GpuModel { parts, data }
+            // Baked light: stored as plain values (not colors), filtered smoothly, no mipmaps.
+            let lightmap = data.lightmap.as_ref().map(|l| make_tex(device, queue, &self.tex_layout, &self.clamp, l.width, l.height, &l.pixels, false, wgpu::TextureFormat::Rgba8Unorm));
+            GpuModel { parts, data, lightmap }
         });
         if let Err(e) = &r {
             self.problems.push(format!("model {}: {}", path, e));
@@ -875,6 +887,11 @@ impl Renderer {
                     let Some(Ok(model)) = self.models.get(&m.mesh) else { continue };
                     let data = model.data.clone();
                     let skinned = data.is_skinned();
+                    let has_lm = model.lightmap.is_some();
+                    let mut mat = mat;
+                    if has_lm {
+                        mat[3] += 2.0;
+                    }
                     let bc = m.model.transform_point3((data.min + data.max) * 0.5);
                     let br = (data.max - data.min).length() * 0.5 * scale.max_element() * if skinned { 1.5 } else { 1.0 };
                     let visible = in_view(bc, br);
@@ -902,7 +919,7 @@ impl Renderer {
                         });
                         for (i, p) in data.parts.iter().enumerate() {
                             let (pos, nor) = data.skin(p, &joints);
-                            let verts: Vec<mesh::Vertex> = (0..pos.len()).map(|k| mesh::Vertex { pos: pos[k].into(), normal: nor[k].into(), uv: p.uvs[k].into() }).collect();
+                            let verts: Vec<mesh::Vertex> = (0..pos.len()).map(|k| mesh::Vertex { pos: pos[k].into(), normal: nor[k].into(), uv: p.uvs[k].into(), uv2: p.uvs2.get(k).copied().unwrap_or_default().into() }).collect();
                             if !verts.is_empty() {
                                 queue.write_buffer(&bufs[i], 0, bytemuck::cast_slice(&verts));
                             }
@@ -918,6 +935,7 @@ impl Renderer {
                         let texture = if m.texture.is_empty() { part.texture.clone() } else { m.texture.clone() };
                         draws.push(Draw3 {
                             geo: if skinned { Geo::Skinned(m.node, m.mesh.clone(), i) } else { Geo::Part(m.mesh.clone(), i) },
+                            lightmap: if has_lm { m.mesh.clone() } else { String::new() },
                             texture,
                             normal: m.normal_map.clone(),
                             shader: m.shader.clone(),
@@ -939,6 +957,7 @@ impl Renderer {
                     } * scale.max_element();
                     draws.push(Draw3 {
                         geo: Geo::Prim(prim),
+                        lightmap: String::new(),
                         texture: m.texture.clone(),
                         normal: m.normal_map.clone(),
                         shader: m.shader.clone(),
@@ -1156,9 +1175,9 @@ impl Renderer {
 
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gex frame") });
         // Material bind groups for this frame's draws.
-        let pairs: Vec<(String, String)> = draws.iter().map(|d| (d.texture.clone(), d.normal.clone())).collect();
-        for (t, n) in pairs {
-            self.material(device, &t, &n);
+        let keys: Vec<(String, String, String)> = draws.iter().map(|d| (d.texture.clone(), d.normal.clone(), d.lightmap.clone())).collect();
+        for (t, n, l) in keys {
+            self.material(device, &t, &n, &l);
         }
         // ---- shadow pass: two cascades side by side in one atlas ----
         if shadows {
@@ -1277,7 +1296,7 @@ impl Renderer {
                         current = Some(which);
                     }
                     let Some((vb, ib, count)) = self.geo(&d.geo) else { continue };
-                    let Some(mat) = self.materials.get(&(d.texture.clone(), d.normal.clone())) else { continue };
+                    let Some(mat) = self.materials.get(&(d.texture.clone(), d.normal.clone(), d.lightmap.clone())) else { continue };
                     pass.set_bind_group(1, mat, &[]);
                     pass.set_vertex_buffer(0, vb.slice(..));
                     pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);

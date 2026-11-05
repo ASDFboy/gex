@@ -15,6 +15,8 @@ pub struct Part {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
     pub uvs: Vec<Vec2>,
+    /// Lightmap positions (maps), in the model's lightmap atlas.
+    pub uvs2: Vec<Vec2>,
     pub indices: Vec<u32>,
     /// Skinned parts: four joints and weights per vertex.
     pub joints: Vec<[u16; 4]>,
@@ -71,6 +73,10 @@ pub struct ModelData {
     pub two_sided: bool,
     pub min: Vec3,
     pub max: Vec3,
+    /// Maps: baked light for the whole map in one atlas (RGBA, half strength), and the
+    /// map's entities (each a list of key/value pairs, as written in the map).
+    pub lightmap: Option<crate::Rgba>,
+    pub entities: Vec<Vec<(String, String)>>,
 }
 
 impl ModelData {
@@ -387,7 +393,7 @@ fn load_gltf(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
                 let i = t.texture().source().index();
                 images.get(i).map(|img| Texture::Embedded { key: format!("{}#{}", path, i), image: img.clone() })
             });
-            out.parts.push(Part { positions, normals, uvs, indices, joints, weights, color: pbr.base_color_factor(), texture });
+            out.parts.push(Part { positions, normals, uvs, uvs2: Vec::new(), indices, joints, weights, color: pbr.base_color_factor(), texture });
         }
     }
 
@@ -524,6 +530,72 @@ fn load_mdl(vfs: &Vfs, path: &str, read: &mut dyn FnMut(&str) -> Result<Vec<u8>,
     Ok(out)
 }
 
+/// The bytes of one BSP lump (vbsp doesn't hand out the lighting), unpacked if it's
+/// LZMA-compressed (as in later games' maps).
+fn bsp_lump(data: &[u8], index: usize) -> Vec<u8> {
+    let at = 8 + index * 16;
+    let Some(h) = data.get(at..at + 8) else { return Vec::new() };
+    let ofs = i32::from_le_bytes(h[0..4].try_into().unwrap()).max(0) as usize;
+    let len = i32::from_le_bytes(h[4..8].try_into().unwrap()).max(0) as usize;
+    let raw = data.get(ofs..ofs + len).unwrap_or(&[]);
+    if raw.len() > 17 && &raw[0..4] == b"LZMA" {
+        // Valve's header: "LZMA", real size, packed size, 5 property bytes, then the stream.
+        let real = u32::from_le_bytes(raw[4..8].try_into().unwrap()) as u64;
+        let mut lz = Vec::with_capacity(raw.len());
+        lz.extend_from_slice(&raw[12..17]);
+        lz.extend_from_slice(&real.to_le_bytes());
+        lz.extend_from_slice(&raw[17..]);
+        let mut out = Vec::new();
+        if lzma_rs::lzma_decompress(&mut std::io::Cursor::new(lz), &mut out).is_ok() {
+            return out;
+        }
+        return Vec::new();
+    }
+    raw.to_vec()
+}
+
+/// "1 2 3" → a vector.
+fn parse_vec(s: &str) -> Option<Vec3> {
+    let v: Vec<f32> = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    (v.len() >= 3).then(|| Vec3::new(v[0], v[1], v[2]))
+}
+
+/// A Source rotation (pitch, yaw, roll in degrees) as a matrix in GEX's space.
+pub fn source_rotation(pitch: f32, yaw: f32, roll: f32) -> Mat4 {
+    let r_src = Quat::from_euler(EulerRot::ZYX, yaw.to_radians(), pitch.to_radians(), roll.to_radians());
+    let swap = Mat4::from_cols(glam::Vec4::X, glam::Vec4::new(0.0, 0.0, -1.0, 0.0), glam::Vec4::Y, glam::Vec4::W);
+    swap * Mat4::from_quat(r_src) * swap.inverse()
+}
+
+/// An entity's placement in GEX space (from its origin and angles).
+pub fn entity_transform(e: &[(String, String)]) -> Mat4 {
+    let get = |k: &str| e.iter().find(|(a, _)| a.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str());
+    let o = get("origin").and_then(parse_vec).unwrap_or(Vec3::ZERO);
+    let a = get("angles").and_then(parse_vec).unwrap_or(Vec3::ZERO);
+    let yaw = get("angle").and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(a.y);
+    Mat4::from_translation(src(o)) * source_rotation(a.x, yaw, a.z)
+}
+
+/// Shelf packing for lightmap rectangles: gives each (w, h) a spot, and the atlas size.
+fn pack(sizes: &[(u32, u32)], width: u32) -> (Vec<(u32, u32)>, u32) {
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by_key(|i| std::cmp::Reverse(sizes[*i].1));
+    let mut spots = vec![(0, 0); sizes.len()];
+    let (mut x, mut y, mut row) = (0u32, 0u32, 0u32);
+    for i in order {
+        let (w, h) = sizes[i];
+        if x + w > width {
+            x = 0;
+            y += row;
+            row = 0;
+        }
+        spots[i] = (x, y);
+        x += w;
+        row = row.max(h);
+    }
+    (spots, (y + row).max(1))
+}
+
 fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
     let data = vfs.read(path)?;
     let bsp = vbsp::Bsp::read(&data).map_err(|e| format!("{}: {}", path, e))?;
@@ -536,38 +608,155 @@ fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
         }
         vfs.read(p)
     };
-    let mut groups: HashMap<String, Part> = HashMap::new();
-    let mut tex_cache: HashMap<String, Option<String>> = HashMap::new();
-    let world = bsp.models().next().ok_or("the map has no world model")?;
-    for face in world.faces() {
-        let tex = face.texture();
-        let name = tex.name().to_string();
-        let lower = name.to_ascii_lowercase();
-        if lower.starts_with("tools/") || lower.contains("skybox") || !face.is_visible() {
+    // Entities, as written.
+    let entities: Vec<Vec<(String, String)>> = bsp.entities.iter().map(|e| e.properties().map(|(k, v)| (k.to_string(), v.to_string())).collect()).collect();
+    let class = |e: &[(String, String)]| e.iter().find(|(k, _)| k == "classname").map(|(_, v)| v.to_ascii_lowercase()).unwrap_or_default();
+    // Brush entities' models ("*3") and where they sit.
+    let mut sub_origin: HashMap<usize, Vec3> = HashMap::new();
+    for e in &entities {
+        let c = class(e);
+        if c.starts_with("trigger_") || c == "func_areaportal" || c == "func_occluder" || c == "func_viscluster" {
             continue;
         }
-        let (tw, th) = {
-            let d = tex.texture_data();
-            (d.width.max(1) as f32, d.height.max(1) as f32)
-        };
-        let part = groups.entry(name.clone()).or_insert_with(|| Part { color: [1.0; 4], ..Default::default() });
-        let tris: Vec<[vbsp::Vector; 3]> = match face.displacement() {
-            Some(d) => {
-                let v: Vec<vbsp::Vector> = d.triangulated_displaced_vertices().collect();
-                v.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+        if let Some(n) = e.iter().find(|(k, _)| k == "model").and_then(|(_, v)| v.strip_prefix('*')).and_then(|n| n.parse::<usize>().ok()) {
+            let o = e.iter().find(|(k, _)| k == "origin").and_then(|(_, v)| parse_vec(v)).unwrap_or(Vec3::ZERO);
+            sub_origin.insert(n, o);
+        }
+    }
+    // The baked light: LDR lump 8, or the HDR one (53) when that's all there is.
+    let mut lighting = bsp_lump(&data, 8);
+    if lighting.is_empty() {
+        lighting = bsp_lump(&data, 53);
+    }
+    let lighting = &lighting[..];
+
+    struct FaceGeo {
+        name: String,
+        tris: Vec<[Vec3; 3]>,
+        uvs: Vec<[Vec2; 3]>,
+        /// Luxel positions (s, t) of each corner, and the face's lightmap (offset, w, h).
+        lm: Option<(Vec<[Vec2; 3]>, usize, u32, u32)>,
+    }
+    let mut faces: Vec<FaceGeo> = Vec::new();
+    let mut models: Vec<(usize, Vec3)> = vec![(0, Vec3::ZERO)];
+    let mut subs: Vec<(usize, Vec3)> = sub_origin.into_iter().collect();
+    subs.sort_by_key(|s| s.0);
+    models.extend(subs);
+    let all_models: Vec<_> = bsp.models().collect();
+    for (mi, origin) in models {
+        let Some(model) = all_models.get(mi) else { continue };
+        for face in model.faces() {
+            let tex = face.texture();
+            let name = tex.name().to_string();
+            let lower = name.to_ascii_lowercase();
+            if lower.starts_with("tools/") || lower.contains("skybox") || !face.is_visible() {
+                continue;
             }
-            None => face.triangulate().collect(),
-        };
-        for t in tris {
+            let (tw, th) = {
+                let d = tex.texture_data();
+                (d.width.max(1) as f32, d.height.max(1) as f32)
+            };
+            let tris: Vec<[vbsp::Vector; 3]> = match face.displacement() {
+                Some(d) => {
+                    let v: Vec<vbsp::Vector> = d.triangulated_displaced_vertices().collect();
+                    v.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+                }
+                None => face.triangulate().collect(),
+            };
+            let s4 = tex.light_map_scale;
+            let t4 = tex.light_map_transform;
+            let (mins, size) = (face.light_map_texture_min, face.light_map_texture_size);
+            let has_lm = !lighting.is_empty() && face.light_offset >= 0 && face.styles[0] != 255 && size[0] >= 0 && size[1] >= 0;
+            let luxel = |v: &vbsp::Vector| {
+                Vec2::new(
+                    v.x * s4[0] + v.y * s4[1] + v.z * s4[2] + s4[3] - mins[0] as f32,
+                    v.x * t4[0] + v.y * t4[1] + v.z * t4[2] + t4[3] - mins[1] as f32,
+                )
+            };
+            let mut g = FaceGeo { name, tris: Vec::new(), uvs: Vec::new(), lm: None };
+            let mut lms = Vec::new();
+            for t in &tris {
+                g.tris.push(t.map(|v| src(Vec3::new(v.x + origin.x, v.y + origin.y, v.z + origin.z))));
+                g.uvs.push(t.map(|v| {
+                    let uv = tex.uv(v);
+                    Vec2::new(uv[0] / tw, uv[1] / th)
+                }));
+                if has_lm {
+                    lms.push(t.map(|v| luxel(&v)));
+                }
+            }
+            if has_lm {
+                g.lm = Some((lms, face.light_offset as usize, size[0] as u32 + 1, size[1] as u32 + 1));
+            }
+            faces.push(g);
+        }
+    }
+
+    // Pack every face's lightmap into one atlas (1-luxel border; a grey luxel at 0,0 for
+    // surfaces without one).
+    let rects: Vec<(u32, u32)> = faces.iter().map(|f| f.lm.as_ref().map(|l| (l.2 + 2, l.3 + 2)).unwrap_or((0, 0))).collect();
+    let mut sizes = rects.clone();
+    sizes.push((2, 2));
+    let width = 1024;
+    let (spots, height) = pack(&sizes, width);
+    let plain = spots[spots.len() - 1];
+    let lit = faces.iter().any(|f| f.lm.is_some());
+    let mut atlas = vec![0u8; (width * height * 4) as usize];
+    let put = |atlas: &mut Vec<u8>, x: u32, y: u32, c: [u8; 4]| {
+        let i = ((y * width + x) * 4) as usize;
+        if i + 4 <= atlas.len() {
+            atlas[i..i + 4].copy_from_slice(&c);
+        }
+    };
+    // Plain light for props and unlit faces.
+    for dy in 0..2 {
+        for dx in 0..2 {
+            put(&mut atlas, plain.0 + dx, plain.1 + dy, [102, 102, 102, 255]);
+        }
+    }
+    let sample = |off: usize| -> [u8; 4] {
+        let Some(b) = lighting.get(off..off + 4) else { return [128, 128, 128, 255] };
+        let e = (b[3] as i8) as i32;
+        let k = 2f32.powi(e) / 255.0;
+        // Linear light, stored at half strength so values up to 2 fit.
+        let f = |c: u8| ((c as f32 * k * 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
+        [f(b[0]), f(b[1]), f(b[2]), 255]
+    };
+    for (i, f) in faces.iter().enumerate() {
+        let Some((_, off, w, h)) = &f.lm else { continue };
+        let (x0, y0) = spots[i];
+        for y in 0..h + 2 {
+            for x in 0..w + 2 {
+                // The border repeats the edge luxels, so filtering doesn't bleed.
+                let sx = (x as i32 - 1).clamp(0, *w as i32 - 1) as usize;
+                let sy = (y as i32 - 1).clamp(0, *h as i32 - 1) as usize;
+                put(&mut atlas, x0 + x, y0 + y, sample(off + (sy * *w as usize + sx) * 4));
+            }
+        }
+    }
+    let to_uv = |x: f32, y: f32| Vec2::new(x / width as f32, y / height as f32);
+    let plain_uv = to_uv(plain.0 as f32 + 1.0, plain.1 as f32 + 1.0);
+
+    let mut groups: HashMap<String, Part> = HashMap::new();
+    let mut tex_cache: HashMap<String, Option<String>> = HashMap::new();
+    for (i, f) in faces.iter().enumerate() {
+        let part = groups.entry(f.name.clone()).or_insert_with(|| Part { color: [1.0; 4], ..Default::default() });
+        for (k, t) in f.tris.iter().enumerate() {
             let base = part.positions.len() as u32;
-            for v in t {
-                let uv = tex.uv(v);
-                part.positions.push(src(Vec3::new(v.x, v.y, v.z)));
-                part.uvs.push(Vec2::new(uv[0] / tw, uv[1] / th));
+            for c in 0..3 {
+                part.positions.push(t[c]);
+                part.uvs.push(f.uvs[k][c]);
+                part.uvs2.push(match &f.lm {
+                    Some((lms, _, w, h)) => {
+                        let l = lms[k][c].clamp(Vec2::ZERO, Vec2::new(*w as f32 - 1.0, *h as f32 - 1.0));
+                        to_uv(spots[i].0 as f32 + 1.0 + l.x + 0.5, spots[i].1 as f32 + 1.0 + l.y + 0.5)
+                    }
+                    None => plain_uv,
+                });
             }
             part.indices.extend_from_slice(&[base, base + 1, base + 2]);
         }
-        tex_cache.entry(name).or_insert(None);
+        tex_cache.entry(f.name.clone()).or_insert(None);
     }
     for (name, t) in tex_cache.iter_mut() {
         let mut candidates = vec![material_path(name)];
@@ -600,10 +789,24 @@ fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
         p.texture = tex_cache.get(&name).cloned().flatten().map(Texture::Path);
         out.parts.push(p);
     }
-    // Static props, placed where the map puts them.
+    // Props that don't move: static props, and dynamic ones that are only there to look at.
     let mut props: HashMap<String, Option<Arc<ModelData>>> = HashMap::new();
+    let mut placed: Vec<(String, Mat4)> = Vec::new();
     for sp in bsp.static_props() {
-        let model = sp.model().replace('\\', "/").to_ascii_lowercase();
+        let o = sp.origin;
+        let a = sp.angles;
+        placed.push((sp.model().to_string(), Mat4::from_translation(src(Vec3::new(o.x, o.y, o.z))) * source_rotation(a.pitch, a.yaw, a.roll)));
+    }
+    for e in &entities {
+        let c = class(e);
+        if c == "prop_dynamic" || c == "prop_dynamic_override" || c == "prop_door_rotating" {
+            if let Some((_, m)) = e.iter().find(|(k, _)| k == "model") {
+                placed.push((m.clone(), entity_transform(e)));
+            }
+        }
+    }
+    for (model, xf) in placed {
+        let model = model.replace('\\', "/").to_ascii_lowercase();
         let m = props
             .entry(model.clone())
             .or_insert_with(|| {
@@ -612,21 +815,21 @@ fn load_bsp(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
             })
             .clone();
         let Some(m) = m else { continue };
-        let o = sp.origin;
-        let a = sp.angles;
-        // Source: yaw about z, pitch about y, roll about x, in that order.
-        let r_src = Quat::from_euler(EulerRot::ZYX, a.yaw.to_radians(), a.pitch.to_radians(), a.roll.to_radians());
-        // Into y-up space: the same rotation seen through the axis swap.
-        let swap = Mat4::from_cols(glam::Vec4::X, glam::Vec4::new(0.0, 0.0, -1.0, 0.0), glam::Vec4::Y, glam::Vec4::W);
-        let rot = swap * Mat4::from_quat(r_src) * swap.inverse();
-        let xf = Mat4::from_translation(src(Vec3::new(o.x, o.y, o.z))) * rot;
         for part in &m.parts {
             let mut p = part.clone();
             p.positions = p.positions.iter().map(|v| xf.transform_point3(*v)).collect();
             p.normals = p.normals.iter().map(|v| xf.transform_vector3(*v).normalize_or(Vec3::Y)).collect();
+            p.uvs2 = vec![plain_uv; p.positions.len()];
+            // Baked into the map: no skeleton.
+            p.joints.clear();
+            p.weights.clear();
             out.parts.push(p);
         }
     }
+    if lit {
+        out.lightmap = Some(crate::Rgba { width, height, pixels: atlas });
+    }
+    out.entities = entities;
     Ok(out)
 }
 

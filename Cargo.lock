@@ -1527,6 +1527,7 @@ dependencies = [
  "glam 0.33.12",
  "gltf",
  "image",
+ "lzma-rs",
  "steamlocate",
  "tobj",
  "vbsp",

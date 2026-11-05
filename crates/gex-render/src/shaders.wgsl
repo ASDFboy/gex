@@ -38,8 +38,9 @@ struct Globals {
 @group(0) @binding(2) var shadow_samp: sampler_comparison;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
-// Meshes only: the normal map (flat blue when there's none).
+// Meshes only: the normal map (flat blue when there's none), and baked light (maps).
 @group(1) @binding(2) var normal_tex: texture_2d<f32>;
+@group(1) @binding(3) var lightmap_tex: texture_2d<f32>;
 
 fn encode(c: vec4<f32>) -> vec4<f32> {
     let lo = c.rgb * 12.92;
@@ -54,7 +55,7 @@ struct InstanceIn {
     @location(6) m3: vec4<f32>,
     @location(7) color: vec4<f32>,
     @location(8) uv: vec4<f32>,
-    // x = specular, y = emissive, z = unlit, w = has a normal map
+    // x = specular, y = emissive, z = unlit, w = flags (1 = normal map, 2 = lightmap)
     @location(9) mat: vec4<f32>,
 };
 
@@ -64,6 +65,7 @@ struct MeshIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(10) uv2: vec2<f32>,
 };
 
 struct MeshOut {
@@ -73,6 +75,7 @@ struct MeshOut {
     @location(2) color: vec4<f32>,
     @location(3) world: vec3<f32>,
     @location(4) mat: vec4<f32>,
+    @location(5) uv2: vec2<f32>,
 };
 
 @vertex
@@ -86,6 +89,7 @@ fn vs_mesh(v: MeshIn, i: InstanceIn) -> MeshOut {
     o.uv = v.uv * i.uv.zw + i.uv.xy;
     o.color = i.color;
     o.mat = i.mat;
+    o.uv2 = v.uv2;
     return o;
 }
 
@@ -141,21 +145,30 @@ fn surface_normal(o: MeshOut, nm: vec4<f32>) -> vec3<f32> {
     let inv = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-20));
     let tbn = mat3x3<f32>(t * inv, b * inv, n);
     let mapped = normalize(tbn * (nm.xyz * 2.0 - 1.0));
-    return select(n, mapped, o.mat.w > 0.5 && all(mapped == mapped));
+    let has_normal = (u32(o.mat.w + 0.5) & 1u) != 0u;
+    return select(n, mapped, has_normal && all(mapped == mapped));
 }
 
-fn shade(o: MeshOut, base: vec4<f32>, nm: vec4<f32>) -> vec4<f32> {
+fn shade(o: MeshOut, base: vec4<f32>, nm: vec4<f32>, lm: vec4<f32>) -> vec4<f32> {
     var n = surface_normal(o, nm);
+    let baked = (u32(o.mat.w + 0.5) & 2u) != 0u;
     let view = normalize(g.eye.xyz - o.world);
     // Two-sided surfaces: light the side we're looking at.
     if (dot(n, view) < 0.0) {
         n = -n;
     }
     var light = g.ambient.rgb;
+    if (baked) {
+        // A map's baked light (stored at half strength) replaces the sun and the ambient.
+        light = lm.rgb * 2.0;
+    }
     let count = i32(g.counts.x);
     for (var k = 0; k < count; k = k + 1) {
         let l = g.lights[k];
         let kind = i32(l.pos.w);
+        if (baked && kind == 0) {
+            continue;
+        }
         var to_light: vec3<f32>;
         var atten = 1.0;
         if (kind == 0) {
@@ -197,18 +210,20 @@ fn shade(o: MeshOut, base: vec4<f32>, nm: vec4<f32>) -> vec4<f32> {
 fn fs_mesh(o: MeshOut) -> @location(0) vec4<f32> {
     let base = textureSample(tex, samp, o.uv) * o.color;
     let nm = textureSample(normal_tex, samp, o.uv);
+    let lm = textureSample(lightmap_tex, samp, o.uv2);
     // Cut-out textures (fences, leaves): treat mostly clear texels as holes.
     if (base.a < 0.5) {
         discard;
     }
-    return encode(shade(o, vec4<f32>(base.rgb, 1.0), nm));
+    return encode(shade(o, vec4<f32>(base.rgb, 1.0), nm, lm));
 }
 
 @fragment
 fn fs_mesh_alpha(o: MeshOut) -> @location(0) vec4<f32> {
     let base = textureSample(tex, samp, o.uv) * o.color;
     let nm = textureSample(normal_tex, samp, o.uv);
-    return encode(shade(o, base, nm));
+    let lm = textureSample(lightmap_tex, samp, o.uv2);
+    return encode(shade(o, base, nm, lm));
 }
 
 // ---------- sky ----------
