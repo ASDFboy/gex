@@ -1,0 +1,15 @@
+[1, 2, 3, 4]
+[1, 2, 3]
+[1, 2, 3, 4]
+[99, 2, 3]
+10
+10
+[[health: 30], [health: 50]]
+[[health: 20], [health: 40]]
+[[health: 1], [health: 2]]
+Glex Alex Glex
+6 6
+7 7 3 [TRUE, 20] TRUE
+[inv: ["sword"]]
+[inv: ["axe"]]
+[health: 65]

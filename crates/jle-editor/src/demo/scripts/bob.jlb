@@ -1,0 +1,8 @@
+>> Bobs its node up and down.
+
+t = 0
+
+DEF on_step(dt) {
+	GLOBAL t += dt
+	self.y = 1.2 + SIN(t * 120) * 0.5
+}

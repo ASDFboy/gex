@@ -1,0 +1,20 @@
+(
+  format: 1,
+  root: (
+    name: "World",
+    kind: Some(Node3D),
+    scripts: ["res://scripts/world.jlb"],
+    children: [
+      (name: "Camera", kind: Some(Camera3D), transform: Some((position: (0.0, 3.0, 8.0), rotation: (-18.0, 0.0, 0.0)))),
+      (name: "Sun", kind: Some(Light3D), transform: Some((rotation: (-50.0, 30.0, 0.0)))),
+      (name: "Ground", kind: Some(Mesh3D), transform: Some((scale: (20.0, 1.0, 20.0))),
+        props: {"mesh": Text("plane"), "color": Color((0.25, 0.32, 0.38, 1.0))}),
+      (name: "Cube", kind: Some(Mesh3D), transform: Some((position: (-2.0, 1.0, 0.0))),
+        props: {"color": Color((0.4, 0.75, 0.96, 1.0))}, scripts: ["res://scripts/spinner.jlb"]),
+      (name: "Ball", kind: Some(Mesh3D), transform: Some((position: (2.0, 1.0, 0.0), scale: (1.5, 1.5, 1.5))),
+        props: {"mesh": Text("sphere"), "color": Color((0.9, 0.75, 0.2, 1.0))}, scripts: ["res://scripts/bob.jlb"]),
+      (name: "Help", kind: Some(Label2D), transform: Some((position: (24.0, 24.0, 0.0))),
+        props: {"text": Text("3D scene - Tab goes back"), "size": Num(18.0)}),
+    ],
+  ),
+)

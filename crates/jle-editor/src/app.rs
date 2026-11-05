@@ -1,0 +1,728 @@
+//! The editor window: launcher (project library) or the docked editor.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use eframe::egui::{self, RichText};
+use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
+use jle_core::project::{MountConfig, MountKind, Project};
+use jle_script::LogKind;
+
+use crate::state::{self, EditorState};
+use crate::{code, panels, templates, theme, viewport};
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum Tab {
+    Scene,
+    Hierarchy,
+    Inspector,
+    Events,
+    Assets,
+    Console,
+    Script(String),
+}
+
+struct Viewer<'a> {
+    st: &'a mut EditorState,
+    rs: Option<&'a egui_wgpu::RenderState>,
+    viewport_tex: &'a mut Option<egui::TextureId>,
+    previews: &'a mut HashMap<String, egui::TextureHandle>,
+    closed: Vec<String>,
+}
+
+impl TabViewer for Viewer<'_> {
+    type Tab = Tab;
+
+    fn id(&mut self, tab: &mut Tab) -> egui::Id {
+        egui::Id::new(format!("{:?}", tab))
+    }
+
+    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
+        match tab {
+            Tab::Scene => {
+                let name = self.st.scene_res.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
+                let dirty = if self.st.playing.is_none() && self.st.scene_dirty() { " *" } else { "" };
+                format!("🎬 {}{}", name, dirty).into()
+            }
+            Tab::Hierarchy => "🌲 Hierarchy".into(),
+            Tab::Inspector => "🔧 Inspector".into(),
+            Tab::Events => "⚡ Events".into(),
+            Tab::Assets => "📁 Assets".into(),
+            Tab::Console => {
+                let n = self.st.logs.iter().filter(|l| l.kind == LogKind::Error).count();
+                if n > 0 { format!("🖵 Console ({})", n).into() } else { "🖵 Console".into() }
+            }
+            Tab::Script(r) => {
+                let dirty = self.st.scripts.get(r).is_some_and(|s| s.dirty());
+                format!("📜 {}{}", r.rsplit('/').next().unwrap_or(r), if dirty { " *" } else { "" }).into()
+            }
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        match tab {
+            Tab::Scene => viewport::viewport(ui, self.st, self.rs, self.viewport_tex),
+            Tab::Hierarchy => panels::hierarchy(ui, self.st),
+            Tab::Inspector => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::inspector(ui, self.st));
+            }
+            Tab::Events => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::events(ui, self.st));
+            }
+            Tab::Assets => panels::assets(ui, self.st, self.previews),
+            Tab::Console => panels::console(ui, self.st),
+            Tab::Script(r) => code::script_ui(ui, self.st, r),
+        }
+    }
+
+    fn is_closeable(&self, tab: &Tab) -> bool {
+        matches!(tab, Tab::Script(_))
+    }
+
+    fn on_close(&mut self, tab: &mut Tab) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
+        if let Tab::Script(r) = tab {
+            self.closed.push(r.clone());
+        }
+        egui_dock::widgets::tab_viewer::OnCloseResponse::Close
+    }
+}
+
+fn default_dock() -> DockState<Tab> {
+    let mut d = DockState::new(vec![Tab::Scene]);
+    let t = d.main_surface_mut();
+    let [center, _left] = t.split_left(NodeIndex::root(), 0.18, vec![Tab::Hierarchy]);
+    let [center, right] = t.split_right(center, 0.74, vec![Tab::Inspector, Tab::Events]);
+    let _ = right;
+    let [_c, _b] = t.split_below(center, 0.72, vec![Tab::Console, Tab::Assets]);
+    d
+}
+
+pub struct EditorApp {
+    st: Option<EditorState>,
+    dock: DockState<Tab>,
+    viewport_tex: Option<egui::TextureId>,
+    previews: HashMap<String, egui::TextureHandle>,
+    // Launcher fields.
+    new_path: String,
+    new_name: String,
+    open_path: String,
+    launcher_error: String,
+    // Neovim-style command line.
+    cmd: Option<String>,
+    settings: SettingsForm,
+}
+
+#[derive(Default)]
+struct SettingsForm {
+    loaded: bool,
+    name: String,
+    main_scene: String,
+    hl2_path: String,
+    hl2_games: String,
+    hl2_on: bool,
+    message: String,
+}
+
+impl EditorApp {
+    pub fn new(cc: &eframe::CreationContext, project: Option<PathBuf>) -> EditorApp {
+        theme::apply(&cc.egui_ctx);
+        jle_script::commands::register();
+        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
+        let mut app = EditorApp {
+            st: None,
+            dock: default_dock(),
+            viewport_tex: None,
+            previews: HashMap::new(),
+            new_path: home.join("JLB Projects").join("my-game").to_string_lossy().into_owned(),
+            new_name: "My Game".into(),
+            open_path: String::new(),
+            launcher_error: String::new(),
+            cmd: None,
+            settings: SettingsForm::default(),
+        };
+        if let Some(p) = project {
+            app.open_project(&p);
+        }
+        app
+    }
+
+    fn open_project(&mut self, dir: &std::path::Path) {
+        match Project::open(dir) {
+            Ok(p) => {
+                state::remember_project(&p.dir);
+                self.st = Some(EditorState::new(p));
+                self.dock = default_dock();
+                self.viewport_tex = None;
+                self.previews.clear();
+                self.settings.loaded = false;
+            }
+            Err(e) => self.launcher_error = e,
+        }
+    }
+
+    fn launcher(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG).inner_margin(32.0)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("JLB ENGINE").size(30.0).strong().color(theme::ACCENT));
+                ui.label(RichText::new("2D & 3D · scenes all the way down · scripted in .jlb").color(theme::TEXT_DIM));
+            });
+            ui.add_space(16.0);
+            ui.columns(2, |cols| {
+                let ui = &mut cols[0];
+                ui.label(RichText::new("LIBRARY").strong().color(theme::TEXT_DIM));
+                ui.add_space(4.0);
+                let recent = state::recent_projects();
+                if recent.is_empty() {
+                    ui.label(RichText::new("No projects yet: make one, or try the demo.").color(theme::TEXT_DIM));
+                }
+                let mut open = None;
+                for p in recent {
+                    let name = Project::open(&p).map(|x| x.config.name).unwrap_or_default();
+                    egui::Frame::new().fill(theme::PANEL).corner_radius(4.0).inner_margin(10.0).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&name).size(16.0).strong());
+                                ui.label(RichText::new(p.to_string_lossy()).small().color(theme::TEXT_DIM));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.add(egui::Button::new(RichText::new("▶ OPEN").strong()).fill(theme::ACCENT_DIM)).clicked() {
+                                    open = Some(p.clone());
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(4.0);
+                }
+                if let Some(p) = open {
+                    self.open_project(&p);
+                }
+
+                let ui = &mut cols[1];
+                ui.label(RichText::new("NEW PROJECT").strong().color(theme::TEXT_DIM));
+                egui::Grid::new("new").num_columns(2).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut self.new_name);
+                    ui.end_row();
+                    ui.label("Folder");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.new_path).desired_width(320.0));
+                        if let Some(p) = browse_button(ui) {
+                            self.new_path = p;
+                        }
+                    });
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Create empty project").clicked() {
+                        let dir = PathBuf::from(&self.new_path);
+                        match templates::create_project(&dir, &self.new_name) {
+                            Ok(p) => self.open_project(&p.dir),
+                            Err(e) => self.launcher_error = e,
+                        }
+                    }
+                    if ui.button("Create the demo project").on_hover_text("a small 2D game and a 3D scene, with scripts to read").clicked() {
+                        let dir = PathBuf::from(&self.new_path);
+                        match templates::create_demo(&dir) {
+                            Ok(p) => self.open_project(&p.dir),
+                            Err(e) => self.launcher_error = e,
+                        }
+                    }
+                });
+                ui.add_space(16.0);
+                ui.label(RichText::new("OPEN A PROJECT FOLDER").strong().color(theme::TEXT_DIM));
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.open_path).hint_text("folder with project.jproj").desired_width(320.0));
+                    if let Some(p) = browse_button(ui) {
+                        self.open_path = p;
+                    }
+                    if ui.button("Open").clicked() {
+                        let p = PathBuf::from(&self.open_path);
+                        self.open_project(&p);
+                    }
+                });
+                if !self.launcher_error.is_empty() {
+                    ui.colored_label(theme::BAD, &self.launcher_error);
+                }
+            });
+        });
+    }
+
+    fn menu(&mut self, ui: &mut egui::Ui) {
+        let Some(st) = &mut self.st else { return };
+        let mut close = false;
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("Save  (Ctrl+S)").clicked() {
+                    st.save_all();
+                    ui.close();
+                }
+                ui.menu_button("Open scene", |ui| {
+                    for s in panels::list_files(st, "res://", "jscene") {
+                        if ui.button(&s).clicked() {
+                            st.open_scene(&s);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button("New scene", |ui| {
+                    for k in [jle_core::NodeKind::Node2D, jle_core::NodeKind::Node3D, jle_core::NodeKind::Node] {
+                        if ui.button(format!("with a {} root", k.name())).clicked() {
+                            let mut res = "res://scenes/new_scene.jscene".to_string();
+                            let mut i = 2;
+                            while st.project.res_to_path(&res).is_some_and(|p| p.exists()) {
+                                res = format!("res://scenes/new_scene_{}.jscene", i);
+                                i += 1;
+                            }
+                            if let Some(p) = st.project.res_to_path(&res) {
+                                let _ = std::fs::create_dir_all(p.parent().unwrap());
+                                let _ = std::fs::write(&p, jle_core::scene::new_scene_text("Root", k));
+                                st.open_scene(&res);
+                            }
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.button("Save scene as main scene").on_hover_text("the scene the game starts in").clicked() {
+                    if let Some(r) = st.scene_res.clone() {
+                        st.project.config.main_scene = r;
+                        let _ = st.project.save();
+                    }
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Project settings & mounts…").clicked() {
+                    st.show_settings = true;
+                    ui.close();
+                }
+                if ui.button("Close project").clicked() {
+                    st.stop();
+                    close = true;
+                    ui.close();
+                }
+            });
+            ui.menu_button("Edit", |ui| {
+                if ui.button("Undo  (Ctrl+Z)").clicked() {
+                    st.undo();
+                    ui.close();
+                }
+                if ui.button("Redo  (Ctrl+Y)").clicked() {
+                    st.redo();
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Duplicate  (Ctrl+D)").clicked() {
+                    st.duplicate_selected();
+                    ui.close();
+                }
+                if ui.button("Delete  (Del)").clicked() {
+                    st.delete_selected();
+                    ui.close();
+                }
+            });
+            ui.menu_button("Node", |ui| panels::add_node_menu(ui, st));
+            ui.menu_button("View", |ui| {
+                for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console] {
+                    if ui.button(format!("{:?}", t)).clicked() {
+                        if let Some(p) = self.dock.find_tab(&t) {
+                            let _ = self.dock.set_active_tab(p);
+                        } else {
+                            self.dock.push_to_focused_leaf(t);
+                        }
+                        ui.close();
+                    }
+                }
+                if ui.button("Reset layout").clicked() {
+                    self.dock = default_dock();
+                    ui.close();
+                }
+            });
+            // Play controls in the middle.
+            ui.add_space(24.0);
+            let playing = st.playing.is_some();
+            if !playing {
+                if ui.add(egui::Button::new(RichText::new("▶ Play").strong().color(theme::GOOD))).on_hover_text("F5: run this scene").clicked() {
+                    st.play();
+                }
+            } else if ui.add(egui::Button::new(RichText::new("■ Stop").strong().color(theme::BAD))).on_hover_text("Shift+F5").clicked() {
+                st.stop();
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
+            });
+        });
+        if close {
+            self.st = None;
+        }
+    }
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        let Some(st) = &mut self.st else { return };
+        let typing = ctx.egui_wants_keyboard_input();
+        let (f5, shift, save, undo, redo, dup, del, colon) = ctx.input_mut(|i| {
+            (
+                i.key_pressed(egui::Key::F5),
+                i.modifiers.shift,
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::D),
+                i.key_pressed(egui::Key::Delete),
+                i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == ":")),
+            )
+        });
+        if f5 {
+            if shift || st.playing.is_some() {
+                st.stop();
+            } else {
+                st.play();
+            }
+        }
+        if save {
+            st.save_all();
+        }
+        if typing {
+            return;
+        }
+        if undo {
+            st.undo();
+        }
+        if redo {
+            st.redo();
+        }
+        if dup {
+            st.duplicate_selected();
+        }
+        if del && st.playing.is_none() {
+            st.delete_selected();
+        }
+        if colon && st.playing.is_none() && self.cmd.is_none() {
+            self.cmd = Some(String::new());
+        }
+    }
+
+    /// The Neovim-style command line (press `:`).
+    fn command_line(&mut self, ui: &mut egui::Ui) {
+        let Some(st) = &mut self.st else { return };
+        egui::Panel::bottom("status").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if let Some(cmd) = &mut self.cmd {
+                    ui.label(RichText::new(":").monospace().color(theme::ACCENT));
+                    let r = ui.add(egui::TextEdit::singleline(cmd).font(egui::TextStyle::Monospace).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
+                    r.request_focus();
+                    let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+                    if esc {
+                        self.cmd = None;
+                    } else if enter {
+                        let c = std::mem::take(cmd);
+                        self.cmd = None;
+                        run_command(st, &c, &mut self.dock);
+                    }
+                } else {
+                    let mode = if st.playing.is_some() { RichText::new(" PLAY ").background_color(theme::GOOD) } else { RichText::new(" EDIT ").background_color(theme::ACCENT_DIM) };
+                    ui.label(mode.monospace().strong().color(theme::BG_DEEP));
+                    ui.label(RichText::new(&st.status).monospace().color(theme::TEXT_DIM));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new("press : for commands").small().color(theme::TEXT_DIM));
+                        if let Some(sel) = st.selected.filter(|s| st.view_tree().contains(*s)) {
+                            ui.label(RichText::new(st.view_tree().path_of(sel)).monospace().small());
+                        }
+                    });
+                }
+            });
+        });
+    }
+
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        let Some(st) = &mut self.st else { return };
+        if !st.show_settings {
+            self.settings.loaded = false;
+            return;
+        }
+        let f = &mut self.settings;
+        if !f.loaded {
+            f.loaded = true;
+            f.name = st.project.config.name.clone();
+            f.main_scene = st.project.config.main_scene.clone();
+            f.message.clear();
+            f.hl2_on = false;
+            f.hl2_games = "ep2, episodic, hl2".into();
+            f.hl2_path.clear();
+            for m in &st.project.config.mounts {
+                if let (true, MountKind::SourceGame { install, games }) = (m.scheme == "hl2", &m.kind) {
+                    f.hl2_on = true;
+                    f.hl2_path = install.to_string_lossy().into_owned();
+                    if !games.is_empty() {
+                        f.hl2_games = games.join(", ");
+                    }
+                }
+            }
+        }
+        let mut open = true;
+        egui::Window::new("Project settings").open(&mut open).default_width(520.0).show(ctx, |ui| {
+            egui::Grid::new("proj").num_columns(2).show(ui, |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut f.name);
+                ui.end_row();
+                ui.label("Main scene");
+                ui.text_edit_singleline(&mut f.main_scene);
+                ui.end_row();
+            });
+            ui.separator();
+            ui.label(RichText::new("Half-Life 2 assets").strong());
+            ui.label(
+                RichText::new("Reads textures, materials and other files straight from your own Steam install (hl2://…). Nothing is copied into the project, and exported games never include these files.")
+                    .small()
+                    .color(theme::TEXT_DIM),
+            );
+            ui.checkbox(&mut f.hl2_on, "Mount Half-Life 2 at hl2://");
+            ui.add_enabled_ui(f.hl2_on, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Install folder");
+                    ui.add(egui::TextEdit::singleline(&mut f.hl2_path).hint_text(r"…\steamapps\common\Half-Life 2").desired_width(300.0));
+                    if let Some(p) = browse_button(ui) {
+                        f.hl2_path = p;
+                    }
+                    if ui.button("Detect").on_hover_text("look in Steam's library folders").clicked() {
+                        match jle_assets::source::find_hl2() {
+                            Some(p) => f.hl2_path = p.to_string_lossy().into_owned(),
+                            None => f.message = "Couldn't find Half-Life 2 through Steam; enter the folder yourself.".into(),
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Game folders, first wins");
+                    ui.text_edit_singleline(&mut f.hl2_games);
+                });
+            });
+            if !f.message.is_empty() {
+                ui.colored_label(theme::WARN, &f.message);
+            }
+            ui.separator();
+            if ui.button("Apply").clicked() {
+                st.project.config.name = f.name.clone();
+                st.project.config.main_scene = f.main_scene.clone();
+                st.project.config.mounts.retain(|m| m.scheme != "hl2");
+                if f.hl2_on && !f.hl2_path.trim().is_empty() {
+                    let games = f.hl2_games.split(',').map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).collect();
+                    st.project.config.mounts.push(MountConfig { scheme: "hl2".into(), kind: MountKind::SourceGame { install: PathBuf::from(f.hl2_path.trim()), games } });
+                }
+                match st.project.save() {
+                    Ok(()) => {
+                        st.remount();
+                        let files: usize = st
+                            .vfs
+                            .mounts
+                            .iter()
+                            .map(|m| match &m.imp {
+                                jle_assets::vfs::MountImpl::Source(s) => s.file_count(),
+                                _ => 0,
+                            })
+                            .sum();
+                        f.message = if f.hl2_on { format!("Mounted: {} files in archives. Browse them in Assets → hl2://", files) } else { "Saved.".into() };
+                    }
+                    Err(e) => f.message = e,
+                }
+            }
+        });
+        if !open {
+            st.show_settings = false;
+        }
+    }
+}
+
+fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
+    let mut parts = c.trim().splitn(2, ' ');
+    let head = parts.next().unwrap_or("");
+    let arg = parts.next().unwrap_or("").trim();
+    match head {
+        "w" | "write" => st.save_all(),
+        "e" | "edit" => {
+            let res = if arg.contains("://") { arg.to_string() } else { format!("res://{}", arg) };
+            if res.ends_with(".jscene") {
+                st.open_scene(&res);
+            } else {
+                st.open_script(&res, None);
+            }
+        }
+        "play" | "run" => st.play(),
+        "stop" => st.stop(),
+        "add" | "node" => match jle_core::NodeKind::from_name(arg) {
+            Some(k) => {
+                st.add_node(k);
+            }
+            None => st.status = format!("no node kind called {:?}", arg),
+        },
+        "del" | "delete" => st.delete_selected(),
+        "dup" => st.duplicate_selected(),
+        "name" | "rename" => {
+            if let Some(id) = st.selected {
+                st.will_change("rename");
+                st.tree.nodes[id].name = arg.to_string();
+            }
+        }
+        "2d" => st.mode_3d = false,
+        "3d" => st.mode_3d = true,
+        "u" | "undo" => st.undo(),
+        "redo" => st.redo(),
+        "find" | "sel" => match st.tree.find_path(None, arg).or_else(|| st.tree.find_named(arg)) {
+            Some(id) => st.selected = Some(id),
+            None => st.status = format!("no node {:?}", arg),
+        },
+        "script" => {
+            if let Some(id) = st.selected {
+                st.new_script_for(id);
+            }
+        }
+        "layout" => *dock = default_dock(),
+        "q" | "quit" => std::process::exit(0),
+        "" => {}
+        _ => {
+            st.status = "commands: w · e <file> · play · stop · add <Kind> · del · dup · rename <name> · find <path> · script · 2d · 3d · u · redo · layout · q".into()
+        }
+    }
+}
+
+/// A "Browse…" button with the native folder dialog (Windows; elsewhere, type the path).
+fn browse_button(ui: &mut egui::Ui) -> Option<String> {
+    #[cfg(windows)]
+    {
+        if ui.button("Browse…").clicked() {
+            return rfd::FileDialog::new().pick_folder().map(|p| p.to_string_lossy().into_owned());
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = ui;
+    None
+}
+
+impl eframe::App for EditorApp {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if self.st.is_none() {
+            self.launcher(ui);
+            return;
+        }
+        self.shortcuts(&ctx);
+        if let Some(st) = &mut self.st {
+            st.pump_game();
+            if st.playing.is_some() {
+                ctx.request_repaint();
+            }
+            // Script tabs to open / close.
+            for r in std::mem::take(&mut st.open_requests) {
+                let t = Tab::Script(r);
+                match self.dock.find_tab(&t) {
+                    Some(p) => {
+                        let _ = self.dock.set_active_tab(p);
+                    }
+                    None => {
+                        // Next to the scene view.
+                        match self.dock.find_tab(&Tab::Scene) {
+                            Some(p) => {
+                                let _ = self.dock.set_focused_node_and_surface(p.node_path());
+                                self.dock.push_to_focused_leaf(t);
+                            }
+                            None => self.dock.push_to_first_leaf(t),
+                        }
+                    }
+                }
+            }
+        }
+        self.menu(ui);
+        if self.st.is_none() {
+            return;
+        }
+        self.command_line(ui);
+        self.settings_window(&ctx);
+        let rs = frame.wgpu_render_state();
+        let st = self.st.as_mut().unwrap();
+        let mut viewer = Viewer { st, rs, viewport_tex: &mut self.viewport_tex, previews: &mut self.previews, closed: Vec::new() };
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG)).show(ui, |ui| {
+            let mut style = Style::from_egui(ui.style().as_ref());
+            style.tab_bar.bg_fill = theme::BG_DEEP;
+            DockArea::new(&mut self.dock).style(style).show_inside(ui, &mut viewer);
+        });
+        for r in viewer.closed {
+            if self.st.as_ref().unwrap().scripts.get(&r).is_some_and(|s| !s.dirty()) {
+                self.st.as_mut().unwrap().scripts.remove(&r);
+            }
+        }
+    }
+
+    fn on_exit(&mut self) {
+        if let Some(st) = &mut self.st {
+            st.stop();
+        }
+    }
+}
+
+// ---------------------------------------------------------------- player
+
+/// Just the game, full-window (`jlb-engine --play <project>`).
+pub struct PlayerApp {
+    design: [u32; 2],
+    handle: jle_script::thread::GameHandle,
+    vfs: jle_assets::Vfs,
+    list: jle_core::render::RenderList,
+    renderer: Option<jle_render::Renderer>,
+    tex: Option<egui::TextureId>,
+    last: std::time::Instant,
+    ended: bool,
+}
+
+impl PlayerApp {
+    pub fn new(project: Project) -> Result<PlayerApp, String> {
+        jle_script::commands::register();
+        let text = project.read_text(&project.config.main_scene)?;
+        let tree = jle_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
+        let vfs = jle_assets::Vfs::new(&project.dir, &project.config);
+        let list = jle_core::render::extract(&tree);
+        Ok(PlayerApp { design: project.config.window_size, handle: jle_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false })
+    }
+}
+
+impl eframe::App for PlayerApp {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        for m in self.handle.poll() {
+            match m {
+                jle_script::thread::FromGame::Frame { list, logs, .. } => {
+                    self.list = list;
+                    for l in logs {
+                        eprintln!("{}", l.text);
+                    }
+                }
+                jle_script::thread::FromGame::Stopped { logs } => {
+                    for l in logs {
+                        eprintln!("{}", l.text);
+                    }
+                    self.ended = true;
+                }
+            }
+        }
+        if self.ended {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        let now = std::time::Instant::now();
+        let (keys, buttons) = ctx.input(|i| (viewport::input_keys(i), viewport::mouse_buttons(i)));
+        let Some(rs) = frame.wgpu_render_state() else { return };
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+            let rect = ui.max_rect();
+            let ppp = ctx.pixels_per_point();
+            let px = [(rect.width() * ppp) as u32, (rect.height() * ppp) as u32];
+            let cams = jle_render::Cameras::for_game(&self.list, px, self.design);
+            let m = ctx.input(|i| i.pointer.hover_pos()).map(|p| cams.screen_to_2d(jle_core::glam::Vec2::new(p.x * ppp, p.y * ppp))).unwrap_or_default();
+            if !self.handle.waiting {
+                self.handle.request_frame(now.duration_since(self.last).as_secs_f64(), keys, [m.x, m.y], buttons);
+                self.last = now;
+            }
+            let probs = viewport::paint_list(ui, rs, &mut self.renderer, &mut self.tex, &self.vfs, rect, &self.list, &cams, &jle_render::Overlay::default());
+            for p in probs {
+                eprintln!("{}", p);
+            }
+        });
+        ctx.request_repaint();
+    }
+}

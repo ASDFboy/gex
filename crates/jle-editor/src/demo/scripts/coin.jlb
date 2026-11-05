@@ -1,0 +1,13 @@
+>> A coin: bobs up and down, and disappears when the player touches it.
+
+start_y = self.y
+t = RANDOM(0, 100) / 10
+
+DEF on_step(dt) {
+	GLOBAL t += dt
+	self.y = start_y + SIN(t * 180) * 6
+}
+
+DEF on_coin_taken(which) {
+	IF which == self.id { DESTROY() }
+}

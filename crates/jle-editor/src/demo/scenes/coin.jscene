@@ -1,0 +1,11 @@
+(
+  format: 1,
+  root: (
+    name: "Coin",
+    kind: Some(Sprite2D),
+    props: {"width": Num(24.0), "height": Num(24.0), "color": Color((0.9, 0.75, 0.2, 1.0))},
+    scripts: ["res://scripts/coin.jlb"],
+    groups: ["coins"],
+    children: [(name: "Hitbox", kind: Some(Collider2D), props: {"width": Num(24.0), "height": Num(24.0)})],
+  ),
+)

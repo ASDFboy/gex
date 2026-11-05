@@ -1,0 +1,3 @@
+DEF on_press_tab() {
+	CHANGE_SCENE("res://scenes/main.jscene")
+}

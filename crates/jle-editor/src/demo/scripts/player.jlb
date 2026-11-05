@@ -1,0 +1,23 @@
+>> The player: moves with the arrow keys or WASD.
+>> Outside variables like `speed` belong to this node (each Player gets its own).
+
+speed = 300
+
+DEF on_step(dt) {
+	dx = 0
+	dy = 0
+	IF KEY_DOWN("left") OR KEY_DOWN("a") { dx -= 1 }
+	IF KEY_DOWN("right") OR KEY_DOWN("d") { dx += 1 }
+	IF KEY_DOWN("up") OR KEY_DOWN("w") { dy -= 1 }
+	IF KEY_DOWN("down") OR KEY_DOWN("s") { dy += 1 }
+	self.x += dx * speed * dt
+	self.y += dy * speed * dt
+	>> Stay on screen.
+	self.x = MAX(20, MIN(1260, self.x))
+	self.y = MAX(20, MIN(640, self.y))
+}
+
+DEF on_collide_start(other) {
+	IF NAME_OF(other) == "Floor" { RETURN }
+	EMIT("coin_taken", other)
+}

@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["third_party/jlb"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["ASDFboy", "Claude"]
+
+[workspace.dependencies]
+jle-core = { path = "crates/jle-core" }
+jle-script = { path = "crates/jle-script" }
+jle-assets = { path = "crates/jle-assets" }
+jle-render = { path = "crates/jle-render" }
+jlb = { path = "third_party/jlb" }
+glam = { version = "0.30", features = ["serde", "bytemuck"] }
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+slotmap = { version = "1", features = ["serde"] }
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "accesskit"] }
+egui_dock = "0.21"
+bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp"] }
+rfd = "0.15"
+egui-wgpu = "0.36"
+steamlocate = "2"
+
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

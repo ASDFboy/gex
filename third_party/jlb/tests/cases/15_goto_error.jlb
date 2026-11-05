@@ -1,0 +1,4 @@
+DEF f() {
+    GOTO nowhere
+}
+f()

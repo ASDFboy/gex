@@ -1,0 +1,12 @@
+score = 10
+lives = 3
+DEF load_save(file) {
+    data = "hello"
+    RETURN NUM(data)
+}
+DEF start_game() {
+    tries = 1
+    RETURN load_save("save.txt")
+}
+start_game()
+PRINT("never printed")

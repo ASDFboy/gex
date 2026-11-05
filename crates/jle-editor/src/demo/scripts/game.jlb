@@ -1,0 +1,31 @@
+>> The level: keeps the score and spawns a new coin every few seconds.
+
+score = 0
+
+DEF on_create() {
+	TIMER("spawn", 2.5, TRUE)
+}
+
+DEF on_coin_taken(which) {
+	GLOBAL score += 1
+	SET("Score", "text", "Score: " + score)
+}
+
+DEF on_timer_spawn() {
+	IF LEN(NODES("coins")) < 6 {
+		SPAWN("res://scenes/coin.jscene", RANDOM(60, 1220), RANDOM(120, 600))
+	}
+}
+
+DEF on_press_tab() {
+	CHANGE_SCENE("res://scenes/world3d.jscene")
+}
+
+>> A condition event: on_rich() runs once, the moment when_rich() turns TRUE.
+DEF when_rich() {
+	RETURN score >= 5
+}
+DEF on_rich() {
+	PRINT("Five coins! The level turns gold.")
+	SET("Floor", "color", [r: 0.9, g: 0.75, b: 0.2, a: 1])
+}

@@ -1,0 +1,8 @@
+>> Spins its node around the Y axis.
+
+speed = 90
+
+DEF on_step(dt) {
+	self.rotation_y += speed * dt
+	self.rotation_x += speed * 0.3 * dt
+}

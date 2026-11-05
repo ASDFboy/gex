@@ -1,0 +1,513 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 7f82806..b79f83c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -6,6 +6,10 @@ authors = ["ASDFboy", "Claude"]
+ description = "Interpreter for the .jlb programming language"
+ repository = "https://github.com/ASDFboy/jlb-rust"
+ 
++[lib]
++name = "jlb"
++path = "src/lib.rs"
++
+ [[bin]]
+ name = "jlb"
+ path = "src/main.rs"
+diff --git a/src/embed.rs b/src/embed.rs
+new file mode 100644
+index 0000000..46770e2
+--- /dev/null
++++ b/src/embed.rs
+@@ -0,0 +1,160 @@
++// Running .jlb code from inside another program.
++//
++// The usual shape (a game engine, say):
++//
++//     jlb::host::register(&["SPAWN", "EMIT"]);        // its own commands, once per thread
++//     let mut it = Interp::embedded(project_dir);
++//     it.host = Some(Box::new(my_host));
++//     let env = it.load_module(path, &[("self", me)])?; // one file = one set of variables
++//     if let Some(f) = Interp::env_get(&env, "on_step") {
++//         it.call_value(&f, vec![Value::Num(dt)])?;
++//     }
++//
++// A file loaded with load_module keeps its outside variables in its own Env for as long
++// as the host holds it, so the same file loaded twice gives two independent copies.
++
++use std::cell::RefCell;
++use std::io::Write;
++use std::path::{Path, PathBuf};
++use std::rc::Rc;
++
++use crate::interp::Interp;
++use crate::number::Number;
++use crate::value::*;
++
++impl Interp {
++    /// An interpreter ready to load files and call their functions, with `dir` as the
++    /// folder IMPORT and LOAD start from when no file is running.
++    pub fn embedded(dir: PathBuf) -> Interp {
++        let mut it = Interp::new();
++        it.start_session(dir);
++        it
++    }
++
++    /// Sends PRINT's output to `w` instead of standard output.
++    pub fn set_output(&mut self, w: Box<dyn Write>) {
++        let _ = self.out.flush();
++        self.out = std::io::BufWriter::new(w);
++    }
++
++    /// Runs the file at `path` in a fresh set of outside variables, after giving it the
++    /// `preset` ones, and gives that set back.
++    pub fn load_module(&mut self, path: &Path, preset: &[(&str, Value)]) -> R<Env> {
++        let env: Env = Rc::new(RefCell::new(OrdMap::new()));
++        {
++            let mut e = env.borrow_mut();
++            for (k, v) in preset {
++                e.insert(Rc::from(*k), new_slot(v.clone()));
++            }
++        }
++        let r = self.run_module(path, env.clone());
++        // An error part way can leave loop scopes behind in the base frame.
++        self.frames.truncate(1);
++        let _ = self.out.flush();
++        r.map(|_| env)
++    }
++
++    /// Calls a function value (your own or a built-in) with these inputs.
++    pub fn call_value(&mut self, f: &Value, args: Vec<Value>) -> R<Value> {
++        let r = match f {
++            Value::Func(func) => {
++                let slots = args.into_iter().map(|v| new_slot(copy_val(v))).collect();
++                self.enter_call(func.clone(), func.decl.clone(), slots)
++            }
++            Value::Builtin(name) => crate::builtins::call(self, name, args),
++            o => err(format!("a {} can't be called like a function", o.type_name())),
++        };
++        self.frames.truncate(1);
++        let _ = self.out.flush();
++        r
++    }
++
++    /// A variable from a loaded file's outside variables.
++    pub fn env_get(env: &Env, name: &str) -> Option<Value> {
++        env.borrow().get(name).map(|s| s.borrow().clone())
++    }
++
++    /// Sets (or makes) a loaded file's outside variable. Constants are left alone.
++    pub fn env_set(env: &Env, name: &str, v: Value) {
++        let mut e = env.borrow_mut();
++        if let Some(s) = e.get(name) {
++            if !s.is_const() {
++                *s.borrow_mut() = v;
++            }
++            return;
++        }
++        e.insert(Rc::from(name), new_slot(v));
++    }
++
++    /// The names and values of a loaded file's outside variables, in the order they were made.
++    pub fn env_vars(env: &Env) -> Vec<(Rc<str>, Value)> {
++        crate::interp::vars_of(&env.borrow())
++    }
++}
++
++/// A plain-text report for an error, or None for END and CANCEL (which aren't errors).
++pub fn fault_report(f: &Fault) -> Option<String> {
++    match f {
++        Fault::Error(e) | Fault::TaskError(e) => Some(report(e)),
++        Fault::End | Fault::Cancelled => None,
++    }
++}
++
++/// The file path and line of an error, for jumping to it in an editor.
++pub fn fault_location(f: &Fault) -> Option<(String, usize)> {
++    match f {
++        Fault::Error(e) | Fault::TaskError(e) => Some((e.path.clone(), e.line)),
++        _ => None,
++    }
++}
++
++/// Number helpers for hosts, since .jlb numbers aren't plain floats.
++pub fn num(v: f64) -> Value {
++    Value::Num(Number::from_f64(if v.is_finite() { v } else { 0.0 }).unwrap_or_else(|_| Number::int(0)))
++}
++
++pub fn as_f64(v: &Value) -> Option<f64> {
++    match v {
++        Value::Num(n) => Some(n.to_f64()),
++        _ => None,
++    }
++}
++
++/// A table with named entries, in order.
++pub fn named_table(entries: Vec<(&str, Value)>) -> Value {
++    let mut t = Table::new();
++    for (k, v) in entries {
++        t.named.insert(Rc::from(k), new_slot(v));
++    }
++    Value::new_table(t)
++}
++
++/// A table of items, numbered from 1.
++pub fn list_table(items: Vec<Value>) -> Value {
++    Value::new_table(Table::from_values(items))
++}
++
++/// A named entry of a table value.
++pub fn table_get(t: &Value, name: &str) -> Option<Value> {
++    match t {
++        Value::Table(rc, _) => rc.named.get(name).map(|s| s.borrow().clone()),
++        _ => None,
++    }
++}
++
++impl std::fmt::Debug for Fault {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Fault::Error(e) => write!(f, "Error({})", report(e)),
++            Fault::TaskError(e) => write!(f, "TaskError({})", report(e)),
++            Fault::End => write!(f, "End"),
++            Fault::Cancelled => write!(f, "Cancelled"),
++        }
++    }
++}
++
++impl std::fmt::Debug for Value {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        write!(f, "{}", display(self))
++    }
++}
+diff --git a/src/graphics.rs b/src/graphics.rs
+index e62d483..fe9c889 100644
+--- a/src/graphics.rs
++++ b/src/graphics.rs
+@@ -1450,7 +1450,7 @@ pub fn call(it: &mut Interp, name: &'static str, mut a: Vec<Value>) -> R<Value>
+ }
+ 
+ /// The Rust and C sides agree on the options struct.
+-#[cfg(test)]
++#[doc(hidden)]
+ pub fn check_layout() -> bool {
+     // SAFETY: a plain query.
+     unsafe { gfx_style_size() == std::mem::size_of::<GfxStyle>() }
+diff --git a/src/host.rs b/src/host.rs
+new file mode 100644
+index 0000000..96cddef
+--- /dev/null
++++ b/src/host.rs
+@@ -0,0 +1,58 @@
++// Lets another program (a game engine, an editor) run .jlb code with commands of its own.
++//
++// A host registers its command names once per thread with `register`, then gives the
++// interpreter a `Host` (Interp::host). Host commands follow the language's own rule:
++// ALL CAPS, like every built-in. A host may also take over a built-in's name (a game
++// engine answering KEY_DOWN from its own input, say); anything it doesn't handle falls
++// through to the built-in command.
++
++use std::cell::RefCell;
++
++use crate::interp::Interp;
++use crate::value::*;
++
++thread_local! {
++    static NAMES: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
++}
++
++/// Adds command names the lexer and parser accept on this thread. Each name must be
++/// ALL CAPS letters, digits and `_`. Registering a name twice is harmless.
++pub fn register(names: &[&str]) {
++    NAMES.with(|n| {
++        let mut n = n.borrow_mut();
++        for name in names {
++            assert!(
++                name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'),
++                "host command names must be ALL CAPS: {}",
++                name
++            );
++            if !n.contains(name) {
++                n.push(Box::leak(name.to_string().into_boxed_str()));
++            }
++        }
++    });
++}
++
++/// The registered name equal to `w`, if any.
++pub fn find(w: &str) -> Option<&'static str> {
++    NAMES.with(|n| n.borrow().iter().find(|k| **k == w).copied())
++}
++
++/// Every registered host command name (for editors: highlighting, completion).
++pub fn names() -> Vec<&'static str> {
++    NAMES.with(|n| n.borrow().clone())
++}
++
++pub trait Host {
++    /// Runs the command `name`, or gives the inputs back (`Err`) to let the built-in
++    /// command of that name run instead. While a host command runs, the host is out of
++    /// the interpreter, so `.jlb` code it calls back into reaches only the built-ins.
++    fn call(&mut self, it: &mut Interp, name: &'static str, args: Vec<Value>) -> Result<R<Value>, Vec<Value>>;
++}
++
++pub(crate) fn try_host(it: &mut Interp, name: &'static str, args: Vec<Value>) -> Result<R<Value>, Vec<Value>> {
++    let Some(mut h) = it.host.take() else { return Err(args) };
++    let r = h.call(it, name, args);
++    it.host = Some(h);
++    r
++}
+diff --git a/src/interp.rs b/src/interp.rs
+index e8831ae..33630ac 100644
+--- a/src/interp.rs
++++ b/src/interp.rs
+@@ -2,7 +2,7 @@
+ 
+ use std::cell::RefCell;
+ use std::collections::{HashMap, HashSet};
+-use std::io::{BufWriter, Stdout, Write};
++use std::io::{BufWriter, Write};
+ use std::path::{Path, PathBuf};
+ use std::rc::Rc;
+ use std::time::{Instant, SystemTime, UNIX_EPOCH};
+@@ -42,7 +42,8 @@ pub enum Key {
+ 
+ pub struct Interp {
+     pub frames: Vec<Frame>,
+-    pub out: BufWriter<Stdout>,
++    /// Where PRINT goes: standard output, unless a host program sends it elsewhere.
++    pub out: BufWriter<Box<dyn Write>>,
+     pub start: Instant,
+     pub last_delta: Instant,
+     pub rng: u64,
+@@ -68,6 +69,10 @@ pub struct Interp {
+     pub task_fault: Option<Fault>,
+     /// Windows, the drawing target and frame rate (graphics.rs).
+     pub gfx: crate::graphics::Gfx,
++    /// A program embedding the interpreter (see host.rs) can add its own commands.
++    pub host: Option<Box<dyn crate::host::Host>>,
++    /// Set by the embedding program to stop the code that's running (see host.rs).
++    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+ }
+ 
+ fn key_from(v: &Value) -> R<Key> {
+@@ -383,7 +388,7 @@ impl Interp {
+         let seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(42);
+         Interp {
+             frames: Vec::new(),
+-            out: BufWriter::new(std::io::stdout()),
++            out: BufWriter::new(Box::new(std::io::stdout())),
+             start: Instant::now(),
+             last_delta: Instant::now(),
+             rng: seed ^ 0x9E37_79B9_7F4A_7C15,
+@@ -400,6 +405,8 @@ impl Interp {
+             steps: 0,
+             task_fault: None,
+             gfx: Default::default(),
++            host: None,
++            cancel: None,
+         }
+     }
+ 
+@@ -521,7 +528,7 @@ impl Interp {
+         Ok((prog, Rc::new(Source { name: name.clone(), dir, canon })))
+     }
+ 
+-    fn run_module(&mut self, path: &Path, env: Env) -> R<()> {
++    pub(crate) fn run_module(&mut self, path: &Path, env: Env) -> R<()> {
+         let (prog, src) = self.load_program(path)?;
+         if self.frames.len() > 200 {
+             return err("too many files loading each other");
+@@ -965,6 +972,11 @@ impl Interp {
+ 
+     fn exec_stmt(&mut self, s: &Stmt) -> R<Flow> {
+         self.frame_mut().line = s.line;
++        if let Some(c) = &self.cancel {
++            if c.load(std::sync::atomic::Ordering::Relaxed) {
++                return Err(Fault::Cancelled);
++            }
++        }
+         // With tasks running, each one gets a turn every so many statements.
+         if self.baton.is_some() {
+             if let Err(mut f) = self.tick() {
+@@ -1610,6 +1622,13 @@ impl Interp {
+                 for a in args {
+                     v.push(self.eval(a)?);
+                 }
++                // An embedding program's commands come first (see host.rs).
++                if self.host.is_some() {
++                    v = match crate::host::try_host(self, name, v) {
++                        Ok(r) => return r,
++                        Err(v) => v,
++                    };
++                }
+                 builtins::call(self, name, v)
+             }
+             Value::Func(func) => self.call_func(func, args),
+diff --git a/src/lexer.rs b/src/lexer.rs
+index 19dc270..947d57c 100644
+--- a/src/lexer.rs
++++ b/src/lexer.rs
+@@ -78,7 +78,7 @@ pub fn find_word(w: &str) -> Option<&'static str> {
+     if w == "STRING" {
+         return Some("TEXT");
+     }
+-    KEYWORDS.iter().chain(BUILTINS.iter()).chain(crate::graphics::NAMES.iter()).find(|k| **k == w).copied()
++    KEYWORDS.iter().chain(BUILTINS.iter()).chain(crate::graphics::NAMES.iter()).find(|k| **k == w).copied().or_else(|| crate::host::find(w))
+ }
+ 
+ fn snake(word: &str) -> String {
+diff --git a/src/lib.rs b/src/lib.rs
+new file mode 100644
+index 0000000..211d74c
+--- /dev/null
++++ b/src/lib.rs
+@@ -0,0 +1,20 @@
++// The .jlb interpreter as a library. The `jlb` program (src/main.rs) is one user of it;
++// a game engine or editor can be another (see embed.rs and host.rs).
++
++pub mod ast;
++pub mod builtins;
++pub mod debug;
++pub mod embed;
++pub mod graphics;
++pub mod host;
++pub mod ide;
++pub mod interp;
++pub mod lexer;
++pub mod number;
++pub mod ops;
++pub mod parser;
++pub mod tasks;
++pub mod value;
++
++pub use interp::Interp;
++pub use value::{Env, Fault, Value, R};
+diff --git a/src/main.rs b/src/main.rs
+index 1d5b7e8..d8fa4bc 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -2,18 +2,10 @@
+ // Usage: jlb [--pause | --ide] <file.jlb>, jlb --check <file.jlb | ->, jlb --repl, jlb --debug <file.jlb>
+ // A program whose first line is `>> @interpreter c` is handed to jlb-c (next to jlb).
+ 
+-mod ast;
+-mod builtins;
+-mod debug;
+-mod graphics;
+-mod ide;
+-mod interp;
+-mod lexer;
+-mod number;
+-mod ops;
+-mod parser;
+-mod tasks;
+-mod value;
++// The interpreter itself lives in the library (src/lib.rs), so other programs,
++// like a game engine, can run .jlb code too.
++#[allow(unused_imports)]
++use jlb::{debug, graphics, ide, interp};
+ 
+ use std::io::{BufRead, Write};
+ use std::path::{Path, PathBuf};
+diff --git a/src/parser.rs b/src/parser.rs
+index 6b3aafc..748ffed 100644
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -671,7 +671,7 @@ impl Parser {
+                     self.advance();
+                     Ok(Expr::Drop(self.args()?))
+                 }
+-                _ if BUILTINS.contains(&k) || crate::graphics::NAMES.contains(&k) => {
++                _ if BUILTINS.contains(&k) || crate::graphics::NAMES.contains(&k) || crate::host::find(k).is_some() => {
+                     self.advance();
+                     Ok(Expr::Builtin(k))
+                 }
+diff --git a/tests/embed.rs b/tests/embed.rs
+new file mode 100644
+index 0000000..6811fd3
+--- /dev/null
++++ b/tests/embed.rs
+@@ -0,0 +1,83 @@
++// The library side: loading files, calling their functions, host commands.
++
++use std::io::Write;
++use std::sync::{Arc, Mutex};
++
++use jlb::embed::{as_f64, fault_report, named_table, num, table_get};
++use jlb::host::{self, Host};
++use jlb::{Interp, Value, R};
++
++struct Shared(Arc<Mutex<Vec<u8>>>);
++impl Write for Shared {
++    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
++        self.0.lock().unwrap().extend_from_slice(b);
++        Ok(b.len())
++    }
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++struct Game {
++    spawned: Arc<Mutex<Vec<String>>>,
++}
++impl Host for Game {
++    fn call(&mut self, _it: &mut Interp, name: &'static str, a: Vec<Value>) -> Result<R<Value>, Vec<Value>> {
++        match name {
++            "SPAWN" => {
++                self.spawned.lock().unwrap().push(format!("{}", jlb::value::display(&a[0])));
++                Ok(Ok(num(7.0)))
++            }
++            "KEY_DOWN" => Ok(Ok(Value::Bool(true))),
++            _ => Err(a),
++        }
++    }
++}
++
++#[test]
++fn modules_hosts_and_calls() {
++    host::register(&["SPAWN"]);
++    let dir = std::env::temp_dir().join("jlb-embed-test");
++    std::fs::create_dir_all(&dir).unwrap();
++    let file = dir.join("player.jlb");
++    std::fs::write(
++        &file,
++        "hp = 10\nDEF on_step(dt) {\n    self.x += dt * 2\n    GLOBAL hp -= 1\n    IF KEY_DOWN(\"left\") { PRINT(\"left\") }\n    RETURN SPAWN(\"bullet\")\n}\n",
++    )
++    .unwrap();
++
++    let out = Arc::new(Mutex::new(Vec::new()));
++    let spawned = Arc::new(Mutex::new(Vec::new()));
++    let mut it = Interp::embedded(dir.clone());
++    it.set_output(Box::new(Shared(out.clone())));
++    it.host = Some(Box::new(Game { spawned: spawned.clone() }));
++
++    let me = named_table(vec![("x", num(1.0))]);
++    let a = it.load_module(&file, &[("self", me.clone())]).unwrap();
++    let b = it.load_module(&file, &[("self", named_table(vec![("x", num(0.0))]))]).unwrap();
++    let f = Interp::env_get(&a, "on_step").unwrap();
++    let r = it.call_value(&f, vec![num(0.5)]).unwrap();
++    assert_eq!(as_f64(&r), Some(7.0));
++    // The table given as `self` is shared, so the host sees the change.
++    assert_eq!(as_f64(&table_get(&Interp::env_get(&a, "self").unwrap(), "x").unwrap()), Some(2.0));
++    assert_eq!(as_f64(&Interp::env_get(&a, "hp").unwrap()), Some(9.0));
++    assert_eq!(as_f64(&Interp::env_get(&b, "hp").unwrap()), Some(10.0), "each load has its own variables");
++    assert_eq!(String::from_utf8(out.lock().unwrap().clone()).unwrap(), "left\n");
++    assert_eq!(spawned.lock().unwrap().as_slice(), ["bullet"]);
++
++    // Errors come back as reports with the file and line.
++    std::fs::write(dir.join("bad.jlb"), "DEF on_step() {\n    x = 1 + TRUE\n}\n").unwrap();
++    let e = it.load_module(&dir.join("bad.jlb"), &[]).unwrap();
++    let f = Interp::env_get(&e, "on_step").unwrap();
++    let report = fault_report(&it.call_value(&f, vec![]).unwrap_err()).unwrap();
++    assert!(report.contains("bad.jlb, line 2"), "{}", report);
++
++    // Stopping from outside.
++    std::fs::write(dir.join("loop.jlb"), "DEF on_step() {\n    WHILE TRUE { }\n}\n").unwrap();
++    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
++    it.cancel = Some(flag.clone());
++    let l = it.load_module(&dir.join("loop.jlb"), &[]).unwrap();
++    flag.store(true, std::sync::atomic::Ordering::Relaxed);
++    let f = Interp::env_get(&l, "on_step").unwrap();
++    assert!(fault_report(&it.call_value(&f, vec![]).unwrap_err()).is_none());
++}

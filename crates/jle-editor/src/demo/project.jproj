@@ -1,0 +1,6 @@
+(
+    name: "JLB Demo",
+    main_scene: "res://scenes/main.jscene",
+    window_size: (1280, 720),
+    mounts: [],
+)
