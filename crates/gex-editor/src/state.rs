@@ -403,6 +403,92 @@ impl EditorState {
         }
     }
 
+    /// Saves a branch as its own scene file, then puts an instance of that file where the
+    /// branch was (so the branch can be reused in other scenes and stays in sync).
+    pub fn save_branch_as_scene(&mut self, id: NodeId) -> Option<String> {
+        let n = self.tree.get(id)?;
+        if n.from_instance {
+            self.status = "this node belongs to an instanced scene; open that scene to change it".into();
+            return None;
+        }
+        let slug: String = n.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+        let slug = if slug.trim_matches('_').is_empty() { "branch".to_string() } else { slug };
+        let mut res = format!("res://scenes/{}.jscene", slug);
+        let mut k = 2;
+        while self.project.res_to_path(&res).is_some_and(|p| p.exists()) {
+            res = format!("res://scenes/{}_{}.jscene", slug, k);
+            k += 1;
+        }
+        // The branch on its own, with its root at the origin.
+        let mut sub = SceneTree::new();
+        let root = sub.copy_subtree(&self.tree, id, None);
+        sub.nodes[root].transform = Default::default();
+        sub.nodes[root].parent = None;
+        let saved = scene::save(&sub, &self.reader());
+        let text = match saved {
+            Ok(t) => t,
+            Err(e) => {
+                self.log(LogKind::Error, e.0);
+                return None;
+            }
+        };
+        let path = self.project.res_to_path(&res)?;
+        if let Some(d) = path.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        if let Err(e) = std::fs::write(&path, text) {
+            self.log(LogKind::Error, format!("{}: {}", path.display(), e));
+            return None;
+        }
+        self.will_change("branch to scene");
+        let (name, transform, visible, parent) = {
+            let n = &self.tree.nodes[id];
+            (n.name.clone(), n.transform, n.visible, n.parent)
+        };
+        let index = parent.and_then(|p| self.tree.nodes[p].children.iter().position(|c| *c == id));
+        let reader = |p: &str| self.project.read_text(p);
+        let mut tree = std::mem::take(&mut self.tree);
+        let made = scene::instance(&mut tree, parent, &res, &reader);
+        self.tree = tree;
+        match made {
+            Ok(new_id) => {
+                self.tree.remove(id);
+                let n = &mut self.tree.nodes[new_id];
+                n.name = name;
+                n.transform = transform;
+                n.visible = visible;
+                if let (Some(p), Some(i)) = (parent, index) {
+                    self.tree.reparent(new_id, p, Some(i));
+                } else if parent.is_none() {
+                    self.tree.root = Some(new_id);
+                }
+                self.selection.clear();
+                self.selected = Some(new_id);
+                self.log(LogKind::Info, format!("saved the branch as {}", res));
+                Some(res)
+            }
+            Err(e) => {
+                self.log(LogKind::Error, e.0);
+                None
+            }
+        }
+    }
+
+    /// Turns an instance into ordinary nodes of this scene (it stops following its file).
+    pub fn make_local(&mut self, id: NodeId) {
+        if self.tree.get(id).is_none_or(|n| n.instance_of.is_none()) {
+            return;
+        }
+        self.will_change("make local");
+        let mut all = Vec::new();
+        self.tree.walk_from(id, &mut all);
+        for n in all {
+            let node = &mut self.tree.nodes[n];
+            node.instance_of = None;
+            node.from_instance = false;
+        }
+    }
+
     /// Selects just this node.
     pub fn select(&mut self, id: Option<NodeId>) {
         self.selected = id;
@@ -674,7 +760,9 @@ impl EditorState {
             match m {
                 FromGame::Frame { list, tree, logs } => {
                     p.list = list;
-                    p.tree = tree;
+                    if let Some(t) = tree {
+                        p.tree = t;
+                    }
                     self.logs.extend(logs);
                 }
                 FromGame::Stopped { logs } => {

@@ -3,7 +3,7 @@
   root: (
     name: "World",
     kind: Some(Node3D),
-    scripts: ["res://scripts/world.jlb"],
+    scripts: ["res://scripts/world.jlb", "res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Camera", kind: Some(Camera3D), transform: Some((position: (0.0, 3.0, 8.0), rotation: (-18.0, 0.0, 0.0)))),
       (name: "Sun", kind: Some(Light3D), transform: Some((rotation: (-50.0, 30.0, 0.0)))),

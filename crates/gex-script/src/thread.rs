@@ -23,7 +23,8 @@ pub enum ToGame {
 }
 
 pub enum FromGame {
-    Frame { list: RenderList, tree: SceneTree, logs: Vec<LogLine> },
+    /// `tree` (a copy for the editor's inspector) comes about ten times a second.
+    Frame { list: RenderList, tree: Option<SceneTree>, logs: Vec<LogLine> },
     /// A breakpoint (or a step) stopped the game; it waits for `resume` / `step`.
     Paused(Paused),
     Stopped { logs: Vec<LogLine> },
@@ -174,6 +175,7 @@ fn pause_hook(bp: Arc<Breakpoints>, tx: Sender<FromGame>, debug: Arc<std::sync::
 fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<ToGame>, tx: Sender<FromGame>, bp: Arc<Breakpoints>, debug_rx: Receiver<Debug>) {
     let debug = Arc::new(std::sync::Mutex::new(debug_rx));
     let mut game = Game::new(project.clone(), tree, Some(cancel.clone()));
+    let mut frames: u64 = 0;
     game.set_pause_hook(pause_hook(bp.clone(), tx.clone(), debug.clone(), cancel.clone()));
     while let Ok(msg) = rx.recv() {
         match msg {
@@ -200,7 +202,8 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                 }
                 let quit = game.st.borrow().quit;
                 let list = game.render_list();
-                let tree = game.tree().clone();
+                frames += 1;
+                let tree = (frames % 6 == 1).then(|| game.tree().clone());
                 let logs = game.take_logs();
                 if tx.send(FromGame::Frame { list, tree, logs }).is_err() || quit {
                     break;

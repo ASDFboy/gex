@@ -57,7 +57,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("DRAW_CIRCLE", "(x, y, radius, color, filled)", "draws a circle this frame"),
     ("DRAW_TEXT", "(x, y, text, size, color)", "draws text this frame"),
     ("DRAW_IMAGE", "(file, x, y, w, h)", "draws an image this frame"),
-    ("KEY_DOWN", "(key)", "TRUE while a key (or mouse button) is held"),
+    ("KEY_DOWN", "(key)", "TRUE while a key is held (mouse buttons: \"mouse_left\", \"mouse_right\", \"mouse_middle\")"),
     ("KEY_PRESSED", "(key)", "TRUE on the frame a key went down"),
     ("KEY_RELEASED", "(key)", "TRUE on the frame a key went up"),
     ("MOUSE_X", "()", "mouse x in game coordinates"),

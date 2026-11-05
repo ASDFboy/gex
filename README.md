@@ -20,26 +20,54 @@ cargo run --release -p gex-editor              # the editor
 cargo test --workspace                         # everything's tests, including the demo game
 ```
 
-## What works today (milestone 0)
+## What's in it
 
 - **Scenes all the way down.** A scene is a node tree saved as a `.jscene` file. Any node can be
   an instance of another scene, with overrides on top; a scene whose root is an instance is an
-  inherited scene. Saving writes instances by reference, so editing `enemy.jscene` updates every
-  enemy everywhere.
-- **2D and 3D nodes** in one tree: `Node2D`, `Sprite2D`, `Label2D`, `Camera2D`, `Collider2D`,
-  `Node3D`, `Mesh3D` (cube / sphere / plane), `Camera3D`, `Light3D`.
+  inherited scene. Instances are saved by reference, so editing `enemy.jscene` updates every
+  enemy everywhere. Right-click a branch → **Save branch as scene** to make one.
+- **2D:** sprites with sprite-sheet animation, text, cameras, trigger areas, physics bodies
+  (dynamic / kinematic / static, boxes, circles, capsules), tilemaps painted in the editor with
+  automatic collision and A* pathfinding, and `DRAW_*` commands for quick shapes.
+- **3D:** cubes, spheres, planes and models (glTF/GLB with skeletal animation, OBJ, Source
+  `.mdl` and `.bsp`), directional / point / spot lights with shadows, sky, fog, physics bodies
+  and mesh collision.
+- **UI:** panels, labels, buttons, text inputs, progress bars and images, anchored to the screen.
+- **Sound:** sound effects, music, Sound nodes (wav, ogg, mp3, flac).
+- **Input:** keyboard, mouse and gamepads.
 - **Scripting in .jlb.** Any number of scripts per node. A script's outside variables are that
   node's instance variables, `self` is the node, and events are functions with fixed names
   (`on_create`, `on_step(dt)`, `on_collide_start(other)`, `on_press_space`, `on_timer_<name>`,
-  custom `on_<event>` via `SEND`/`EMIT`, and condition events: `when_x()` turning TRUE runs
-  `on_x()`). See [docs/SCRIPTING.md](docs/SCRIPTING.md).
-- **The editor:** dockable panels (hierarchy with drag-to-reparent, inspector, events, assets,
-  console, script tabs), 2D/3D scene view with picking and dragging, undo/redo, a Neovim-style
-  `:` command line, Play/Stop in the editor with live values in the inspector, and a script
-  editor with JLB highlighting and live syntax checks from the interpreter itself.
-- **Assets:** `res://` for project files, plus mounts. A Source-engine install (Half-Life 2 and
-  its episodes) mounts at `hl2://` and is read in place, loose files and `.vpk` archives, with
-  `.vtf` textures and `.vmt` materials usable on sprites and meshes. See [docs/HL2.md](docs/HL2.md).
+  `on_pressed_<button>`, custom `on_<event>` via `SEND`/`EMIT`, and condition events:
+  `when_x()` turning TRUE runs `on_x()`). Save data between runs with `SAVE_DATA`.
+  See [docs/SCRIPTING.md](docs/SCRIPTING.md).
+- **The editor:** dockable panels (hierarchy, inspector, events, assets, console), scene tabs,
+  2D/3D view with move / rotate / scale tools and box select, undo/redo, copy/paste, a Neovim-style
+  `:` command line, optional Vim keys in the script editor, completion, go to definition,
+  find/replace, breakpoints with a debugger, Play/Stop with live values in the inspector, and
+  scripts that reload while the game runs.
+- **Export:** File → Export game makes a folder with the game and a player that runs it.
+- **Half-Life 2 assets**, read in place from your own Steam install (`hl2://`): VPK archives,
+  VTF textures, VMT materials, models, maps and sounds. They are never copied into exports.
+  See [docs/HL2.md](docs/HL2.md).
+
+## Editor keys
+
+| Key | |
+|---|---|
+| F5 / Shift+F5 | play / stop |
+| F8 / F10 | continue / step one line (paused at a breakpoint) |
+| Ctrl+S | save everything |
+| Ctrl+Z / Ctrl+Y | undo / redo |
+| Ctrl+C / Ctrl+V / Ctrl+D | copy / paste / duplicate nodes |
+| Delete | delete the selected nodes |
+| W / E / R | move / rotate / scale tool |
+| `:` | the command line (`:w`, `:q`, `:play`, `:add Sprite2D`, `:e scenes/level.jscene`, `:branch`, `:vim`, `:2d`, `:3d`…) |
+| Right-drag / middle-drag (or Shift+right-drag) / wheel | look around (3D) or pan (2D) / pan / zoom in the scene view |
+| F12 or Ctrl+click | go to a function's definition (script editor) |
+| Ctrl+F | find and replace (script editor) |
+
+More: [docs/NODES.md](docs/NODES.md) (every node kind and its properties).
 
 ## Layout
 

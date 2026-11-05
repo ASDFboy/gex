@@ -168,6 +168,11 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
             }
             st.delete_selected();
         }
+        Some(Action::SaveBranch(id)) if !playing => {
+            st.save_branch_as_scene(id);
+        }
+        Some(Action::MakeLocal(id)) if !playing => st.make_local(id),
+        Some(Action::OpenScene(res)) if !playing => st.open_scene(&res),
         Some(Action::Duplicate(id)) if !playing => {
             if !st.is_selected(id) {
                 st.select(Some(id));
@@ -201,6 +206,9 @@ enum Action {
     Duplicate(NodeId),
     Move(NodeId, bool),
     AddChild(NodeId, NodeKind),
+    SaveBranch(NodeId),
+    MakeLocal(NodeId),
+    OpenScene(String),
 }
 
 fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id: NodeId, action: &mut Option<Action>, playing: bool) {
@@ -248,6 +256,22 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
                 *action = Some(Action::Duplicate(id));
                 ui.close();
             }
+            ui.separator();
+            if !n.from_instance && n.instance_of.is_none() && ui.button("Save branch as scene").on_hover_text("make this node and its children a reusable .jscene").clicked() {
+                *action = Some(Action::SaveBranch(id));
+                ui.close();
+            }
+            if let Some(p) = &n.instance_of {
+                if ui.button("Open its scene").clicked() {
+                    *action = Some(Action::OpenScene(p.clone()));
+                    ui.close();
+                }
+                if !n.from_instance && ui.button("Make local").on_hover_text("stop following the scene file: its nodes become this scene's own").clicked() {
+                    *action = Some(Action::MakeLocal(id));
+                    ui.close();
+                }
+            }
+            ui.separator();
             if ui.button("Move up").clicked() {
                 *action = Some(Action::Move(id, true));
                 ui.close();
@@ -515,16 +539,26 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
 pub const EVENTS: &[(&str, &str)] = &[
     ("on_create()", "once the scene is loaded (or after SPAWN)"),
     ("on_step(dt)", "every frame"),
-    ("on_physics(dt)", "60 times a second"),
+    ("on_physics(dt)", "60 times a second, before physics moves things"),
+    ("on_draw()", "every frame, after on_step: the place for DRAW_* commands"),
     ("on_destroy()", "before the node is removed"),
     ("on_key_pressed(key)", "any key goes down"),
     ("on_key_released(key)", "any key goes up"),
-    ("on_press_space()", "one key goes down (rename: on_press_a, on_press_left...)"),
+    ("on_press_space()", "one key goes down (rename: on_press_a, on_press_left, on_press_pad_a...)"),
+    ("on_release_space()", "one key goes up"),
     ("on_mouse_pressed(button, x, y)", "a mouse click"),
-    ("on_collide_start(other)", "a Collider2D starts touching another"),
+    ("on_mouse_moved(x, y)", "the mouse moved"),
+    ("on_mouse_wheel(amount)", "the wheel turned"),
+    ("on_collide_start(other)", "this node's collider or body starts touching another"),
     ("on_collide(other)", "every physics step while touching"),
     ("on_collide_end(other)", "they stop touching"),
-    ("on_timer(name)", "a TIMER(name, seconds) finishes"),
+    ("on_timer(name)", "a TIMER(name, seconds) on this node finishes"),
+    ("on_timer_spawn()", "the TIMER named spawn finishes (rename for yours)"),
+    ("on_pressed()", "this Button was clicked"),
+    ("on_pressed_play()", "any Button named Play was clicked (runs on every script)"),
+    ("on_text_changed(text)", "this TextInput's text changed"),
+    ("on_text_submitted(text)", "Enter was pressed in this TextInput"),
+    ("on_animation_end(name)", "a non-looping animation on this node finished"),
     ("when_ready()", "a condition: return TRUE to run on_ready()"),
     ("on_ready()", "runs when when_ready() turns TRUE"),
 ];

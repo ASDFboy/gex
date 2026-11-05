@@ -1,0 +1,38 @@
+>> A platformer character: a kinematic Body2D moved with MOVE, which slides along
+>> walls and floors and gives back TRUE when we end up standing on something.
+
+speed = 260
+gravity = 1400
+jump = 560
+vy = 0
+on_floor = FALSE
+
+DEF on_physics(dt) {
+	dx = AXIS("left_x")
+	IF KEY_DOWN("left") OR KEY_DOWN("a") OR KEY_DOWN("pad_left") { dx = -1 }
+	IF KEY_DOWN("right") OR KEY_DOWN("d") OR KEY_DOWN("pad_right") { dx = 1 }
+	wants_jump = KEY_PRESSED("space") OR KEY_PRESSED("w") OR KEY_PRESSED("up") OR KEY_PRESSED("pad_a")
+	IF wants_jump AND on_floor {
+		GLOBAL vy = 0 - jump
+		PLAY_SOUND("res://assets/jump.wav")
+	}
+	GLOBAL vy = MIN(vy + gravity * dt, 900)
+	GLOBAL on_floor = MOVE(NULL, dx * speed * dt, vy * dt)
+	IF on_floor AND vy > 0 { GLOBAL vy = 0 }
+	>> Bumping a ceiling ends the jump early.
+	above = RAYCAST(self.x, self.y - 23, 0, -1, 3, self.id)
+	IF above !== NULL AND vy < 0 { GLOBAL vy = 0 }
+	>> Fell off the world: back to the start.
+	IF self.y > 900 {
+		self.x = 120
+		self.y = 560
+		GLOBAL vy = 0
+	}
+}
+
+DEF on_collide_start(other) {
+	>> Run into the crate or the ball: knock it upward.
+	IF NAME_OF(other) == "Crate" OR NAME_OF(other) == "Ball" {
+		IMPULSE(other, 0, -250)
+	}
+}

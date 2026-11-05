@@ -3,7 +3,7 @@
   root: (
     name: "Level",
     kind: Some(Node2D),
-    scripts: ["res://scripts/game.jlb"],
+    scripts: ["res://scripts/game.jlb", "res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Floor", kind: Some(Sprite2D), transform: Some((position: (640.0, 690.0, 0.0))),
         props: {"width": Num(1280.0), "height": Num(60.0), "color": Color((0.16, 0.28, 0.37, 1.0)), "layer": Num(-1.0)}),

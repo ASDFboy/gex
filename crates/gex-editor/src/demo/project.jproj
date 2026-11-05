@@ -1,6 +1,6 @@
 (
     name: "GEX Demo",
-    main_scene: "res://scenes/main.jscene",
+    main_scene: "res://scenes/menu.jscene",
     window_size: (1280, 720),
     mounts: [],
 )

@@ -733,10 +733,21 @@ fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
             }
         }
         "layout" => *dock = default_dock(),
+        "vim" => {
+            st.vim_enabled = !st.vim_enabled;
+            let _ = std::fs::create_dir_all(state::config_dir());
+            let _ = std::fs::write(state::config_dir().join("vim"), if st.vim_enabled { "on" } else { "off" });
+            st.status = format!("Vim keys {}", if st.vim_enabled { "on" } else { "off" });
+        }
+        "branch" => {
+            if let Some(id) = st.selected {
+                st.save_branch_as_scene(id);
+            }
+        }
         "q" | "quit" => std::process::exit(0),
         "" => {}
         _ => {
-            st.status = "commands: w · e <file> · play · stop · add <Kind> · del · dup · rename <name> · find <path> · script · 2d · 3d · u · redo · layout · q".into()
+            st.status = "commands: w · e <file> · play · stop · add <Kind> · del · dup · rename <name> · find <path> · script · branch · vim · 2d · 3d · u · redo · layout · q".into()
         }
     }
 }

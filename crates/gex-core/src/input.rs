@@ -14,23 +14,36 @@ pub struct Input {
     pub mouse: [f32; 2],
     pub mouse_down: HashSet<String>,
     pub mouse_pressed: HashSet<String>,
+    pub mouse_released: HashSet<String>,
 }
 
 impl Input {
+    /// Keys by name; mouse buttons as "mouse_left", "mouse_right", "mouse_middle" (so the
+    /// left arrow and the left button don't get mixed up).
     pub fn key_down(&self, k: &str) -> bool {
-        self.down.contains(k) || self.mouse_down.contains(k)
+        match k.strip_prefix("mouse_") {
+            Some(b) => self.mouse_down.contains(b),
+            None => self.down.contains(k),
+        }
     }
     pub fn key_pressed(&self, k: &str) -> bool {
-        self.pressed.contains(k) || self.mouse_pressed.contains(k)
+        match k.strip_prefix("mouse_") {
+            Some(b) => self.mouse_pressed.contains(b),
+            None => self.pressed.contains(k),
+        }
     }
     pub fn key_released(&self, k: &str) -> bool {
-        self.released.contains(k)
+        match k.strip_prefix("mouse_") {
+            Some(b) => self.mouse_released.contains(b),
+            None => self.released.contains(k),
+        }
     }
     /// Applies one frame of events: what's down now, given what was down before.
     pub fn next_frame(&mut self, now_down: HashSet<String>, mouse: [f32; 2], mouse_down: HashSet<String>) {
         self.pressed = now_down.difference(&self.down).cloned().collect();
         self.released = self.down.difference(&now_down).cloned().collect();
         self.mouse_pressed = mouse_down.difference(&self.mouse_down).cloned().collect();
+        self.mouse_released = self.mouse_down.difference(&mouse_down).cloned().collect();
         self.down = now_down;
         self.mouse = mouse;
         self.mouse_down = mouse_down;

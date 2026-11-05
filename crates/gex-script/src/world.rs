@@ -103,6 +103,8 @@ pub struct WorldState {
     pub draws: Vec<crate::commands::Draw>,
     /// Sprite animations: node → (animation, time, ended).
     pub(crate) anims: HashMap<NodeId, (String, f64, bool)>,
+    /// Tilemap collision boxes: node → (what they were made from, boxes).
+    pub(crate) tile_boxes: HashMap<NodeId, (String, Vec<crate::physics::StaticBox2>)>,
     /// Collision meshes made from Mesh3D models: node → (what they were made from, mesh).
     pub(crate) mesh_colliders: HashMap<NodeId, (String, crate::physics::StaticMesh)>,
 }
@@ -172,6 +174,7 @@ impl Game {
             draws: Vec::new(),
             anims: HashMap::new(),
             mesh_colliders: HashMap::new(),
+            tile_boxes: HashMap::new(),
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
@@ -630,15 +633,25 @@ impl Game {
         let mut st = self.st.borrow_mut();
         let st = &mut *st;
         let mut boxes = Vec::new();
+        let mut keep = HashSet::new();
         for id in st.tree.walk() {
             let n = &st.tree.nodes[id];
             if n.kind != NodeKind::TileMap2D || !n.prop("solid").is_none_or(|v| v.as_bool()) {
                 continue;
             }
+            keep.insert(id);
+            let m = st.tree.global_matrix(id);
+            let key = format!("{}|{}|{:?}|{:?}|{:?}", n.text("tiles"), n.text("solid_tiles"), n.props.get("tile_width"), n.props.get("tile_height"), m);
+            if let Some((k, b)) = st.tile_boxes.get(&id) {
+                if *k == key {
+                    boxes.extend_from_slice(b);
+                    continue;
+                }
+            }
+            let first = boxes.len();
             let grid = gex_core::tiles::parse(n.text("tiles"));
             let only = gex_core::tiles::solid_set(n.text("solid_tiles"));
             let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
-            let m = st.tree.global_matrix(id);
             let solid = |t: i32| t >= 0 && only.as_ref().is_none_or(|o| o.contains(&t));
             for (r, row) in grid.iter().enumerate() {
                 let mut c = 0;
@@ -657,7 +670,9 @@ impl Game {
                     boxes.push(crate::physics::StaticBox2 { owner: id, center: (lo + hi) / 2.0, half: (hi - lo) / 2.0 });
                 }
             }
+            st.tile_boxes.insert(id, (key, boxes[first..].to_vec()));
         }
+        st.tile_boxes.retain(|k, _| keep.contains(k));
         st.physics.statics_2d = boxes;
         // Mesh3D nodes with collision on become static triangle meshes.
         let mut meshes = Vec::new();

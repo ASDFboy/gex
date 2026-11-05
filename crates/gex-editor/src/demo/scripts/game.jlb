@@ -9,6 +9,11 @@ DEF on_create() {
 DEF on_coin_taken(which) {
 	GLOBAL score += 1
 	SET("Score", "text", "Score: " + score)
+	>> Keep the best score between runs (the menu shows it).
+	best = LOAD_DATA("best")
+	IF best == NULL OR score > best {
+		SAVE_DATA("best", score)
+	}
 }
 
 DEF on_timer_spawn() {
