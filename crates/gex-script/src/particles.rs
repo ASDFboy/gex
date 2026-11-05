@@ -82,11 +82,11 @@ impl Emitter {
 
 /// Moves every particle on, spawns new ones from emitting nodes, and forgets emitters whose
 /// node is gone.
-pub fn update(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter>, dt: f32) {
+pub fn update(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter>, dt: f32, frozen: &[NodeId]) {
     emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.nodes[*id].kind == NodeKind::Particles2D));
     for id in tree.walk() {
         let n = &tree.nodes[id];
-        if n.kind != NodeKind::Particles2D {
+        if n.kind != NodeKind::Particles2D || frozen.contains(&id) {
             continue;
         }
         let e = emitters.entry(id).or_insert_with(|| Emitter { seed: (id_bits(id) | 1).wrapping_mul(0x9E37_79B9), ..Default::default() });

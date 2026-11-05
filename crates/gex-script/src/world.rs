@@ -37,6 +37,17 @@ pub struct LogLine {
     pub line: usize,
 }
 
+/// Nodes in this group keep running while the game is paused (a pause menu).
+pub const PAUSE_GROUP: &str = "while_paused";
+
+/// Events that stop for paused nodes. Custom events (SEND / EMIT), on_create and on_destroy
+/// still run.
+fn pausable(handler: &str) -> bool {
+    ["on_step", "on_physics", "on_draw", "on_timer", "on_key_", "on_press_", "on_release_", "on_mouse_", "on_collide", "on_pressed", "on_text_", "on_animation_end", "on_tween_end", "when_"]
+        .iter()
+        .any(|p| handler.starts_with(p))
+}
+
 /// One frame's input from the window.
 #[derive(Clone, Debug, Default)]
 pub struct FrameInput {
@@ -143,11 +154,20 @@ pub struct WorldState {
     pub shake: (f32, f32),
     shake_seed: u32,
     pub(crate) tweens: Vec<crate::tween::Tween>,
+    /// PAUSE: only nodes in the "while_paused" group keep getting frame, input and timer events.
+    pub paused: bool,
+    /// TIME_SCALE: 0.5 is slow motion, 2 is double speed.
+    pub time_scale: f64,
     /// Particles2D emitters and their live particles.
     pub(crate) particles: HashMap<NodeId, crate::particles::Emitter>,
 }
 
 impl WorldState {
+    /// Paused, and this node isn't one that runs while paused.
+    pub fn frozen(&self, id: NodeId) -> bool {
+        self.paused && !self.tree.get(id).is_some_and(|n| n.groups.iter().any(|g| g == PAUSE_GROUP))
+    }
+
     pub fn log(&mut self, kind: LogKind, text: impl Into<String>) {
         self.logs.push(LogLine { kind, text: text.into(), file: None, line: 0 });
     }
@@ -217,6 +237,8 @@ impl Game {
             tile_boxes: HashMap::new(),
             particles: HashMap::new(),
             tweens: Vec::new(),
+            paused: false,
+            time_scale: 1.0,
             shared: HashMap::new(),
             fade: None,
             cam2_center: None,
@@ -451,6 +473,9 @@ impl Game {
             }
             (s.env.clone(), s.res.clone())
         };
+        if pausable(handler) && self.st.borrow().frozen(id) {
+            return None;
+        }
         let f = Interp::env_get(&env, handler)?;
         if !f.is_func() {
             return None;
@@ -492,8 +517,10 @@ impl Game {
     /// One frame of the game.
     pub fn step(&mut self, input: FrameInput) {
         self.start();
-        let dt = input.dt.clamp(0.0, 0.25);
+        let real_dt = input.dt.clamp(0.0, 0.25);
         let moved;
+        let paused;
+        let dt;
         {
             let mut st = self.st.borrow_mut();
             moved = st.input.mouse != input.mouse;
@@ -501,8 +528,13 @@ impl Game {
             st.axes = input.axes;
             st.wheel = input.wheel;
             st.mouse_delta = input.mouse_delta;
+            paused = st.paused;
+            // While paused, the nodes that still run see real time; the rest is frozen.
+            dt = if paused { real_dt } else { real_dt * st.time_scale.max(0.0) };
             st.dt = dt;
-            st.time += dt;
+            if !paused {
+                st.time += dt;
+            }
             st.draws.clear();
         }
         // UI first: a click belongs to the frame it happened in.
@@ -539,7 +571,9 @@ impl Game {
         }
         self.tile_statics();
         // Fixed-rate physics and collisions.
-        self.physics_acc += dt;
+        if !paused {
+            self.physics_acc += dt;
+        }
         let step = 1.0 / PHYSICS_HZ;
         let mut steps = 0;
         while self.physics_acc >= step && steps < 5 {
@@ -559,13 +593,15 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            crate::particles::update(&st.tree, &mut st.particles, dt as f32);
+            let frozen: Vec<NodeId> = if st.paused { st.particles.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
+            crate::particles::update(&st.tree, &mut st.particles, dt as f32, &frozen);
         }
         self.timers(dt);
         let finished = {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            crate::tween::update(&mut st.tree, &mut st.tweens, dt)
+            let frozen: Vec<NodeId> = if st.paused { st.tweens.iter().map(|t| t.node).filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
+            crate::tween::update(&mut st.tree, &mut st.tweens, dt, &frozen)
         };
         for (id, prop) in finished {
             self.run(id, "on_tween_end", vec![Value::text(&prop)]);
@@ -643,6 +679,9 @@ impl Game {
             let st = &mut *st;
             let ids: Vec<NodeId> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Sprite2D).collect();
             for id in ids {
+                if st.frozen(id) {
+                    continue;
+                }
                 let n = &st.tree.nodes[id];
                 let name = n.text("animation").to_string();
                 if name.is_empty() {
@@ -680,7 +719,7 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let ids: Vec<NodeId> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Mesh3D).collect();
+            let ids: Vec<NodeId> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Mesh3D && !st.frozen(*i)).collect();
             for id in ids {
                 let n = &st.tree.nodes[id];
                 let name = n.text("animation").to_string();
@@ -891,10 +930,15 @@ impl Game {
         let mut fire = Vec::new();
         {
             let mut st = self.st.borrow_mut();
-            let tree = st.tree.clone();
+            let st = &mut *st;
+            let frozen: HashSet<NodeId> = if st.paused { st.timers.iter().map(|t| t.node).filter(|i| st.frozen(*i)).collect() } else { HashSet::new() };
+            let tree = &st.tree;
             st.timers.retain_mut(|t| {
                 if !tree.contains(t.node) {
                     return false;
+                }
+                if frozen.contains(&t.node) {
+                    return true;
                 }
                 t.left -= dt;
                 if t.left > 0.0 {
@@ -922,7 +966,7 @@ impl Game {
         for (id, list) in &self.scripts {
             for (i, s) in list.iter().enumerate() {
                 for h in &s.handlers {
-                    if h.starts_with("when_") && !s.dead {
+                    if h.starts_with("when_") && !s.dead && !self.st.borrow().frozen(*id) {
                         checks.push((*id, i, h.clone()));
                     }
                 }

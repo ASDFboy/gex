@@ -588,3 +588,45 @@ fn tutorial_two_snippets_work() {
     assert!(logs.iter().all(|l| l.kind != LogKind::Error), "{:?}", logs);
     assert!(logs.iter().any(|l| l.text == "down"));
 }
+
+#[test]
+fn pause_and_time_scale() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), children: [
+        (name: "Mover", kind: Some(Sprite2D), scripts: ["res://mover.jlb"]),
+        (name: "Menu", kind: Some(Node), groups: ["while_paused"], scripts: ["res://menu.jlb"]),
+    ]))"#;
+    let mover = "ticks = 0\nDEF on_create() {\n\tTIMER(\"t\", 0.5, TRUE)\n\tTWEEN(NULL, \"y\", 100, 1, \"linear\")\n}\nDEF on_step(dt) {\n\tself.x += 60 * dt\n}\nDEF on_timer_t() {\n\tGLOBAL ticks += 1\n\tself.ticks = ticks\n}\n";
+    let menu = "DEF on_press_p() {\n\tPAUSE(!PAUSED())\n}\nDEF on_press_s() {\n\tTIME_SCALE(0.5)\n}\nDEF on_step(dt) {\n\tself.alive = GAME_TIME()\n}\n";
+    let p = project("pause", &[("main.jscene", scene), ("mover.jlb", mover), ("menu.jlb", menu)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    let f = |g: &mut Game, k: &[&str]| g.frame(0.1, k.iter().map(|x| x.to_string()).collect(), [0.0; 2], HashSet::new());
+    for _ in 0..6 {
+        f(&mut g, &[]);
+    }
+    let x_of = |g: &Game| {
+        let t = g.tree();
+        let m = t.find_path(None, "Root/Mover").unwrap();
+        (t.nodes[m].transform.position.x, t.nodes[m].transform.position.y, t.nodes[m].num("ticks", 0.0))
+    };
+    let (x0, y0, t0) = x_of(&g);
+    assert!((x0 - 36.0).abs() < 0.01 && t0 == 1.0, "{} {}", x0, t0);
+    f(&mut g, &["p"]);
+    for _ in 0..10 {
+        f(&mut g, &[]);
+    }
+    let (x1, y1, t1) = x_of(&g);
+    assert_eq!((x1, y1, t1), (x0, y0, t0), "frozen while paused");
+    let menu_node = g.tree().find_path(None, "Root/Menu").unwrap();
+    assert!(g.tree().nodes[menu_node].prop("alive").is_some(), "the menu still runs");
+    f(&mut g, &["p"]);
+    f(&mut g, &[]);
+    let (x2, _, _) = x_of(&g);
+    assert!((x2 - x0 - 12.0).abs() < 0.01, "moving again (the unpause frame and the next): {}", x2);
+    f(&mut g, &["s"]);
+    let (x3, _, _) = x_of(&g);
+    f(&mut g, &[]);
+    let (x4, _, _) = x_of(&g);
+    assert!((x4 - x3 - 3.0).abs() < 0.01, "half speed: {}", x4 - x3);
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:?}", errs);
+}

@@ -707,7 +707,7 @@ fn preview_particles(ctx: &egui::Context, st: &mut EditorState, list: &mut gex_c
     if !any && st.preview_particles.is_empty() {
         return;
     }
-    gex_script::particles::update(&st.tree, &mut st.preview_particles, dt);
+    gex_script::particles::update(&st.tree, &mut st.preview_particles, dt, &[]);
     gex_script::particles::draw(&st.tree, &st.preview_particles, list);
     if st.preview_particles.values().any(|e| e.count() > 0) {
         ctx.request_repaint();

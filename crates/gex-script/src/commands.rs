@@ -76,6 +76,9 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("REMEMBER", "(name, value)", "keeps a value while the game runs, across CHANGE_SCENE (lives, score, inventory)"),
     ("RECALL", "(name)", "a value kept with REMEMBER, or NULL"),
     ("SHAKE", "(strength, seconds)", "shakes the camera: strength in pixels (2D), dying away over seconds"),
+    ("PAUSE", "(on)", "pauses the game (TRUE) or carries on (FALSE): only nodes in the group while_paused keep running, for a pause menu"),
+    ("PAUSED", "()", "TRUE while the game is paused"),
+    ("TIME_SCALE", "(scale)", "how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale"),
     ("QUIT", "()", "stops the game"),
 ];
 
@@ -637,6 +640,17 @@ impl Host for EngineHost {
                     st.shake = (s, s / t);
                 }
                 Ok(Value::Null)
+            }
+            "PAUSE" => {
+                st.paused = a.first().is_none_or(|v| !matches!(v, Value::Bool(false) | Value::Null));
+                Ok(Value::Null)
+            }
+            "PAUSED" => Ok(Value::Bool(st.paused)),
+            "TIME_SCALE" => {
+                if let Some(v) = a.first().and_then(as_f64) {
+                    st.time_scale = v.clamp(0.0, 100.0);
+                }
+                Ok(num(st.time_scale))
             }
             "QUIT" => {
                 st.quit = true;

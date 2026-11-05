@@ -188,7 +188,28 @@ The script editor completes these as you type and shows each one's inputs.
 |---|---|
 | `CHANGE_SCENE(scene, fade, color)` | switches to another scene file; with fade (seconds) the screen fades to color (default black) and back |
 | `QUIT()` | stops the game |
+| `PAUSE(on)` | pauses the game (TRUE) or carries on (FALSE): only nodes in the group while_paused keep running, for a pause menu |
+| `PAUSED()` | TRUE while the game is paused |
+| `TIME_SCALE(scale)` | how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale |
 | `SHAKE(strength, seconds)` | shakes the camera: strength in pixels (2D), dying away over seconds |
+
+## Pausing
+
+`PAUSE(TRUE)` freezes the game: frame events (`on_step`, `on_physics`, `on_draw`), input
+events, timers, tweens, animations, particles, physics and collisions all stop. Nodes in the
+group **`while_paused`** (add it in the Inspector's Groups) carry on, so put your pause menu's
+script there:
+
+```
+>> On a node in the while_paused group.
+DEF on_press_escape() {
+	PAUSE(!PAUSED())
+	SET("PauseMenu", "visible", PAUSED())
+}
+```
+
+Custom events (`SEND`, `EMIT`), `on_create` and `on_destroy` still run while paused.
+`TIME_SCALE(0.3)` gives slow motion: `dt`, timers, tweens, animations and physics all slow down.
 
 ## Physics in short
 

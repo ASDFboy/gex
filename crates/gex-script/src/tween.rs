@@ -116,11 +116,14 @@ fn write(tree: &mut SceneTree, id: NodeId, k: &str, v: Val) {
 }
 
 /// Moves every tween on; gives the ones that finished (node, property).
-pub fn update(tree: &mut SceneTree, tweens: &mut Vec<Tween>, dt: f64) -> Vec<(NodeId, String)> {
+pub fn update(tree: &mut SceneTree, tweens: &mut Vec<Tween>, dt: f64, frozen: &[NodeId]) -> Vec<(NodeId, String)> {
     let mut done = Vec::new();
     tweens.retain_mut(|tw| {
         if !tree.contains(tw.node) {
             return false;
+        }
+        if frozen.contains(&tw.node) {
+            return true;
         }
         tw.time += dt;
         let k = ease(&tw.ease, tw.time / tw.length.max(1e-6));
