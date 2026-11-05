@@ -53,6 +53,7 @@ outside variables.
 | `on_pressed()` | on a Button's own scripts: it was clicked |
 | `on_pressed_<button name>()` | on every script: a Button with that name was clicked (`Start Game` → `on_pressed_start_game`) |
 | `on_text_changed(text)` / `on_text_submitted(text)` | on a TextInput's scripts |
+| `on_tween_end(property)` | a `TWEEN` on this node finished |
 | `on_animation_end(name)` | a non-looping sprite or model animation finished |
 | `on_<event>(...)` | `SEND(node, "<event>", ...)` or `EMIT("<event>", ...)` |
 | `when_<name>()` → `on_<name>()` | a condition: `on_<name>` runs once each time `when_<name>` turns TRUE |
@@ -106,6 +107,8 @@ The script editor completes these as you type and shows each one's inputs.
 | `SEND(node, event, inputs...)` | runs on_<event>(inputs...) on one node |
 | `EMIT(event, inputs...)` | runs on_<event>(inputs...) on every node that has it |
 | `TIMER(name, seconds, repeat)` | runs on_timer(name) and on_timer_<name>() later |
+| `TWEEN(node, property, to, seconds, ease)` | slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property) |
+| `TWEEN_STOP(node, property)` | stops a node's tweens (just that property's, if given), leaving the value where it is |
 | `TIMER_STOP(name)` | cancels this node's timer |
 
 ### Physics and queries

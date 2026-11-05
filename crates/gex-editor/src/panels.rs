@@ -560,6 +560,7 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("on_text_changed(text)", "this TextInput's text changed"),
     ("on_text_submitted(text)", "Enter was pressed in this TextInput"),
     ("on_animation_end(name)", "a non-looping animation on this node finished"),
+    ("on_tween_end(property)", "a TWEEN of one of this node's properties finished"),
     ("when_ready()", "a condition: return TRUE to run on_ready()"),
     ("on_ready()", "runs when when_ready() turns TRUE"),
 ];

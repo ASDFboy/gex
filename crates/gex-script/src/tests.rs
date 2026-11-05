@@ -490,3 +490,29 @@ fn every_command_is_documented() {
     let missing: Vec<&str> = crate::commands::COMMANDS.iter().map(|c| c.0).filter(|n| !doc.contains(&format!("`{}(", n))).collect();
     assert!(missing.is_empty(), "add these to docs/SCRIPTING.md: {:?}", missing);
 }
+
+#[test]
+fn tweens_move_props_and_report_the_end() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), scripts: ["res://t.jlb"], children: [
+        (name: "Box", kind: Some(Sprite2D)),
+    ]))"#;
+    let script = "DEF on_create() {\n    TWEEN(\"Box\", \"x\", 100, 1, \"linear\")\n    TWEEN(\"Box\", \"color\", \"#ff0000\", 0.5)\n    TWEEN(NULL, \"x\", 50, 0.25)\n}\nDEF on_tween_end(p) {\n    PRINT(\"done \" + p)\n}\n";
+    let p = project("tween", &[("main.jscene", scene), ("t.jlb", script)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..30 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let bx = g.tree().find_path(None, "Root/Box").unwrap();
+    let x = g.tree().nodes[bx].transform.position.x;
+    assert!((x - 50.0).abs() < 2.5, "halfway along a linear tween: {}", x);
+    for _ in 0..40 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let t = g.tree();
+    assert_eq!(t.nodes[bx].transform.position.x, 100.0);
+    assert_eq!(t.nodes[bx].color("color"), [1.0, 0.0, 0.0, 1.0]);
+    drop(t);
+    let logs: Vec<String> = g.take_logs().into_iter().map(|l| l.text).collect();
+    assert!(logs.iter().any(|l| l == "done x"), "the root's own tween ended: {:?}", logs);
+    assert_eq!(logs.iter().filter(|l| l.starts_with("done")).count(), 1, "on_tween_end runs on the tweened node only");
+}

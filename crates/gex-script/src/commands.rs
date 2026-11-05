@@ -30,6 +30,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("SEND", "(node, event, inputs...)", "runs on_<event>(inputs...) on one node"),
     ("EMIT", "(event, inputs...)", "runs on_<event>(inputs...) on every node that has it"),
     ("TIMER", "(name, seconds, repeat)", "runs on_timer(name) and on_timer_<name>() later"),
+    ("TWEEN", "(node, property, to, seconds, ease)", "slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property)"),
+    ("TWEEN_STOP", "(node, property)", "stops a node's tweens (just that property's, if given), leaving the value where it is"),
     ("TIMER_STOP", "(name)", "cancels this node's timer"),
     ("COLLIDING", "(node)", "the nodes touching this one now, as a table of ids"),
     ("MOVE", "(node, dx, dy, dz)", "moves a body, sliding along walls; gives TRUE when it's on the floor after"),
@@ -391,6 +393,40 @@ impl Host for EngineHost {
                 let n = num_arg(&a, 1, 20.0).max(0.0) as usize;
                 let st = &mut *st;
                 st.particles.entry(id).or_default().spawn(&st.tree, id, n);
+                Ok(Value::Null)
+            }
+            "TWEEN" => {
+                let id = target(st, a.first())?;
+                let prop = text_arg(name, &a, 1)?;
+                let Some(from) = crate::tween::read(&st.tree, id, &prop) else {
+                    return err(format!("{} has no number or color property {:?} to tween", st.tree.nodes[id].name, prop));
+                };
+                let to = match (from, a.get(2)) {
+                    (crate::tween::Val::Color(_), Some(v)) => crate::tween::Val::Color(color_arg(Some(v))),
+                    (_, Some(v)) => match as_f64(v) {
+                        Some(x) => crate::tween::Val::Num(x),
+                        None => return err("TWEEN needs a number to go to"),
+                    },
+                    _ => return err("TWEEN needs a value to go to"),
+                };
+                let ease = match a.get(4) {
+                    Some(Value::Null) | None => "out".to_string(),
+                    Some(_) => text_arg(name, &a, 4)?,
+                };
+                if !crate::tween::EASES.contains(&ease.as_str()) {
+                    return err(format!("no ease called {:?}; try {}", ease, crate::tween::EASES.join(", ")));
+                }
+                st.tweens.retain(|t| !(t.node == id && t.prop == prop));
+                st.tweens.push(crate::tween::Tween { node: id, prop, from, to, time: 0.0, length: num_arg(&a, 3, 0.5).max(0.0), ease });
+                Ok(Value::Null)
+            }
+            "TWEEN_STOP" => {
+                let id = target(st, a.first())?;
+                let prop = match a.get(1) {
+                    Some(Value::Null) | None => None,
+                    Some(_) => Some(text_arg(name, &a, 1)?),
+                };
+                st.tweens.retain(|t| !(t.node == id && prop.as_ref().is_none_or(|p| *p == t.prop)));
                 Ok(Value::Null)
             }
             "MOVE" => {

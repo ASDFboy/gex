@@ -142,6 +142,7 @@ pub struct WorldState {
     /// SHAKE: strength left (pixels in 2D, centimetres in 3D) and how fast it fades per second.
     pub shake: (f32, f32),
     shake_seed: u32,
+    pub(crate) tweens: Vec<crate::tween::Tween>,
     /// Particles2D emitters and their live particles.
     pub(crate) particles: HashMap<NodeId, crate::particles::Emitter>,
 }
@@ -215,6 +216,7 @@ impl Game {
             mesh_colliders: HashMap::new(),
             tile_boxes: HashMap::new(),
             particles: HashMap::new(),
+            tweens: Vec::new(),
             shared: HashMap::new(),
             fade: None,
             cam2_center: None,
@@ -560,6 +562,14 @@ impl Game {
             crate::particles::update(&st.tree, &mut st.particles, dt as f32);
         }
         self.timers(dt);
+        let finished = {
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            crate::tween::update(&mut st.tree, &mut st.tweens, dt)
+        };
+        for (id, prop) in finished {
+            self.run(id, "on_tween_end", vec![Value::text(&prop)]);
+        }
         self.camera_and_fade(dt as f32);
         {
             // Sound nodes report whether they're still playing.

@@ -2,6 +2,9 @@
 >> CHANGE_SCENE's second input fades out and back in over that many seconds.
 
 DEF on_create() {
+	>> The title drops in and bounces (TWEEN slides any number or color).
+	SET("Title", "y", 40)
+	TWEEN("Title", "y", 170, 0.9, "bounce")
 	best = LOAD_DATA("best")
 	IF best !== NULL {
 		SET("Best", "text", "Best coin score: " + best)
