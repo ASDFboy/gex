@@ -186,6 +186,41 @@ mod tests {
         assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("GEX Demo")));
     }
 
+    /// Exports the demo for Windows and macOS with an icon. Needs a Windows GEX:
+    /// GEX_TEST_WINEXE=/abs/path/gex.exe; GEX_TEST_EXPORT_TO keeps the result there.
+    #[test]
+    #[ignore]
+    fn export_for_other_systems_with_an_icon() {
+        use crate::export::Platform;
+        let exe = std::path::PathBuf::from(std::env::var("GEX_TEST_WINEXE").expect("GEX_TEST_WINEXE"));
+        let dir = std::env::temp_dir().join(format!("gex-xexport-src-{}", std::process::id()));
+        let out = std::env::var("GEX_TEST_EXPORT_TO").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir().join(format!("gex-xexport-{}", std::process::id())));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&out);
+        let mut p = super::create_demo(&dir).unwrap();
+        // A 32×32 icon: an orange disc.
+        let mut img = image::RgbaImage::new(32, 32);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            let d = ((x as f32 - 15.5).powi(2) + (y as f32 - 15.5).powi(2)).sqrt();
+            *px = if d < 15.0 { image::Rgba([240, 140, 40, 255]) } else { image::Rgba([0, 0, 0, 0]) };
+        }
+        img.save(dir.join("icon.png")).unwrap();
+        p.config.icon = "res://icon.png".into();
+        p.save().unwrap();
+        let mut st = crate::state::EditorState::new(gex_core::project::Project::open(&dir).unwrap());
+        let w = st.export_game_for(&out.join("windows"), Platform::Windows, &exe, "Demo Game").unwrap();
+        assert!(w.is_empty(), "{:?}", w);
+        let made = std::fs::read(out.join("windows/Demo Game.exe")).unwrap();
+        let pe = editpe::Image::parse(made.as_slice()).unwrap();
+        assert!(pe.resource_directory().unwrap().get_main_icon().unwrap().is_some());
+        assert!(out.join("windows/game/scenes/menu.jscene").is_file());
+        let me = std::env::current_exe().unwrap();
+        st.export_game_for(&out.join("mac"), Platform::MacOs, &me, "Demo Game").unwrap();
+        assert!(out.join("mac/Demo Game.app/Contents/MacOS/Demo Game").is_file());
+        assert!(out.join("mac/Demo Game.app/Contents/Info.plist").is_file());
+        assert!(out.join("mac/Demo Game.app/Contents/Resources/game/project.jproj").is_file());
+    }
+
     #[test]
     fn save_branch_as_scene_and_make_local() {
         let dir = std::env::temp_dir().join(format!("gex-branch-{}", std::process::id()));
