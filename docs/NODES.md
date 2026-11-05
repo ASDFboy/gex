@@ -22,7 +22,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | `Node2D` | an empty 2D node to group others | |
 | `Sprite2D` | a picture or a colored rectangle | `texture`, `width`, `height`, `color` (tint), `layer` (higher draws on top), `flip_h`, `flip_v` |
 | `Label2D` | text in the world (moves with the camera) | `text`, `size`, `color` |
-| `Camera2D` | what the game shows; follows its parent | `zoom`, `current` |
+| `Camera2D` | what the game shows; follows its parent | `zoom`, `current`, `smoothing` (0 = locked on, higher = catches up faster), `limits` with `limit_left/top/right/bottom` (the view stays inside) |
 | `Collider2D` | an area that reports overlaps (pickups, triggers) | `width`, `height` |
 | `Body2D` | a physics object | `body` (dynamic / kinematic / static), `shape` (box / circle), `width`, `height`, `radius`, `friction`, `bounce`, `density`, `gravity_scale`, `fixed_rotation`; live: `vx`, `vy`, `on_floor` |
 | `TileMap2D` | a grid of tiles from one tileset picture | `tileset`, `tile_width`, `tile_height`, `solid`, `solid_tiles` |

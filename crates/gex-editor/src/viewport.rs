@@ -618,6 +618,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         child.set_clip_rect(rect);
         crate::ui_layer::paint_ui(&mut child, &list.ui, design, &map, scale, playing && game_cam, &mut st.ui_images, &st.vfs)
     };
+    if game_cam {
+        paint_fade(ui, rect, list.fade);
+    }
     if let Some(p) = &mut st.playing {
         p.ui_events.extend(events);
     }
@@ -708,5 +711,13 @@ fn preview_particles(ctx: &egui::Context, st: &mut EditorState, list: &mut gex_c
     gex_script::particles::draw(&st.tree, &st.preview_particles, list);
     if st.preview_particles.values().any(|e| e.count() > 0) {
         ctx.request_repaint();
+    }
+}
+
+/// A scene-change fade over the whole game view.
+pub fn paint_fade(ui: &egui::Ui, rect: Rect, c: [f32; 4]) {
+    if c[3] > 0.0 {
+        let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+        ui.painter().with_clip_rect(rect).rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(to(c[0]), to(c[1]), to(c[2]), to(c[3])));
     }
 }

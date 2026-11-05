@@ -65,6 +65,27 @@ fn jle_vec(x: f32, y: f32) -> glam::Vec3 {
     glam::Vec3::new(x, y, 0.0)
 }
 
+/// A screen fade: out (to `color`, then the scene changes) or in (from it).
+#[derive(Clone, Debug)]
+pub struct Fade {
+    pub to_scene: Option<String>,
+    pub time: f32,
+    pub length: f32,
+    pub color: [f32; 4],
+}
+
+impl Fade {
+    /// How much of the screen the color covers now, 0 to 1.
+    pub fn amount(&self) -> f32 {
+        let t = (self.time / self.length.max(0.001)).clamp(0.0, 1.0);
+        if self.to_scene.is_some() {
+            t
+        } else {
+            1.0 - t
+        }
+    }
+}
+
 pub(crate) enum Pending {
     /// Run `handler` on one node's scripts, or on every node's when `target` is None.
     Event { target: Option<NodeId>, handler: String, args: Vec<Value> },
@@ -112,6 +133,15 @@ pub struct WorldState {
     pub(crate) tile_boxes: HashMap<NodeId, (String, Vec<crate::physics::StaticBox2>)>,
     /// Collision meshes made from Mesh3D models: node → (what they were made from, mesh).
     pub(crate) mesh_colliders: HashMap<NodeId, (String, crate::physics::StaticMesh)>,
+    /// REMEMBER'd values: they outlive CHANGE_SCENE (but not the game).
+    pub shared: HashMap<String, serde_json::Value>,
+    /// A fade to a color (before a CHANGE_SCENE) or from it (after one).
+    pub fade: Option<Fade>,
+    /// Where the 2D camera looks after smoothing and limits.
+    pub cam2_center: Option<glam::Vec2>,
+    /// SHAKE: strength left (pixels in 2D, centimetres in 3D) and how fast it fades per second.
+    pub shake: (f32, f32),
+    shake_seed: u32,
     /// Particles2D emitters and their live particles.
     pub(crate) particles: HashMap<NodeId, crate::particles::Emitter>,
 }
@@ -185,6 +215,11 @@ impl Game {
             mesh_colliders: HashMap::new(),
             tile_boxes: HashMap::new(),
             particles: HashMap::new(),
+            shared: HashMap::new(),
+            fade: None,
+            cam2_center: None,
+            shake: (0.0, 0.0),
+            shake_seed: 12345,
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
@@ -525,6 +560,7 @@ impl Game {
             crate::particles::update(&st.tree, &mut st.particles, dt as f32);
         }
         self.timers(dt);
+        self.camera_and_fade(dt as f32);
         {
             // Sound nodes report whether they're still playing.
             let mut st = self.st.borrow_mut();
@@ -731,12 +767,84 @@ impl Game {
         st.physics.meshes_3d = meshes;
     }
 
+    /// Smooths and limits the 2D camera, runs down SHAKE, and moves fades along.
+    fn camera_and_fade(&mut self, dt: f32) {
+        let mut st = self.st.borrow_mut();
+        let st = &mut *st;
+        if let Some(f) = &mut st.fade {
+            f.time += dt;
+            if f.time >= f.length {
+                match f.to_scene.clone() {
+                    Some(scene) => {
+                        if st.change_scene.is_none() {
+                            st.change_scene = Some(scene);
+                        }
+                    }
+                    None => st.fade = None,
+                }
+            }
+        }
+        st.shake.0 = (st.shake.0 - st.shake.1 * dt).max(0.0);
+        let cam = st.tree.walk().into_iter().find(|i| {
+            let n = &st.tree.nodes[*i];
+            n.kind == NodeKind::Camera2D && n.prop("current").is_none_or(|v| v.as_bool())
+        });
+        let Some(cam) = cam else {
+            st.cam2_center = None;
+            return;
+        };
+        let n = &st.tree.nodes[cam];
+        let target = st.tree.global_matrix(cam).w_axis.truncate().truncate();
+        let speed = n.num("smoothing", 0.0) as f32;
+        let mut c = match st.cam2_center {
+            Some(prev) if speed > 0.0 => prev + (target - prev) * (1.0 - (-speed * dt).exp()),
+            _ => target,
+        };
+        if n.prop("limits").is_some_and(|v| v.as_bool()) {
+            let zoom = n.num("zoom", 1.0).max(0.01) as f32;
+            let [w, h] = st.project.config.window_size;
+            let half = glam::Vec2::new(w as f32, h as f32) / (2.0 * zoom);
+            let (l, t, r, b) = (n.num("limit_left", 0.0) as f32, n.num("limit_top", 0.0) as f32, n.num("limit_right", w as f64) as f32, n.num("limit_bottom", h as f64) as f32);
+            c.x = if r - l < half.x * 2.0 { (l + r) / 2.0 } else { c.x.clamp(l + half.x, r - half.x) };
+            c.y = if b - t < half.y * 2.0 { (t + b) / 2.0 } else { c.y.clamp(t + half.y, b - half.y) };
+        }
+        st.cam2_center = Some(c);
+    }
+
+    fn shake_offset(st: &WorldState) -> glam::Vec2 {
+        if st.shake.0 <= 0.0 {
+            return glam::Vec2::ZERO;
+        }
+        // Cheap noise from the time: a new jolt every frame.
+        let k = (st.time * 1000.0) as u32 ^ st.shake_seed;
+        let h = |x: u32| {
+            let x = x.wrapping_mul(0x9E37_79B1).rotate_left(13).wrapping_mul(0x85EB_CA77);
+            (x >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0
+        };
+        glam::Vec2::new(h(k), h(k ^ 0xABCD)) * st.shake.0
+    }
+
     /// What to draw this frame: the tree plus anything scripts drew with DRAW_*.
     pub fn render_list(&self) -> gex_core::render::RenderList {
         let st = self.st.borrow();
         let mut list = gex_core::render::extract(&st.tree);
         crate::particles::draw(&st.tree, &st.particles, &mut list);
         list.mouse_locked = st.mouse_locked;
+        let jolt = Self::shake_offset(&st);
+        if let Some(cam) = &mut list.camera2d {
+            if let Some(c) = st.cam2_center {
+                cam.center = c;
+            }
+            cam.center += jolt;
+        }
+        if let Some(cam) = &mut list.camera3d {
+            cam.world = glam::Mat4::from_translation(glam::Vec3::new(jolt.x, jolt.y, 0.0) * 0.01) * cam.world;
+        }
+        if let Some(f) = &st.fade {
+            let mut c = f.color;
+            c[3] *= f.amount();
+            list.fade = c;
+        }
         crate::commands::append_draws(&st.draws, &mut list);
         list
     }

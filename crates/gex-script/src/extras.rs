@@ -104,7 +104,7 @@ fn slot_path(game: &str, name: &str) -> Result<PathBuf, String> {
     Ok(save_dir(game).join(format!("{}.json", name)))
 }
 
-fn to_json(v: &Value, depth: usize) -> Result<serde_json::Value, String> {
+pub(crate) fn to_json(v: &Value, depth: usize) -> Result<serde_json::Value, String> {
     if depth > 64 {
         return Err("that table is nested too deeply to save".into());
     }
@@ -128,7 +128,7 @@ fn to_json(v: &Value, depth: usize) -> Result<serde_json::Value, String> {
     })
 }
 
-fn from_json(j: &serde_json::Value) -> Value {
+pub(crate) fn from_json(j: &serde_json::Value) -> Value {
     match j {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),

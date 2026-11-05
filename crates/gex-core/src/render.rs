@@ -159,6 +159,8 @@ pub struct RenderList {
     pub lines_2d: Vec<([f32; 2], [f32; 2], [f32; 4])>,
     /// The game wants the mouse hidden and held in the window (MOUSE_LOCK).
     pub mouse_locked: bool,
+    /// A color over the whole game (fading between scenes); alpha 0 = none.
+    pub fade: [f32; 4],
 }
 
 impl RenderList {

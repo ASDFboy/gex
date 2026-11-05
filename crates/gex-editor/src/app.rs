@@ -1096,6 +1096,7 @@ impl eframe::App for PlayerApp {
             };
             let ev = crate::ui_layer::paint_ui(ui, &self.list.ui, design, &map, fit / ppp, true, &mut self.ui_images, &self.vfs);
             self.ui_events.extend(ev);
+            viewport::paint_fade(ui, rect, self.list.fade);
         });
         ctx.request_repaint();
     }

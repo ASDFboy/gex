@@ -70,7 +70,10 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("AXIS", "(name)", "a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt"),
     ("DELTA_TIME", "()", "seconds since the last frame"),
     ("GAME_TIME", "()", "seconds since the game started"),
-    ("CHANGE_SCENE", "(scene)", "switches to another scene file"),
+    ("CHANGE_SCENE", "(scene, fade, color)", "switches to another scene file; with fade (seconds) the screen fades to color (default black) and back"),
+    ("REMEMBER", "(name, value)", "keeps a value while the game runs, across CHANGE_SCENE (lives, score, inventory)"),
+    ("RECALL", "(name)", "a value kept with REMEMBER, or NULL"),
+    ("SHAKE", "(strength, seconds)", "shakes the camera: strength in pixels (2D), dying away over seconds"),
     ("QUIT", "()", "stops the game"),
 ];
 
@@ -563,7 +566,34 @@ impl Host for EngineHost {
             "DELTA_TIME" => Ok(num(st.dt)),
             "GAME_TIME" => Ok(num(st.time)),
             "CHANGE_SCENE" => {
-                st.change_scene = Some(text_arg(name, &a, 0)?);
+                let scene = text_arg(name, &a, 0)?;
+                let fade = num_arg(&a, 1, 0.0) as f32;
+                if fade > 0.0 {
+                    if st.fade.as_ref().is_none_or(|f| f.to_scene.is_none()) {
+                        let color = match a.get(2) {
+                            Some(v) if !matches!(v, Value::Null) => color_arg(Some(v)),
+                            _ => [0.0, 0.0, 0.0, 1.0],
+                        };
+                        st.fade = Some(crate::world::Fade { to_scene: Some(scene), time: 0.0, length: fade / 2.0, color });
+                    }
+                } else {
+                    st.change_scene = Some(scene);
+                }
+                Ok(Value::Null)
+            }
+            "REMEMBER" => {
+                let key = text_arg(name, &a, 0)?;
+                let v = crate::extras::to_json(a.get(1).unwrap_or(&Value::Null), 0).map_err(jlb::value::fault)?;
+                st.shared.insert(key, v);
+                Ok(Value::Null)
+            }
+            "RECALL" => Ok(st.shared.get(&text_arg(name, &a, 0)?).map(crate::extras::from_json).unwrap_or(Value::Null)),
+            "SHAKE" => {
+                let s = num_arg(&a, 0, 8.0).max(0.0) as f32;
+                let t = num_arg(&a, 1, 0.4).max(0.01) as f32;
+                if s >= st.shake.0 {
+                    st.shake = (s, s / t);
+                }
                 Ok(Value::Null)
             }
             "QUIT" => {

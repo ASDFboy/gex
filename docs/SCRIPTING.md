@@ -142,13 +142,15 @@ The script editor completes these as you type and shows each one's inputs.
 | `SET_TILE(node, col, row, id)` | changes a tile (-1 clears it) |
 | `TILE_AT(node, x, y)` | the cell under a world position: [col:, row:] |
 
-### Saving
+### Saving and remembering
 
 | Command | |
 |---|---|
 | `SAVE_DATA(name, value)` | keeps a value (a table, number, text...) on disk between runs |
 | `LOAD_DATA(name)` | a value kept with SAVE_DATA, or NULL |
 | `DELETE_DATA(name)` | forgets a value kept with SAVE_DATA |
+| `REMEMBER(name, value)` | keeps a value while the game runs, across CHANGE_SCENE (lives, score, inventory) |
+| `RECALL(name)` | a value kept with REMEMBER, or NULL |
 
 ### Drawing
 
@@ -173,13 +175,17 @@ The script editor completes these as you type and shows each one's inputs.
 | `AXIS(name)` | a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt |
 | `DELTA_TIME()` | seconds since the last frame |
 | `GAME_TIME()` | seconds since the game started |
+| `MOUSE_LOCK(on)` | hides the mouse and keeps it in the window, for mouse-look (Escape frees it in the editor) |
+| `MOUSE_DX()` | how far the mouse moved sideways this frame, in screen pixels (works while locked) |
+| `MOUSE_DY()` | how far the mouse moved up or down this frame (down is positive) |
 
-### Game flow
+### Game flow and camera
 
 | Command | |
 |---|---|
-| `CHANGE_SCENE(scene)` | switches to another scene file |
+| `CHANGE_SCENE(scene, fade, color)` | switches to another scene file; with fade (seconds) the screen fades to color (default black) and back |
 | `QUIT()` | stops the game |
+| `SHAKE(strength, seconds)` | shakes the camera: strength in pixels (2D), dying away over seconds |
 
 ## Physics in short
 

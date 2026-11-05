@@ -401,3 +401,92 @@ fn particles_emit_burst_fade_and_draw() {
     let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
     assert!(errs.is_empty(), "{:?}", errs);
 }
+
+#[test]
+fn camera_follow_limits_shake_and_fades() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), scripts: ["res://go.jlb"], children: [
+        (name: "Hero", kind: Some(Node2D), transform: Some((position: (100.0, 100.0, 0.0))), children: [
+            (name: "Cam", kind: Some(Camera2D), props: {"smoothing": Num(5.0), "limits": Bool(true), "limit_right": Num(2000.0)}),
+        ]),
+    ]))"#;
+    let other = r#"(root: (name: "Other", kind: Some(Node2D), scripts: ["res://other.jlb"]))"#;
+    let go = "DEF on_create() {\n    REMEMBER(\"lives\", 3)\n}\nDEF on_press_space() {\n    CHANGE_SCENE(\"res://other.jscene\", 1)\n}\nDEF on_press_s() {\n    SHAKE(10, 0.5)\n}\n";
+    let oth = "DEF on_create() {\n    PRINT(\"lives \" + RECALL(\"lives\"))\n}\n";
+    let p = project("camera", &[("main.jscene", scene), ("other.jscene", other), ("go.jlb", go), ("other.jlb", oth)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    // The hero is near the top-left corner: the limits keep the view inside (0,0)-(2000,720).
+    let c = g.render_list().camera2d.unwrap().center;
+    assert_eq!(c, gex_core::glam::Vec2::new(640.0, 360.0));
+    // Smoothing: after a jump right, the camera eases over.
+    g.st.borrow_mut().tree.nodes.iter_mut().find(|(_, n)| n.name == "Hero").unwrap().1.transform.position.x = 1200.0;
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    let c1 = g.render_list().camera2d.unwrap().center.x;
+    assert!(c1 > 640.0 && c1 < 700.0, "eases: {}", c1);
+    for _ in 0..120 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert!((g.render_list().camera2d.unwrap().center.x - 1200.0).abs() < 1.0);
+    g.frame(1.0 / 60.0, ["s".to_string()].into(), [0.0; 2], HashSet::new());
+    assert!((g.render_list().camera2d.unwrap().center.x - 1200.0).abs() > 0.01, "shaking");
+    for _ in 0..40 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert!((g.render_list().camera2d.unwrap().center.x - 1200.0).abs() < 1.0, "the shake died away");
+    // A fading scene change: half the time fading out, then the change.
+    g.frame(1.0 / 60.0, ["space".to_string()].into(), [0.0; 2], HashSet::new());
+    for _ in 0..10 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let f = g.render_list().fade;
+    assert!(f[3] > 0.1 && f[3] < 0.9, "{:?}", f);
+    assert!(g.st.borrow().change_scene.is_none());
+    for _ in 0..25 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        if g.st.borrow().change_scene.is_some() {
+            break;
+        }
+    }
+    assert_eq!(g.st.borrow().change_scene.as_deref(), Some("res://other.jscene"));
+}
+
+#[test]
+fn scene_changes_keep_remembered_values_and_fade_in() {
+    let a = r#"(root: (name: "A", kind: Some(Node2D), scripts: ["res://a.jlb"]))"#;
+    let b = r#"(root: (name: "B", kind: Some(Node2D), scripts: ["res://b.jlb"]))"#;
+    let sa = "DEF on_create() {\n    REMEMBER(\"inv\", [\"sword\", gold: 5])\n    CHANGE_SCENE(\"res://b.jscene\", 0.2)\n}\n";
+    let sb = "DEF on_create() {\n    inv = RECALL(\"inv\")\n    PRINT(inv[1] + \" \" + inv.gold)\n}\n";
+    let p = project("remember", &[("a.jscene", a), ("b.jscene", b), ("a.jlb", sa), ("b.jlb", sb)]);
+    let text = p.read_text("res://a.jscene").unwrap();
+    let tree = gex_core::scene::load(&text, &|r: &str| p.read_text(r)).unwrap();
+    let mut h = crate::thread::GameHandle::start(p, tree);
+    let mut seen = String::new();
+    let mut faded_in = false;
+    for _ in 0..200 {
+        h.request_frame(crate::FrameInput { dt: 1.0 / 60.0, ..Default::default() });
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        for m in h.poll() {
+            if let crate::thread::FromGame::Frame { logs, list, .. } = m {
+                for l in logs {
+                    seen.push_str(&l.text);
+                }
+                if seen.contains("sword") && list.fade[3] > 0.0 && list.fade[3] < 1.0 {
+                    faded_in = true;
+                }
+            }
+        }
+        if faded_in {
+            break;
+        }
+    }
+    assert!(seen.contains("sword 5"), "{}", seen);
+    assert!(faded_in);
+}
+
+/// Every engine command is in the scripting guide.
+#[test]
+fn every_command_is_documented() {
+    let doc = include_str!("../../../docs/SCRIPTING.md");
+    let missing: Vec<&str> = crate::commands::COMMANDS.iter().map(|c| c.0).filter(|n| !doc.contains(&format!("`{}(", n))).collect();
+    assert!(missing.is_empty(), "add these to docs/SCRIPTING.md: {:?}", missing);
+}

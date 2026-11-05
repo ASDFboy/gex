@@ -19,12 +19,17 @@ DEF on_physics(dt) {
 	}
 	GLOBAL vy = MIN(vy + gravity * dt, 900)
 	GLOBAL on_floor = MOVE(NULL, dx * speed * dt, vy * dt)
-	IF on_floor AND vy > 0 { GLOBAL vy = 0 }
+	IF on_floor AND vy > 0 {
+		>> A hard landing shakes the camera a little.
+		IF vy > 800 { SHAKE(6, 0.3) }
+		GLOBAL vy = 0
+	}
 	>> Bumping a ceiling ends the jump early.
 	above = RAYCAST(self.x, self.y - 23, 0, -1, 3, self.id)
 	IF above !== NULL AND vy < 0 { GLOBAL vy = 0 }
 	>> Fell off the world: back to the start.
-	IF self.y > 900 {
+	IF self.y > 760 {
+		SHAKE(12, 0.5)
 		self.x = 120
 		self.y = 560
 		GLOBAL vy = 0

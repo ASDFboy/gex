@@ -216,7 +216,16 @@ impl NodeKind {
                 ("anchor", Text("top_left".into())),
             ],
             NodeKind::Label2D => vec![("text", Text("Label".into())), ("size", Num(16.0)), ("color", Color([1.0; 4])), ("layer", Num(10.0))],
-            NodeKind::Camera2D => vec![("zoom", Num(1.0)), ("current", Bool(true))],
+            NodeKind::Camera2D => vec![
+                ("zoom", Num(1.0)),
+                ("current", Bool(true)),
+                ("smoothing", Num(0.0)),
+                ("limits", Bool(false)),
+                ("limit_left", Num(0.0)),
+                ("limit_top", Num(0.0)),
+                ("limit_right", Num(1280.0)),
+                ("limit_bottom", Num(720.0)),
+            ],
             NodeKind::Collider2D => vec![("width", Num(32.0)), ("height", Num(32.0)), ("group", Text(String::new()))],
             NodeKind::Mesh3D => vec![
                 ("mesh", Text("cube".into())),
