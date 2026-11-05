@@ -577,7 +577,35 @@ impl Game {
             let st = &mut *st;
             st.audio.tidy();
             let playing: Vec<(NodeId, bool)> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Sound).map(|i| (i, st.audio.by_node.contains_key(&i))).collect();
+            // Where the "ears" are: the 3D camera, else the 2D camera (or the screen's middle).
+            let cam3 = st.tree.walk().into_iter().find(|i| st.tree.nodes[*i].kind == NodeKind::Camera3D && st.tree.nodes[*i].prop("current").is_none_or(|v| v.as_bool()));
+            let ear = match cam3 {
+                Some(c) => Some((st.tree.global_matrix(c).w_axis.truncate(), true)),
+                None => {
+                    let [w, h] = st.project.config.window_size;
+                    let c = st.cam2_center.unwrap_or(glam::Vec2::new(w as f32 / 2.0, h as f32 / 2.0));
+                    Some((c.extend(0.0), false))
+                }
+            };
             for (i, p) in playing {
+                let n = &st.tree.nodes[i];
+                if p {
+                    let mut vol = n.num("volume", 1.0) as f32;
+                    if let (true, Some((ear, three))) = (n.prop("spatial").is_some_and(|v| v.as_bool()), ear) {
+                        let at = st.tree.global_matrix(i).w_axis.truncate();
+                        let range = match n.num("range", 0.0) as f32 {
+                            r if r > 0.0 => r,
+                            _ if three => 25.0,
+                            _ => 1000.0,
+                        };
+                        let d = if three { at.distance(ear) } else { at.truncate().distance(ear.truncate()) };
+                        let g = (1.0 - d / range).clamp(0.0, 1.0);
+                        vol *= g * g;
+                    }
+                    if let Some(id) = st.audio.by_node.get(&i).copied() {
+                        st.audio.set_volume(id, vol);
+                    }
+                }
                 st.tree.nodes[i].props.insert("playing".into(), Variant::Bool(p));
             }
         }

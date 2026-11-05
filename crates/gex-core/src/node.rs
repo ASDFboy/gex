@@ -267,6 +267,8 @@ impl NodeKind {
                 ("loop", Bool(false)),
                 ("autoplay", Bool(false)),
                 ("playing", Bool(false)),
+                ("spatial", Bool(false)),
+                ("range", Num(0.0)),
             ],
             NodeKind::Body2D => vec![
                 ("body", Text("dynamic".into())),
