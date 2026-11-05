@@ -25,6 +25,9 @@ pub const C_NUMBER: Color32 = Color32::from_rgb(0xd1, 0x9a, 0x66);
 pub const C_COMMENT: Color32 = Color32::from_rgb(0x5c, 0x6a, 0x7a);
 
 pub fn apply(ctx: &egui::Context) {
+    // Always dark, whatever the system's light/dark setting (Windows in light mode would
+    // otherwise switch to egui's light look under ours).
+    ctx.set_theme(egui::Theme::Dark);
     let mut v = Visuals::dark();
     v.panel_fill = PANEL;
     v.window_fill = BG;

@@ -550,6 +550,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     if let Some(l) = edit_condition {
         let now = st.bp_conditions.get(&(res.to_string(), l)).cloned().unwrap_or_default();
         st.bp_edit = Some((res.to_string(), l, now));
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("bp condition focus"), true));
     }
     condition_window(ui.ctx(), st);
     if save {
@@ -586,12 +587,22 @@ fn condition_window(ctx: &egui::Context, st: &mut EditorState) {
     let Some((res, line, mut text)) = st.bp_edit.take() else { return };
     let mut open = true;
     let mut done = None;
-    egui::Window::new(format!("Breakpoint on line {}", line)).id(egui::Id::new("bp condition")).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
+    let first = ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new("bp condition focus"))).unwrap_or(false);
+    let mut w = egui::Window::new(format!("Breakpoint on line {}", line)).id(egui::Id::new("bp condition")).collapsible(false).resizable(false).open(&mut open);
+    if first {
+        if let Some(p) = ctx.pointer_latest_pos() {
+            w = w.current_pos(p + egui::vec2(12.0, -10.0));
+        }
+    }
+    w.show(ctx, |ui| {
         ui.label("Stop only when this is TRUE (empty: always stop):");
         let r = ui.add(egui::TextEdit::singleline(&mut text).hint_text("hp < 10 AND self.x > 300").font(egui::TextStyle::Monospace).desired_width(280.0));
-        r.request_focus();
+        if first {
+            r.request_focus();
+        }
+        let enter = (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.horizontal(|ui| {
-            if ui.button("Set").clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+            if ui.button("Set").clicked() || enter {
                 done = Some(true);
             }
             if ui.button("Remove breakpoint").clicked() {

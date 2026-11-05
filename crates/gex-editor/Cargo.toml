@@ -21,6 +21,8 @@ egui-wgpu.workspace = true
 ron.workspace = true
 serde.workspace = true
 gilrs.workspace = true
+editpe = "0.2"
+image.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 rfd.workspace = true

@@ -1136,16 +1136,52 @@ impl EditorState {
     /// Makes a standalone copy of the game in `dest`: the GEX program (renamed after the
     /// game) and the project's own files in dest/game. Files from mounted game installs are
     /// never copied; scenes or scripts that use them are listed as warnings.
+    /// Exports for this computer, named after the project.
+    #[allow(dead_code)]
     pub fn export_game(&mut self, dest: &Path) -> Result<Vec<String>, String> {
+        let (p, player) = crate::export::players().into_iter().next().ok_or("can't find the GEX player")?;
+        self.export_game_for(dest, p, &player, &self.project.config.name.clone())
+    }
+
+    /// Exports for one system, with the given player program, as `name`.
+    pub fn export_game_for(&mut self, dest: &Path, platform: crate::export::Platform, player: &Path, name: &str) -> Result<Vec<String>, String> {
+        use crate::export::Platform;
         self.save_all();
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let game_dir = dest.join("game");
+        let name = crate::export::program_name(name);
+        let (target, game_dir) = crate::export::layout(dest, platform, &name);
         std::fs::create_dir_all(&game_dir).map_err(|e| format!("{}: {}", game_dir.display(), e))?;
-        let name: String = self.project.config.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).collect();
-        let ext = exe.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-        let target = dest.join(format!("{}{}", if name.trim().is_empty() { "game" } else { name.trim() }, ext));
-        std::fs::copy(&exe, &target).map_err(|e| format!("copying the program: {}", e))?;
-        let mut warnings = Vec::new();
+        std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        let mut program = std::fs::read(player).map_err(|e| format!("reading the player {}: {}", player.display(), e))?;
+        let mut notes = Vec::new();
+        if !self.project.config.icon.is_empty() {
+            match platform {
+                Platform::Windows => match gex_assets::load_image(&self.vfs, &self.project.config.icon) {
+                    Ok(img) => match crate::export::set_exe_icon(&program, &img.pixels, img.width, img.height) {
+                        Ok(p) => program = p,
+                        Err(e) => notes.push(format!("the program keeps the GEX icon: {}", e)),
+                    },
+                    Err(e) => notes.push(format!("couldn't read the icon {}: {}", self.project.config.icon, e)),
+                },
+                Platform::MacOs => {
+                    // Finder wants an .icns; the window and Dock icon is set when the game runs.
+                }
+                Platform::Linux => {}
+            }
+        }
+        std::fs::write(&target, &program).map_err(|e| format!("writing the program: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
+        }
+        if platform == Platform::MacOs {
+            let contents = target.parent().and_then(|p| p.parent()).unwrap();
+            std::fs::write(contents.join("Info.plist"), crate::export::info_plist(&name)).map_err(|e| e.to_string())?;
+        }
+        if platform == Platform::Linux && !cfg!(unix) {
+            notes.push("on Linux, the program may need to be marked runnable once: chmod +x".into());
+        }
+        let mut warnings = notes;
         let schemes: Vec<String> = self.project.config.mounts.iter().map(|m| format!("{}://", m.scheme)).collect();
         let dest_canon = dest.canonicalize().unwrap_or(dest.to_path_buf());
         let mut stack = vec![self.project.dir.clone()];

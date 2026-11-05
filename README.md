@@ -52,7 +52,9 @@ cargo test --workspace                         # everything's tests, including t
   the window, and renames (fixing every scene and script that uses the file) or deletes (into a
   hidden `.trash` folder) with a right-click; every one of those can be undone. It previews
   pictures, models and sounds.
-- **Export:** File → Export game makes a folder with the game and a player that runs it.
+- **Export:** File → Export game makes a folder with the game and a player that runs it, for
+  Windows, Linux or macOS (an .app), named as you like and with your icon on the Windows
+  program.
 - **Half-Life 2 assets**, read in place from your own Steam install (`hl2://`): VPK archives,
   VTF textures, VMT materials, models, maps and sounds. They are never copied into exports.
   See [docs/HL2.md](docs/HL2.md).

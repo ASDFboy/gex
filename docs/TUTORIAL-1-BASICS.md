@@ -178,6 +178,12 @@ To keep a value across scenes (lives, an inventory), `REMEMBER("lives", 3)` and 
 **File → Export game…** makes a folder with your game and a small player program. Double-click
 the program in it to play, or zip the folder up and send it.
 
+In the export window, **For** picks the system (Windows, Linux or macOS; GEX looks for the other
+systems' players in the `players` folder that comes with it) and **Program name** names the
+program. Set an icon (a .png) in **File → Project settings** and it shows on the game's window and on
+the Windows program. A macOS export is a `Name.app`; since it isn't signed, the first time you
+open it, right-click it → Open.
+
 ## Handy keys
 
 | | |

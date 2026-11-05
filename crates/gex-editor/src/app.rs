@@ -809,17 +809,45 @@ impl EditorApp {
         let mut folder: String = ctx.data(|d| d.get_temp(mem)).unwrap_or_else(|| st.project.dir.join("export").to_string_lossy().into_owned());
         let mut open = true;
         let mut result: Option<Result<Vec<String>, String>> = ctx.data(|d| d.get_temp(mem.with("result")));
+        let players = crate::export::players();
+        let mut pick: usize = ctx.data(|d| d.get_temp(mem.with("platform"))).unwrap_or(0).min(players.len().saturating_sub(1));
+        let mut name: String = ctx.data(|d| d.get_temp(mem.with("name"))).unwrap_or_else(|| st.project.config.name.clone());
         egui::Window::new("Export game").open(&mut open).default_width(520.0).show(ctx, |ui| {
             ui.label("Makes a folder you can zip up and run anywhere: the GEX player, renamed after your game, plus your project's files. Double-clicking the program starts the game.");
-            ui.horizontal(|ui| {
+            egui::Grid::new("export grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label("Folder");
-                ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0));
-                if let Some(p) = browse_button(ui) {
-                    folder = p;
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0));
+                    if let Some(p) = browse_button(ui) {
+                        folder = p;
+                    }
+                });
+                ui.end_row();
+                ui.label("Program name");
+                ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0));
+                ui.end_row();
+                ui.label("For");
+                ui.horizontal(|ui| {
+                    for (i, (p, _)) in players.iter().enumerate() {
+                        ui.radio_value(&mut pick, i, p.label());
+                    }
+                });
+                ui.end_row();
+                ui.label("Icon");
+                if st.project.config.icon.is_empty() {
+                    ui.label(RichText::new("none (set one in File → Project settings)").color(theme::TEXT_DIM));
+                } else {
+                    ui.label(&st.project.config.icon);
                 }
+                ui.end_row();
             });
+            if players.len() < 3 {
+                ui.label(RichText::new("To export for other systems, put their GEX players in a \"players\" folder next to GEX (gex-windows.exe, gex-linux, gex-macos). The download includes them.").small().color(theme::TEXT_DIM));
+            }
             if ui.button("Export").clicked() {
-                result = Some(st.export_game(std::path::Path::new(&folder)));
+                if let Some((p, path)) = players.get(pick) {
+                    result = Some(st.export_game_for(std::path::Path::new(&folder), *p, path, &name));
+                }
             }
             match &result {
                 Some(Ok(w)) if w.is_empty() => {
@@ -839,6 +867,8 @@ impl EditorApp {
         });
         ctx.data_mut(|d| {
             d.insert_temp(mem, folder);
+            d.insert_temp(mem.with("platform"), pick);
+            d.insert_temp(mem.with("name"), name);
             if let Some(r) = result {
                 d.insert_temp(mem.with("result"), r);
             }
