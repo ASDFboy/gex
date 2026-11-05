@@ -473,7 +473,28 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     });
 
     // Completion popup, from what's just been typed.
-    let now_cursor = egui::TextEdit::load_state(ui.ctx(), id).and_then(|st| st.cursor.char_range()).map(|r| r.primary.index.0).unwrap_or(0);
+    let mut now_cursor = egui::TextEdit::load_state(ui.ctx(), id).and_then(|st| st.cursor.char_range()).map(|r| r.primary.index.0).unwrap_or(0);
+    // Enter keeps the indentation (one more level after a "{").
+    if typed && now_cursor > 0 {
+        let c: Vec<char> = s.text.chars().collect();
+        if c.get(now_cursor - 1) == Some(&'\n') {
+            let ls = c[..now_cursor - 1].iter().rposition(|x| *x == '\n').map(|p| p + 1).unwrap_or(0);
+            let prev: String = c[ls..now_cursor - 1].iter().collect();
+            let mut indent: String = prev.chars().take_while(|x| *x == ' ' || *x == '\t').collect();
+            if prev.trim_end().ends_with('{') {
+                indent.push('\t');
+            }
+            if !indent.is_empty() {
+                let mut nc = c.clone();
+                nc.splice(now_cursor..now_cursor, indent.chars());
+                s.text = nc.iter().collect();
+                now_cursor += indent.chars().count();
+                let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(now_cursor))));
+                state.store(ui.ctx(), id);
+            }
+        }
+    }
     if typed && (!vim_on || s.vim.mode == Mode::Insert) {
         let c: Vec<char> = s.text.chars().collect();
         let (a, _) = word_at(&c, now_cursor);
@@ -498,7 +519,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                         r.on_hover_text(h);
                     }
                 }
-                ui.label(RichText::new("Tab to accept · ↑↓ to choose").small().color(theme::TEXT_DIM));
+                ui.label(RichText::new("Tab to accept, Up/Down to choose").small().color(theme::TEXT_DIM));
             });
         });
     }

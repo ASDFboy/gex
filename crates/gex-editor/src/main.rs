@@ -9,6 +9,7 @@
 
 mod app;
 mod code;
+mod gamepad;
 mod panels;
 mod state;
 mod templates;
@@ -33,7 +34,15 @@ fn options(title: &str, size: [f32; 2]) -> eframe::NativeOptions {
 }
 
 fn main() -> eframe::Result {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // An exported game: the program sits next to a "game" folder; play it.
+    if args.is_empty() {
+        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("game"))) {
+            if dir.join(gex_core::project::PROJECT_FILE).is_file() {
+                args = vec!["--play".into(), dir.to_string_lossy().into_owned()];
+            }
+        }
+    }
     if args.first().map(|a| a.as_str()) == Some("--play") {
         let dir = PathBuf::from(args.get(1).cloned().unwrap_or_else(|| ".".into()));
         let project = match gex_core::project::Project::open(&dir) {

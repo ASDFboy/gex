@@ -23,6 +23,7 @@
 pub mod audio;
 pub mod commands;
 pub mod convert;
+pub mod extras;
 pub mod physics;
 pub mod thread;
 pub mod world;

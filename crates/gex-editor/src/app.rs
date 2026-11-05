@@ -162,6 +162,7 @@ pub struct EditorApp {
     // Neovim-style command line.
     cmd: Option<String>,
     settings: SettingsForm,
+    pads: crate::gamepad::Pads,
 }
 
 #[derive(Default)]
@@ -191,6 +192,7 @@ impl EditorApp {
             launcher_error: String::new(),
             cmd: None,
             settings: SettingsForm::default(),
+            pads: crate::gamepad::Pads::new(),
         };
         if let Some(p) = project {
             app.open_project(&p);
@@ -343,6 +345,10 @@ impl EditorApp {
                     ui.close();
                 }
                 ui.separator();
+                if ui.button("Export game…").on_hover_text("a folder with the game, ready to run or share").clicked() {
+                    st.show_export = true;
+                    ui.close();
+                }
                 if ui.button("Project settings & mounts…").clicked() {
                     st.show_settings = true;
                     ui.close();
@@ -632,6 +638,57 @@ impl EditorApp {
     }
 }
 
+impl EditorApp {
+    fn export_window(&mut self, ctx: &egui::Context) {
+        let Some(st) = &mut self.st else { return };
+        if !st.show_export {
+            return;
+        }
+        let mem = egui::Id::new("export folder");
+        let mut folder: String = ctx.data(|d| d.get_temp(mem)).unwrap_or_else(|| st.project.dir.join("export").to_string_lossy().into_owned());
+        let mut open = true;
+        let mut result: Option<Result<Vec<String>, String>> = ctx.data(|d| d.get_temp(mem.with("result")));
+        egui::Window::new("Export game").open(&mut open).default_width(520.0).show(ctx, |ui| {
+            ui.label("Makes a folder you can zip up and run anywhere: the GEX player, renamed after your game, plus your project's files. Double-clicking the program starts the game.");
+            ui.horizontal(|ui| {
+                ui.label("Folder");
+                ui.add(egui::TextEdit::singleline(&mut folder).desired_width(320.0));
+                if let Some(p) = browse_button(ui) {
+                    folder = p;
+                }
+            });
+            if ui.button("Export").clicked() {
+                result = Some(st.export_game(std::path::Path::new(&folder)));
+            }
+            match &result {
+                Some(Ok(w)) if w.is_empty() => {
+                    ui.colored_label(theme::GOOD, "Done.");
+                }
+                Some(Ok(w)) => {
+                    ui.colored_label(theme::GOOD, "Done, but:");
+                    for x in w {
+                        ui.colored_label(theme::WARN, x);
+                    }
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(theme::BAD, e);
+                }
+                None => {}
+            }
+        });
+        ctx.data_mut(|d| {
+            d.insert_temp(mem, folder);
+            if let Some(r) = result {
+                d.insert_temp(mem.with("result"), r);
+            }
+        });
+        if !open {
+            st.show_export = false;
+            ctx.data_mut(|d| d.remove::<Result<Vec<String>, String>>(mem.with("result")));
+        }
+    }
+}
+
 fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
     let mut parts = c.trim().splitn(2, ' ');
     let head = parts.next().unwrap_or("");
@@ -706,6 +763,11 @@ impl eframe::App for EditorApp {
         }
         self.shortcuts(&ctx);
         if let Some(st) = &mut self.st {
+            if let Some(p) = &mut st.playing {
+                let (keys, axes) = self.pads.poll();
+                p.taps.extend(keys);
+                p.axes = axes;
+            }
             st.pump_game();
             if st.playing.is_some() {
                 ctx.request_repaint();
@@ -736,6 +798,7 @@ impl eframe::App for EditorApp {
         }
         self.command_line(ui);
         self.settings_window(&ctx);
+        self.export_window(&ctx);
         let rs = frame.wgpu_render_state();
         let st = self.st.as_mut().unwrap();
         let mut viewer = Viewer { st, rs, viewport_tex: &mut self.viewport_tex, previews: &mut self.previews, closed: Vec::new() };
@@ -773,6 +836,7 @@ pub struct PlayerApp {
     ended: bool,
     ui_events: Vec<gex_script::UiEvent>,
     ui_images: HashMap<String, egui::TextureHandle>,
+    pads: crate::gamepad::Pads,
 }
 
 impl PlayerApp {
@@ -782,7 +846,7 @@ impl PlayerApp {
         let tree = gex_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let list = gex_core::render::extract(&tree);
-        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new() })
+        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new() })
     }
 }
 
@@ -811,7 +875,9 @@ impl eframe::App for PlayerApp {
             return;
         }
         let now = std::time::Instant::now();
-        let (keys, buttons) = ctx.input(|i| (viewport::input_keys(i), viewport::mouse_buttons(i)));
+        let (mut keys, buttons) = ctx.input(|i| (viewport::input_keys(i), viewport::mouse_buttons(i)));
+        let (pad_keys, axes) = self.pads.poll();
+        keys.extend(pad_keys);
         let Some(rs) = frame.wgpu_render_state() else { return };
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let rect = ui.max_rect();
@@ -826,7 +892,7 @@ impl eframe::App for PlayerApp {
                     mouse: [m.x, m.y],
                     buttons,
                     wheel: ctx.input(|i| i.smooth_scroll_delta.y) / 50.0,
-                    axes: Default::default(),
+                    axes,
                     ui: std::mem::take(&mut self.ui_events),
                 });
                 self.last = now;

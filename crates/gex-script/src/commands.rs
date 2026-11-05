@@ -48,6 +48,10 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
     ("SET_TILE", "(node, col, row, id)", "changes a tile (-1 clears it)"),
     ("TILE_AT", "(node, x, y)", "the cell under a world position: [col:, row:]"),
+    ("FIND_PATH", "(tilemap, x1, y1, x2, y2)", "a walkable path through a TileMap2D: a table of [x:, y:] points, or NULL"),
+    ("SAVE_DATA", "(name, value)", "keeps a value (a table, number, text...) on disk between runs"),
+    ("LOAD_DATA", "(name)", "a value kept with SAVE_DATA, or NULL"),
+    ("DELETE_DATA", "(name)", "forgets a value kept with SAVE_DATA"),
     ("DRAW_RECT", "(x, y, w, h, color, filled)", "draws a rectangle this frame (2D world)"),
     ("DRAW_LINE", "(x1, y1, x2, y2, color)", "draws a line this frame"),
     ("DRAW_CIRCLE", "(x, y, radius, color, filled)", "draws a circle this frame"),
@@ -505,6 +509,25 @@ impl Host for EngineHost {
                 if st.draws.len() < 100_000 {
                     st.draws.push(d);
                 }
+                Ok(Value::Null)
+            }
+            "FIND_PATH" => {
+                let id = target(st, a.first())?;
+                if st.tree.nodes[id].kind != gex_core::NodeKind::TileMap2D {
+                    return err("FIND_PATH needs a TileMap2D to walk through");
+                }
+                let n = |i| num_arg(&a, i, 0.0) as f32;
+                let p = crate::extras::find_path(&st.tree, id, glam::Vec2::new(n(1), n(2)), glam::Vec2::new(n(3), n(4)));
+                Ok(crate::extras::path_value(p))
+            }
+            "SAVE_DATA" => {
+                let key = text_arg(name, &a, 0)?;
+                crate::extras::save(&st.project.config.name, &key, a.get(1).unwrap_or(&Value::Null)).map_err(jlb::value::fault)?;
+                Ok(Value::Null)
+            }
+            "LOAD_DATA" => crate::extras::load(&st.project.config.name, &text_arg(name, &a, 0)?).map_err(jlb::value::fault),
+            "DELETE_DATA" => {
+                crate::extras::delete(&st.project.config.name, &text_arg(name, &a, 0)?).map_err(jlb::value::fault)?;
                 Ok(Value::Null)
             }
             "MOUSE_WHEEL" => Ok(num(st.wheel as f64)),

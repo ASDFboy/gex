@@ -340,3 +340,30 @@ fn breakpoints_pause_and_scripts_reload() {
     let t = g.tree();
     assert_eq!(t.nodes[t.root.unwrap()].props.get("seen"), Some(&Variant::Num(13.0)));
 }
+
+#[test]
+fn paths_and_saves() {
+    // A wall with one gap: the path must go through it.
+    let tiles = "-1,-1,-1,-1,-1\n-1,-1,1,-1,-1\n-1,-1,1,-1,-1\n-1,-1,-1,-1,-1";
+    let scene = format!(
+        r#"(root: (name: "R", kind: Some(Node2D), scripts: ["res://r.jlb"], children: [
+        (name: "Map", kind: Some(TileMap2D), props: {{"tiles": Text("{}")}}),
+    ]))"#,
+        tiles.replace('\n', "\\n")
+    );
+    let r = "DEF on_create() {\n    p = FIND_PATH(\"Map\", 16, 48, 144, 48)\n    self.steps = LEN(p)\n    self.blocked = FIND_PATH(\"Map\", 16, 48, 80, 48)\n    SAVE_DATA(\"slot_1\", [score: 7, names: [\"a\", \"b\"], done: TRUE])\n    back = LOAD_DATA(\"slot_1\")\n    self.score = back.score\n    self.second = back.names[2]\n    self.missing = LOAD_DATA(\"nothing_here\")\n    DELETE_DATA(\"slot_1\")\n}\n";
+    let p = project("paths", &[("main.jscene", &scene), ("r.jlb", r)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    g.frame(0.016, HashSet::new(), [0.0; 2], HashSet::new());
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let t = g.tree();
+    let root = &t.nodes[t.root.unwrap()];
+    let steps = root.num("steps", 0.0);
+    // (0,1) → (4,1) around the wall at column 2 (rows 1-2): through row 0 or row 3.
+    assert!((5.0..=7.0).contains(&steps), "steps {}", steps);
+    assert_eq!(root.props.get("blocked"), Some(&Variant::Null), "the goal is inside the wall");
+    assert_eq!(root.props.get("score"), Some(&Variant::Num(7.0)));
+    assert_eq!(root.props.get("second"), Some(&Variant::Text("b".into())));
+    assert_eq!(root.props.get("missing"), Some(&Variant::Null));
+}

@@ -105,6 +105,7 @@ pub struct EditorState {
     pub asset_dir: String,
     pub asset_selected: Option<String>,
     pub show_settings: bool,
+    pub show_export: bool,
     pub status: String,
     /// Breakpoints by script (res:// path) → line numbers.
     pub breakpoints: HashMap<String, std::collections::BTreeSet<usize>>,
@@ -147,6 +148,7 @@ impl EditorState {
             asset_dir: "res://".into(),
             asset_selected: None,
             show_settings: false,
+            show_export: false,
             status: String::new(),
             breakpoints: HashMap::new(),
             game_breakpoints: Default::default(),
@@ -723,6 +725,65 @@ impl EditorState {
             Some(p) => &p.tree,
             None => &self.tree,
         }
+    }
+}
+
+impl EditorState {
+    /// Makes a standalone copy of the game in `dest`: the GEX program (renamed after the
+    /// game) and the project's own files in dest/game. Files from mounted game installs are
+    /// never copied; scenes or scripts that use them are listed as warnings.
+    pub fn export_game(&mut self, dest: &Path) -> Result<Vec<String>, String> {
+        self.save_all();
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let game_dir = dest.join("game");
+        std::fs::create_dir_all(&game_dir).map_err(|e| format!("{}: {}", game_dir.display(), e))?;
+        let name: String = self.project.config.name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).collect();
+        let ext = exe.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        let target = dest.join(format!("{}{}", if name.trim().is_empty() { "game" } else { name.trim() }, ext));
+        std::fs::copy(&exe, &target).map_err(|e| format!("copying the program: {}", e))?;
+        let mut warnings = Vec::new();
+        let schemes: Vec<String> = self.project.config.mounts.iter().map(|m| format!("{}://", m.scheme)).collect();
+        let dest_canon = dest.canonicalize().unwrap_or(dest.to_path_buf());
+        let mut stack = vec![self.project.dir.clone()];
+        let mut files = 0;
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+                let p = e.path();
+                let fname = e.file_name().to_string_lossy().into_owned();
+                if fname.starts_with('.') || p.canonicalize().map(|c| c == dest_canon || c.starts_with(&dest_canon)).unwrap_or(false) {
+                    continue;
+                }
+                let rel = p.strip_prefix(&self.project.dir).unwrap().to_path_buf();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let out = game_dir.join(&rel);
+                if let Some(parent) = out.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                if fname == gex_core::project::PROJECT_FILE {
+                    // The exported game reads only its own files.
+                    let mut cfg = self.project.config.clone();
+                    cfg.mounts.clear();
+                    let text = ron::ser::to_string_pretty(&cfg, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string())?;
+                    std::fs::write(&out, text).map_err(|e| e.to_string())?;
+                    continue;
+                }
+                if fname.ends_with(".jscene") || fname.ends_with(".jlb") {
+                    let text = std::fs::read_to_string(&p).unwrap_or_default();
+                    for s in &schemes {
+                        if text.contains(s.as_str()) {
+                            warnings.push(format!("{} uses files from {} (they aren't included, so they'll be missing)", rel.display(), s));
+                        }
+                    }
+                }
+                std::fs::copy(&p, &out).map_err(|e| format!("{}: {}", rel.display(), e))?;
+                files += 1;
+            }
+        }
+        self.status = format!("exported {} file(s) to {}", files, dest.display());
+        Ok(warnings)
     }
 }
 

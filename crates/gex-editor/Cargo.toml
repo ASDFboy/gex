@@ -20,6 +20,7 @@ egui_dock.workspace = true
 egui-wgpu.workspace = true
 ron.workspace = true
 serde.workspace = true
+gilrs.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 rfd.workspace = true

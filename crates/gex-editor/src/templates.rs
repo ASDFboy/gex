@@ -85,4 +85,23 @@ mod tests {
         let cube = t.find_path(None, "World/Cube").unwrap();
         assert!(t.nodes[cube].transform.rotation.y > 10.0);
     }
+
+    #[test]
+    fn export_makes_a_runnable_folder_without_mounted_files() {
+        let dir = std::env::temp_dir().join(format!("gex-export-src-{}", std::process::id()));
+        let out = std::env::temp_dir().join(format!("gex-export-out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&out);
+        let mut p = super::create_demo(&dir).unwrap();
+        p.config.mounts.push(gex_core::project::MountConfig { scheme: "hl2".into(), kind: gex_core::project::MountKind::Folder(dir.join("nowhere")) });
+        p.save().unwrap();
+        std::fs::write(dir.join("scripts/uses_hl2.jlb"), "x = \"hl2://sound/a.wav\"\n").unwrap();
+        let mut st = crate::state::EditorState::new(gex_core::project::Project::open(&dir).unwrap());
+        let warnings = st.export_game(&out).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("uses_hl2.jlb")), "{:?}", warnings);
+        let cfg = gex_core::project::Project::open(&out.join("game")).unwrap().config;
+        assert!(cfg.mounts.is_empty(), "mounts are stripped");
+        assert!(out.join("game/scenes/main.jscene").is_file());
+        assert!(std::fs::read_dir(&out).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("GEX Demo")));
+    }
 }
