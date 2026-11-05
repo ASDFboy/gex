@@ -776,7 +776,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                         if st.playing.is_none() {
                             st.open_scene(&e.path);
                         }
-                    } else if e.name.ends_with(".jlb") || e.name.ends_with(".txt") || e.name.ends_with(".vmt") {
+                    } else if [".jlb", ".txt", ".vmt", ".wgsl", ".json", ".md"].iter().any(|x| e.name.ends_with(x)) {
                         if e.path.starts_with("res://") {
                             st.open_script(&e.path, None);
                         }

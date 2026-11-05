@@ -33,6 +33,10 @@ pub fn paint_ui(
         let fam = crate::text::family(ui.ctx(), vfs, it.text("font"));
         let font = |size: f64| egui::FontId::new(((size as f32) * scale).max(4.0), fam.clone());
         match it.kind {
+            NodeKind::Panel if !it.text("texture").is_empty() => {
+                let tex = image(ui, images, vfs, it.text("texture"));
+                nine_slice(&painter, &tex, rect, it.num("slice", 0.0) as f32, scale, c32(it.color("color")));
+            }
             NodeKind::Panel => {
                 let r = CornerRadius::same((it.num("radius", 4.0) as f32 * scale).clamp(0.0, 255.0) as u8);
                 painter.rect_filled(rect, r, c32(it.color("color")));
@@ -72,7 +76,12 @@ pub fn paint_ui(
                 if disabled {
                     fill = fill.gamma_multiply(0.5);
                 }
-                painter.rect_filled(rect, CornerRadius::same((4.0 * scale) as u8), fill);
+                if it.text("texture").is_empty() {
+                    painter.rect_filled(rect, CornerRadius::same((4.0 * scale) as u8), fill);
+                } else {
+                    let tex = image(ui, images, vfs, it.text("texture"));
+                    nine_slice(&painter, &tex, rect, it.num("slice", 0.0) as f32, scale, fill);
+                }
                 crate::text::paint(&painter, rect.center(), egui::Align2::CENTER_CENTER, it.text("text"), font(it.num("size", 16.0)), c32(it.color("text_color")), scale);
             }
             NodeKind::ProgressBar => {
@@ -87,12 +96,8 @@ pub fn paint_ui(
                 if path.is_empty() {
                     painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::GRAY), egui::StrokeKind::Inside);
                 } else {
-                    let tex = images.entry(path.clone()).or_insert_with(|| {
-                        let img = gex_assets::load_image(vfs, &path).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
-                        let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
-                        ui.ctx().load_texture(path.clone(), ci, egui::TextureOptions::NEAREST)
-                    });
-                    painter.image(tex.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), c32(it.color("color")));
+                    let tex = image(ui, images, vfs, &path);
+                    nine_slice(&painter, &tex, rect, it.num("slice", 0.0) as f32, scale, c32(it.color("color")));
                 }
             }
             NodeKind::TextInput => {
@@ -127,4 +132,43 @@ pub fn paint_ui(
         }
     }
     events
+}
+
+fn image(ui: &egui::Ui, images: &mut HashMap<String, egui::TextureHandle>, vfs: &gex_assets::Vfs, path: &str) -> egui::TextureHandle {
+    images
+        .entry(path.to_string())
+        .or_insert_with(|| {
+            let img = gex_assets::load_image(vfs, path).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
+            let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
+            ui.ctx().load_texture(path.to_string(), ci, egui::TextureOptions::NEAREST)
+        })
+        .clone()
+}
+
+/// Draws a picture stretched over `rect`, keeping its edges: `slice` texture pixels on each side
+/// stay their size (scaled like the rest of the UI), and the middle stretches. 0 = plain stretch.
+fn nine_slice(painter: &egui::Painter, tex: &egui::TextureHandle, rect: Rect, slice: f32, scale: f32, tint: Color32) {
+    let [tw, th] = tex.size();
+    let full = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    if slice <= 0.0 || tw == 0 || th == 0 {
+        painter.image(tex.id(), rect, full, tint);
+        return;
+    }
+    let (sx, sy) = (slice.min(tw as f32 / 2.0), slice.min(th as f32 / 2.0));
+    let (ex, ey) = ((sx * scale).min(rect.width() / 2.0), (sy * scale).min(rect.height() / 2.0));
+    let xs = [rect.min.x, rect.min.x + ex, rect.max.x - ex, rect.max.x];
+    let ys = [rect.min.y, rect.min.y + ey, rect.max.y - ey, rect.max.y];
+    let us = [0.0, sx / tw as f32, 1.0 - sx / tw as f32, 1.0];
+    let vs = [0.0, sy / th as f32, 1.0 - sy / th as f32, 1.0];
+    let mut mesh = egui::Mesh::with_texture(tex.id());
+    for j in 0..3 {
+        for i in 0..3 {
+            let r = Rect::from_min_max(Pos2::new(xs[i], ys[j]), Pos2::new(xs[i + 1], ys[j + 1]));
+            let uv = Rect::from_min_max(Pos2::new(us[i], vs[j]), Pos2::new(us[i + 1], vs[j + 1]));
+            if r.width() > 0.0 && r.height() > 0.0 {
+                mesh.add_rect_with_uv(r, uv, tint);
+            }
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }

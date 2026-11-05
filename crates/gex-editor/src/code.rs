@@ -201,7 +201,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
         return;
     };
     if s.checked_text != s.text {
-        s.problems = check(&s.text);
+        s.problems = if res.ends_with(".jlb") { check(&s.text) } else { Vec::new() };
         s.checked_text = s.text.clone();
     }
     let mut save = false;

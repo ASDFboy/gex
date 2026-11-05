@@ -199,6 +199,8 @@ impl NodeKind {
                 ("border_color", Color([0.4, 0.75, 0.96, 1.0])),
                 ("border", Num(1.0)),
                 ("radius", Num(4.0)),
+                ("texture", Res(String::new())),
+                ("slice", Num(0.0)),
                 ("anchor", Text("top_left".into())),
             ],
             NodeKind::Button => vec![
@@ -210,6 +212,8 @@ impl NodeKind {
                 ("text_color", Color([0.78, 0.84, 0.88, 1.0])),
                 ("disabled", Bool(false)),
                 ("font", Res(String::new())),
+                ("texture", Res(String::new())),
+                ("slice", Num(0.0)),
                 ("anchor", Text("top_left".into())),
             ],
             NodeKind::Label => vec![
@@ -243,6 +247,7 @@ impl NodeKind {
                 ("width", Num(64.0)),
                 ("height", Num(64.0)),
                 ("color", Color([1.0; 4])),
+                ("slice", Num(0.0)),
                 ("anchor", Text("top_left".into())),
             ],
             NodeKind::Label2D => vec![("text", Text("Label".into())), ("size", Num(16.0)), ("color", Color([1.0; 4])), ("layer", Num(10.0)), ("font", Res(String::new()))],

@@ -802,9 +802,14 @@ impl EditorState {
             Ok(()) => {
                 s.saved = s.text.clone();
                 self.status = format!("saved {}", res);
-                // A running game picks the change up at once.
-                if let Some(p) = &self.playing {
-                    p.handle.reload(res);
+                if res.ends_with(".jlb") {
+                    // A running game picks the change up at once.
+                    if let Some(p) = &self.playing {
+                        p.handle.reload(res);
+                    }
+                } else if let Some(r) = &mut self.renderer {
+                    // A shader (or other file the renderer read): load it again.
+                    r.reload_textures();
                 }
             }
             Err(e) => {
