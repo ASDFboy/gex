@@ -40,7 +40,7 @@ base** (its own scripting and scene formats would compete with JLB everywhere).
   owns its own `Interp` and tree on a thread with a large stack. A stuck script never freezes
   the editor: Stop sets a cancel flag the interpreter checks between statements.
 - **The renderer only sees a `RenderList`**: sprites, labels, meshes, lights, colliders,
-  cameras. Text is drawn by egui on top. The same path serves the editor's view, play mode and
+  cameras, particles, the fade color. Text and UI nodes are drawn by egui on top. The same path serves the editor's view, play mode and
   the standalone player.
 
 ## Scripting bridge
@@ -61,13 +61,19 @@ show in the inspector). Engine commands that change other nodes (`SET`, `SPAWN`,
 tree directly; anything that runs more script code (`SEND`, `EMIT`, `DESTROY`) is queued and run
 right after, so scripts never re-enter each other.
 
-## What's next
+## Where things live
 
-1. **Physics**: rapier2d/3d behind `Body2D`/`Body3D` nodes; collisions feed the same events.
-2. **Audio**: a `Sound` node and `PLAY_SOUND`, reading .wav/.ogg/.mp3 from any mount (HL2's included).
-3. **Source models and maps**: `.mdl` via `vmdl` (mesh, skeleton, animations), `.bsp` via `vbsp`
-   as a scene you can instance; materials through the existing VMT path.
-4. **Editor**: Vim-style modal editing in the script editor, completion of engine commands,
-   breakpoints through jlb-rust's debugger, gizmos for rotate/scale, scene tabs.
-5. **Export**: a standalone game folder (player + `res://` files only; mounted files are never
-   included).
+| Area | Files |
+|---|---|
+| Nodes, properties, scene files, instancing | `gex-core/src/{node,scene,tree,variant}.rs` |
+| What gets drawn | `gex-core/src/render.rs` (`extract`), `gex-render/src/lib.rs`, `shaders.wgsl` |
+| The game loop and events | `gex-script/src/world.rs` (`Game::step`) |
+| Engine commands | `gex-script/src/commands.rs` (the `COMMANDS` list feeds completion and a docs test) |
+| Physics | `gex-script/src/physics.rs` (rapier2d / rapier3d) |
+| Particles, tweens, audio, saves, paths | `gex-script/src/{particles,tween,audio,extras}.rs` |
+| The game thread | `gex-script/src/thread.rs` |
+| Files and mounts, Source formats, models | `gex-assets/src/{vfs,vpk,vtf,vmt,source,model}.rs` |
+| Editor panels, scene view, script editor | `gex-editor/src/{app,panels,viewport,code,vim}.rs` |
+| Editor state, undo, play mode, export | `gex-editor/src/state.rs` |
+| Project file operations | `gex-editor/src/files.rs` |
+| The built-in demo | `gex-editor/src/demo/` (its test plays every scene) |
