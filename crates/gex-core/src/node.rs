@@ -290,6 +290,7 @@ impl NodeKind {
                 ("emissive", Num(0.0)),
                 ("unlit", Bool(false)),
                 ("shader", Res(String::new())),
+                ("map_props", Bool(true)),
             ],
             NodeKind::Sprite3D => vec![
                 ("texture", Res(String::new())),

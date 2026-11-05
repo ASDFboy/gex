@@ -886,7 +886,8 @@ impl Renderer {
                 if gex_assets::model::is_model(&m.mesh) {
                     let Some(Ok(model)) = self.models.get(&m.mesh) else { continue };
                     let data = model.data.clone();
-                    let skinned = data.is_skinned();
+                    // Source models sit in their rest pose already: pose them only when the bones move.
+                    let skinned = data.is_skinned() && (!data.rest_is_bind || !m.animation.is_empty() || m.pose.is_some());
                     let has_lm = model.lightmap.is_some();
                     let mut mat = mat;
                     if has_lm {
@@ -898,7 +899,9 @@ impl Renderer {
                     if skinned && visible {
                         // Pose on the CPU and upload this node's own vertices.
                         let anim = data.animation(&m.animation);
-                        let joints = if m.blend < 1.0 && !m.prev_animation.is_empty() {
+                        let joints = if let Some(p) = &m.pose {
+                            p.to_vec()
+                        } else if m.blend < 1.0 && !m.prev_animation.is_empty() {
                             data.pose_blend(data.animation(&m.prev_animation), m.prev_time, anim, m.anim_time, m.blend)
                         } else {
                             data.pose(anim, m.anim_time)

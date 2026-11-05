@@ -88,7 +88,7 @@ one small frame image makes boxes of any size.
 | `Particles3D` | fire, smoke, sparks, dust in 3D (plays in the editor too) | like Particles2D, with `direction_x/y/z`, metres and metres per second, and `glow` |
 | `Camera3D` | what the game shows | `fov`, `near`, `far`, `current` |
 | `Light3D` | a light | `type` (directional / point / spot), `color`, `energy`, `range`, `angle`, `shadows` (the first directional light with shadows on casts them, sharp near the camera and softer out to the Environment's `shadow_distance`) |
-| `Body3D` | a physics object | like Body2D, plus `depth`, `vz`; `shape` box / sphere / capsule |
+| `Body3D` | a physics object | like Body2D, plus `depth`, `vz`; `shape` box / sphere / capsule / hull (the outline of its first Mesh3D child's model: a barrel, a chair) |
 | `Collider3D` | a 3D area that reports what enters it (triggers, pickups, damage zones) | `shape` (box / sphere), `width`, `height`, `depth`, `radius`, `layer`, `mask` |
 | `Environment` | the sky, ambient light, fog, shadows and glow | `sky_top`, `sky_horizon`, `ground`, `sky_texture` (a panorama), `ambient`, `ambient_energy`, `fog_color`, `fog_start`, `fog_end`, `shadow_distance` (how far shadows reach, in metres), `bloom` (glow around bright things, 0 = off), `bloom_threshold` |
 

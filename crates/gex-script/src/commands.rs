@@ -46,6 +46,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
     ("BURST", "(node, count)", "a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff)"),
+    ("RAGDOLL", "(node, vx, vy, vz)", "a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it"),
+    ("MAP_ENTITIES", "(map, classname)", "the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:] (keys holds every setting as written); classname picks one kind, \"info_player*\" any that start so"),
     ("ANIMATE", "(node, name, restart)", "plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE"),
     ("ANIMATIONS", "(node)", "the names of a Mesh3D model's animations"),
     ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
@@ -524,6 +526,69 @@ impl Host for EngineHost {
             "VOLUME" => {
                 st.audio.master = num_arg(&a, 0, 1.0).clamp(0.0, 4.0) as f32;
                 Ok(Value::Null)
+            }
+            "RAGDOLL" => {
+                let id = target(st, a.first())?;
+                let n = &st.tree.nodes[id];
+                let mesh = n.text("mesh").to_string();
+                if n.kind != gex_core::NodeKind::Mesh3D || !gex_assets::model::is_model(&mesh) {
+                    return err(format!("{} isn't a Mesh3D with a model", n.name));
+                }
+                let model = gex_assets::model::cached(&st.vfs, &mesh).map_err(jlb::value::fault)?;
+                if model.joints.is_empty() {
+                    return err(format!("{} has no skeleton to make a ragdoll from", mesh));
+                }
+                // Where the bones are right now (as animated), in the world.
+                let anim = model.animation(n.text("animation"));
+                let t = st.anims.get(&id).map(|a| a.1 as f32).unwrap_or(n.num("anim_time", 0.0) as f32);
+                let world = st.tree.global_matrix(id);
+                let joints: Vec<glam::Mat4> = model.pose(anim, t).iter().zip(&model.joints).map(|(m, j)| world * *m * j.inverse_bind.inverse()).collect();
+                let parents: Vec<Option<usize>> = model.joints.iter().map(|j| j.parent).collect();
+                let ibs: Vec<glam::Mat4> = model.joints.iter().map(|j| j.inverse_bind).collect();
+                let v = glam::Vec3::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, num_arg(&a, 3, 0.0) as f32);
+                st.anims.remove(&id);
+                let st = &mut *st;
+                st.physics.ragdoll(&st.tree, id, &joints, &parents, &ibs, v);
+                Ok(Value::Null)
+            }
+            "MAP_ENTITIES" => {
+                let id = target(st, a.first())?;
+                let mesh = st.tree.nodes[id].text("mesh").to_string();
+                if !mesh.to_ascii_lowercase().ends_with(".bsp") {
+                    return err(format!("{} doesn't show a map (.bsp)", st.tree.nodes[id].name));
+                }
+                let want = match a.get(1) {
+                    Some(Value::Text(t)) => t.to_ascii_lowercase(),
+                    _ => String::new(),
+                };
+                let model = gex_assets::model::cached(&st.vfs, &mesh).map_err(jlb::value::fault)?;
+                let world = st.tree.global_matrix(id);
+                let mut out = Vec::new();
+                for e in &model.entities {
+                    let get = |k: &str| e.iter().find(|(a, _)| a.eq_ignore_ascii_case(k)).map(|(_, v)| v.clone()).unwrap_or_default();
+                    let class = get("classname").to_ascii_lowercase();
+                    let hit = want.is_empty() || match want.strip_suffix('*') {
+                        Some(p) => class.starts_with(p),
+                        None => class == want,
+                    };
+                    if !hit {
+                        continue;
+                    }
+                    let m = world * gex_assets::model::entity_transform(e);
+                    let (_, r, t) = m.to_scale_rotation_translation();
+                    let yaw = r.to_euler(glam::EulerRot::YXZ).0.to_degrees();
+                    let keys = jlb::embed::named_table(e.iter().map(|(k, v)| (k.as_str(), Value::text(v))).collect());
+                    out.push(jlb::embed::named_table(vec![
+                        ("classname", Value::text(&class)),
+                        ("name", Value::text(&get("targetname"))),
+                        ("x", num(t.x as f64)),
+                        ("y", num(t.y as f64)),
+                        ("z", num(t.z as f64)),
+                        ("rotation_y", num(yaw as f64)),
+                        ("keys", keys),
+                    ]));
+                }
+                Ok(list_table(out))
             }
             "ANIMATE" => {
                 let id = target(st, a.first())?;

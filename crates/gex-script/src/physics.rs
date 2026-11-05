@@ -395,7 +395,16 @@ struct Entry3 {
     vel: Vec3,
 }
 
+/// A skinned model gone limp: a body per bone, held together at the joints.
+struct Ragdoll {
+    /// For each joint: the body it follows, and where the joint sits on that body.
+    follow: Vec<(d3::RigidBodyHandle, Mat4)>,
+    bodies: Vec<d3::RigidBodyHandle>,
+    inverse_bind: Vec<Mat4>,
+}
+
 pub struct World3 {
+    ragdolls: HashMap<NodeId, Ragdoll>,
     world: d3::PhysicsWorld,
     bodies: HashMap<NodeId, Entry3>,
     owners: HashMap<d3::ColliderHandle, NodeId>,
@@ -425,10 +434,10 @@ impl World3 {
         let mut controller = d3::KinematicCharacterController::default();
         controller.offset = d3::CharacterLength::Absolute(0.01);
         controller.snap_to_ground = Some(d3::CharacterLength::Absolute(0.1));
-        World3 { world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
+        World3 { ragdolls: HashMap::new(), world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
     }
 
-    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers) {
+    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>) {
         let n = &tree.nodes[id];
         let (pos, rot, scale) = pose3(tree, id);
         let builder = match n.text("body") {
@@ -450,6 +459,10 @@ impl World3 {
         let col = match n.text("shape") {
             "sphere" | "ball" => d3::ColliderBuilder::ball(r),
             "capsule" => d3::ColliderBuilder::capsule_y((half.y - r).max(0.001), r),
+            "hull" | "model" => {
+                let pts: Vec<Vec3> = hulls.get(&id).map(|h| h.1.iter().map(|p| *p * scale).collect()).unwrap_or_default();
+                d3::ColliderBuilder::convex_hull(&pts).unwrap_or_else(|| d3::ColliderBuilder::cuboid(half.x, half.y, half.z))
+            }
             _ => d3::ColliderBuilder::cuboid(half.x, half.y, half.z),
         }
         .collision_groups(groups3(layers.of(tree, id)))
@@ -493,7 +506,7 @@ impl World3 {
         }
     }
 
-    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers) {
+    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>) {
         let alive: HashSet<NodeId> = ids.iter().copied().collect();
         let gone: Vec<NodeId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
         for g in gone {
@@ -501,12 +514,15 @@ impl World3 {
         }
         for &id in ids {
             let (pos, rot, scale) = pose3(tree, id);
-            let key = shape_key(tree, id, scale);
+            let mut key = shape_key(tree, id, scale);
+            if let Some(h) = hulls.get(&id) {
+                key.push_str(&h.0);
+            }
             if self.bodies.get(&id).is_some_and(|e| e.key != key) {
                 self.remove(id);
             }
             let Some(e) = self.bodies.get_mut(&id) else {
-                self.build(tree, id, key, layers);
+                self.build(tree, id, key, layers, hulls);
                 continue;
             };
             let b = &mut self.world.bodies[e.body];
@@ -556,6 +572,110 @@ impl World3 {
             e.rot = rot;
             e.vel = v;
         }
+    }
+
+    /// Turns a posed skeleton into physics bodies. `joints` are each joint's world transform
+    /// now, `parents` the skeleton's parent links, `inverse_bind` its bind matrices.
+    fn make_ragdoll(&mut self, id: NodeId, joints: &[Mat4], parents: &[Option<usize>], inverse_bind: &[Mat4], groups: (u32, u32), velocity: Vec3) {
+        self.remove_ragdoll(id);
+        let n = joints.len();
+        let pos: Vec<Vec3> = joints.iter().map(|m| m.w_axis.truncate()).collect();
+        let mut children = vec![Vec::new(); n];
+        for (i, p) in parents.iter().enumerate() {
+            if let Some(p) = p.filter(|p| *p < n) {
+                children[p].push(i);
+            }
+        }
+        // A bone gets a body when it reaches far enough to its child; tiny ones ride along.
+        let mut body_of: Vec<Option<d3::RigidBodyHandle>> = vec![None; n];
+        let mut bodies = Vec::new();
+        let mut body_pose: HashMap<d3::RigidBodyHandle, Mat4> = HashMap::new();
+        for i in 0..n {
+            // The farthest child sets the bone's length and direction.
+            let tip = children[i].iter().map(|c| pos[*c]).max_by(|a, b| a.distance(pos[i]).total_cmp(&b.distance(pos[i])));
+            let Some(tip) = tip else { continue };
+            let len = tip.distance(pos[i]);
+            if len < 0.05 {
+                continue;
+            }
+            let dir = (tip - pos[i]) / len;
+            let rot = Quat::from_rotation_arc(Vec3::Y, dir);
+            let centre = (pos[i] + tip) * 0.5;
+            let r = (len * 0.22).clamp(0.025, 0.12);
+            let half = (len * 0.5 - r).max(0.01);
+            let body = d3::RigidBodyBuilder::dynamic().pose(d3::Pose::from_parts(centre, rot)).linvel(velocity).linear_damping(0.1).angular_damping(0.6);
+            let col = d3::ColliderBuilder::capsule_y(half, r).density(900.0).friction(0.7).collision_groups(groups3(groups));
+            let (h, c) = self.world.insert(body, col);
+            self.owners.insert(c, id);
+            body_of[i] = Some(h);
+            bodies.push(h);
+            body_pose.insert(h, Mat4::from_rotation_translation(rot, centre));
+        }
+        if bodies.is_empty() {
+            return;
+        }
+        // Which body each joint follows: its own, else its nearest ancestor's (else the first).
+        let mut follow_body = vec![bodies[0]; n];
+        for i in 0..n {
+            let mut k = Some(i);
+            while let Some(j) = k {
+                if let Some(b) = body_of[j] {
+                    follow_body[i] = b;
+                    break;
+                }
+                k = parents[j];
+            }
+            if k.is_none() {
+                // A root without a body: the nearest child body.
+                if let Some(b) = children[i].iter().find_map(|c| body_of[*c]) {
+                    follow_body[i] = b;
+                }
+            }
+        }
+        // Ball joints where a bone's body meets its parent's.
+        for i in 0..n {
+            let Some(b) = body_of[i] else { continue };
+            let mut k = parents[i];
+            let parent_body = loop {
+                match k {
+                    Some(j) if body_of[j].is_some() => break body_of[j],
+                    Some(j) => k = parents[j],
+                    None => break None,
+                }
+            };
+            let Some(pb) = parent_body else { continue };
+            let a1 = body_pose[&pb].inverse().transform_point3(pos[i]);
+            let a2 = body_pose[&b].inverse().transform_point3(pos[i]);
+            let joint = d3::SphericalJointBuilder::new().local_anchor1(a1).local_anchor2(a2).contacts_enabled(false);
+            self.world.insert_impulse_joint(pb, b, joint);
+        }
+        let follow = (0..n).map(|i| (follow_body[i], body_pose[&follow_body[i]].inverse() * joints[i])).collect();
+        self.ragdolls.insert(id, Ragdoll { follow, bodies, inverse_bind: inverse_bind.to_vec() });
+    }
+
+    fn remove_ragdoll(&mut self, id: NodeId) {
+        if let Some(r) = self.ragdolls.remove(&id) {
+            for b in r.bodies {
+                self.world.remove_body(b);
+            }
+            self.owners.retain(|_, o| *o != id);
+        }
+    }
+
+    /// A ragdoll's joint matrices now, in the space of its node (`node_world`).
+    fn ragdoll_pose(&self, id: NodeId, node_world: Mat4) -> Option<Vec<Mat4>> {
+        let r = self.ragdolls.get(&id)?;
+        let inv = node_world.inverse();
+        Some(
+            r.follow
+                .iter()
+                .zip(&r.inverse_bind)
+                .map(|((b, off), ib)| {
+                    let body = &self.world.bodies[*b];
+                    inv * Mat4::from_rotation_translation(*body.rotation(), body.translation()) * *off * *ib
+                })
+                .collect(),
+        )
     }
 
     fn floor_contacts(&self) -> HashSet<NodeId> {
@@ -621,6 +741,13 @@ impl World3 {
             let m = b.mass();
             b.apply_impulse(v * m, true);
         }
+        if let Some(r) = self.ragdolls.get(&id) {
+            for h in &r.bodies {
+                let b = &mut self.world.bodies[*h];
+                let m = b.mass();
+                b.apply_impulse(v * m, true);
+            }
+        }
     }
 
     fn raycast(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
@@ -651,6 +778,8 @@ pub struct Physics {
     pub statics_3d: Vec<StaticBox3>,
     pub meshes_3d: Vec<StaticMesh>,
     pub layers: Layers,
+    /// Points for Body3D "hull" shapes (from their model), in the body's own space: key, points.
+    pub hulls: HashMap<NodeId, (String, Arc<Vec<Vec3>>)>,
 }
 
 impl Physics {
@@ -679,7 +808,11 @@ impl Physics {
             let g = self.gravity_3d;
             let w = self.w3.get_or_insert_with(|| World3::new(g));
             w.set_statics(&self.statics_3d, &self.meshes_3d);
-            w.sync(tree, &b3, &self.layers);
+            w.sync(tree, &b3, &self.layers, &self.hulls);
+            let gone: Vec<NodeId> = w.ragdolls.keys().filter(|id| !tree.contains(**id)).copied().collect();
+            for g in gone {
+                w.remove_ragdoll(g);
+            }
         }
     }
 
@@ -745,13 +878,37 @@ impl Physics {
                     w.impulse(id, v.truncate());
                 }
             }
-            NodeKind::Body3D => {
+            _ => {
                 if let Some(w) = &mut self.w3 {
                     w.impulse(id, v);
                 }
             }
-            _ => {}
         }
+    }
+
+    /// Makes a skinned model's node a ragdoll (see World3::make_ragdoll).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ragdoll(&mut self, tree: &SceneTree, id: NodeId, joints: &[Mat4], parents: &[Option<usize>], inverse_bind: &[Mat4], velocity: Vec3) {
+        let groups = self.layers.of(tree, id);
+        let g = self.gravity_3d;
+        let w = self.w3.get_or_insert_with(|| World3::new(g));
+        w.make_ragdoll(id, joints, parents, inverse_bind, groups, velocity);
+    }
+
+    pub fn end_ragdoll(&mut self, id: NodeId) {
+        if let Some(w) = &mut self.w3 {
+            w.remove_ragdoll(id);
+        }
+    }
+
+    pub fn is_ragdoll(&self, id: NodeId) -> bool {
+        self.w3.as_ref().is_some_and(|w| w.ragdolls.contains_key(&id))
+    }
+
+    /// Joint matrices for every ragdoll whose node still exists.
+    pub fn ragdoll_poses(&self, tree: &SceneTree) -> Vec<(NodeId, Vec<Mat4>)> {
+        let Some(w) = &self.w3 else { return Vec::new() };
+        w.ragdolls.keys().filter(|id| tree.contains(**id)).filter_map(|id| w.ragdoll_pose(*id, tree.global_matrix(*id)).map(|p| (*id, p))).collect()
     }
 
     pub fn raycast_2d(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {

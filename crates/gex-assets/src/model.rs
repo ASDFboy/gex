@@ -77,6 +77,9 @@ pub struct ModelData {
     /// map's entities (each a list of key/value pairs, as written in the map).
     pub lightmap: Option<crate::Rgba>,
     pub entities: Vec<Vec<(String, String)>>,
+    /// The vertices are already in the skeleton's rest pose (Source models): no need to pose
+    /// it unless something moves the bones.
+    pub rest_is_bind: bool,
 }
 
 impl ModelData {
@@ -495,7 +498,47 @@ fn load_mdl(vfs: &Vfs, path: &str, read: &mut dyn FnMut(&str) -> Result<Vec<u8>,
     let normals: Vec<Vec3> = verts.iter().map(|v| src(Vec3::new(v.normal.x, v.normal.y, v.normal.z)).normalize_or(Vec3::Y)).collect();
     let uvs: Vec<Vec2> = verts.iter().map(|v| Vec2::from(v.texture_coordinates)).collect();
     let skin = model.skin_tables().next();
-    let mut out = ModelData { two_sided: true, ..Default::default() };
+    let mut out = ModelData { two_sided: true, rest_is_bind: true, ..Default::default() };
+    // The skeleton (for ragdolls): bones in Source space turned into GEX space.
+    let bones: Vec<_> = model.bones().collect();
+    let skinned = bones.len() > 1;
+    if skinned {
+        let swap = Mat4::from_cols(glam::Vec4::X, glam::Vec4::new(0.0, 0.0, -1.0, 0.0), glam::Vec4::Y, glam::Vec4::W);
+        let swap_q = Quat::from_mat4(&swap);
+        for b in &bones {
+            let q = Quat::from_xyzw(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w).normalize();
+            let rest = (src(Vec3::new(b.pos.x, b.pos.y, b.pos.z)), (swap_q * q * swap_q.inverse()).normalize(), Vec3::ONE);
+            out.joints.push(Joint { name: b.name.clone(), parent: (b.parent >= 0).then_some(b.parent as usize), inverse_bind: Mat4::IDENTITY, rest });
+        }
+        // Bind pose = rest pose.
+        let mut world = vec![Mat4::IDENTITY; out.joints.len()];
+        for i in 0..out.joints.len() {
+            let (t, r, sc) = out.joints[i].rest;
+            let m = Mat4::from_scale_rotation_translation(sc, r, t);
+            world[i] = match out.joints[i].parent {
+                Some(p) if p < i => world[p] * m,
+                _ => m,
+            };
+            out.joints[i].inverse_bind = world[i].inverse();
+        }
+    }
+    let weights_of = |i: usize| -> ([u16; 4], [f32; 4]) {
+        let mut j = [0u16; 4];
+        let mut w = [0f32; 4];
+        if let Some(v) = verts.get(i) {
+            for (k, bw) in v.bone_weights.weights().enumerate().take(3) {
+                j[k] = bw.bone_id as u16;
+                w[k] = bw.weight;
+            }
+        }
+        let sum: f32 = w.iter().sum();
+        if sum > 0.0 {
+            w.iter_mut().for_each(|x| *x /= sum);
+        } else {
+            w[0] = 1.0;
+        }
+        (j, w)
+    };
     let mut by_mat: HashMap<i32, Vec<u32>> = HashMap::new();
     for mesh in model.meshes() {
         by_mat.entry(mesh.material_index()).or_default().extend(mesh.vertex_strip_indices().flatten().map(|i| i as u32));
@@ -520,6 +563,11 @@ fn load_mdl(vfs: &Vfs, path: &str, read: &mut dyn FnMut(&str) -> Result<Vec<u8>,
                 p.positions.push(positions.get(i as usize).copied().unwrap_or(Vec3::ZERO));
                 p.normals.push(normals.get(i as usize).copied().unwrap_or(Vec3::Y));
                 p.uvs.push(uvs.get(i as usize).copied().unwrap_or(Vec2::ZERO));
+                if skinned {
+                    let (j, w) = weights_of(i as usize);
+                    p.joints.push(j);
+                    p.weights.push(w);
+                }
                 (p.positions.len() - 1) as u32
             });
             p.indices.push(k);

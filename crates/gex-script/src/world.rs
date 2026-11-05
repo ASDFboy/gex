@@ -299,6 +299,7 @@ impl Game {
             return;
         }
         self.started = true;
+        self.spawn_map_props();
         let ids = self.st.borrow().tree.walk();
         self.attach_all(&ids);
         self.autoplay(&ids);
@@ -306,6 +307,54 @@ impl Game {
             self.run(*id, "on_create", vec![]);
         }
         self.drain();
+    }
+
+    /// Maps (a Mesh3D showing a .bsp) bring their physics props to life: each becomes a
+    /// Body3D (its outline as the shape) holding the model, under the map's node.
+    fn spawn_map_props(&mut self) {
+        let mut st = self.st.borrow_mut();
+        let st = &mut *st;
+        let maps: Vec<NodeId> = st
+            .tree
+            .walk()
+            .into_iter()
+            .filter(|i| {
+                let n = &st.tree.nodes[*i];
+                n.kind == NodeKind::Mesh3D && n.text("mesh").to_ascii_lowercase().ends_with(".bsp") && n.prop("map_props").is_none_or(|v| v.as_bool())
+            })
+            .collect();
+        for map in maps {
+            let mesh = st.tree.nodes[map].text("mesh").to_string();
+            let scheme = mesh.split_once("://").map(|s| s.0).unwrap_or("res").to_string();
+            let Ok(model) = gex_assets::model::cached(&st.vfs, &mesh) else { continue };
+            for e in &model.entities {
+                let get = |k: &str| e.iter().find(|(a, _)| a.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str()).unwrap_or("");
+                let class = get("classname").to_ascii_lowercase();
+                if !(class.starts_with("prop_physics") || class == "prop_ragdoll") {
+                    continue;
+                }
+                let file = get("model").replace('\\', "/");
+                if file.is_empty() {
+                    continue;
+                }
+                let m = gex_assets::model::entity_transform(e);
+                let (_, r, t) = m.to_scale_rotation_translation();
+                let (y, x, z) = r.to_euler(glam::EulerRot::YXZ);
+                let name = match get("targetname") {
+                    "" => file.rsplit('/').next().unwrap_or("prop").trim_end_matches(".mdl").to_string(),
+                    n => n.to_string(),
+                };
+                let mut body = gex_core::Node::new(name, NodeKind::Body3D);
+                body.transform.position = t;
+                body.transform.rotation = glam::Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+                body.props.insert("shape".into(), Variant::Text("hull".into()));
+                body.groups.push("map_props".into());
+                let b = st.tree.add(Some(map), body);
+                let mut look = gex_core::Node::new("Model", NodeKind::Mesh3D);
+                look.props.insert("mesh".into(), Variant::Text(format!("{}://{}", scheme, file.to_ascii_lowercase())));
+                st.tree.add(Some(b), look);
+            }
+        }
     }
 
     /// Starts Sound nodes that play by themselves.
@@ -921,6 +970,33 @@ impl Game {
         }
         st.mesh_colliders.retain(|k, _| keep.contains(k));
         st.physics.meshes_3d = meshes;
+        // Body3D with shape "hull": the outline of its first Mesh3D child's model.
+        let mut keep = HashSet::new();
+        for id in st.tree.walk() {
+            let n = &st.tree.nodes[id];
+            if n.kind != NodeKind::Body3D || !matches!(n.text("shape"), "hull" | "model") {
+                continue;
+            }
+            let Some(child) = n.children.iter().copied().find(|c| st.tree.nodes[*c].kind == NodeKind::Mesh3D) else { continue };
+            let c = &st.tree.nodes[child];
+            let mesh = c.text("mesh").to_string();
+            let local = c.transform.matrix();
+            let key = format!("{}{:?}", mesh, local);
+            keep.insert(id);
+            if st.physics.hulls.get(&id).is_some_and(|h| h.0 == key) {
+                continue;
+            }
+            let pts: Vec<glam::Vec3> = if gex_assets::model::is_model(&mesh) {
+                match gex_assets::model::cached(&st.vfs, &mesh) {
+                    Ok(model) => model.parts.iter().flat_map(|p| p.positions.iter().map(|v| local.transform_point3(*v))).collect(),
+                    Err(_) => Vec::new(),
+                }
+            } else {
+                (0..8).map(|i| local.transform_point3(glam::Vec3::new(if i & 1 == 0 { -0.5 } else { 0.5 }, if i & 2 == 0 { -0.5 } else { 0.5 }, if i & 4 == 0 { -0.5 } else { 0.5 }))).collect()
+            };
+            st.physics.hulls.insert(id, (key, std::sync::Arc::new(pts)));
+        }
+        st.physics.hulls.retain(|k, _| keep.contains(k));
     }
 
     /// Smooths and limits the 2D camera, runs down SHAKE, and moves fades along.
@@ -986,7 +1062,11 @@ impl Game {
         let mut list = gex_core::render::extract(&st.tree);
         crate::particles::draw(&st.tree, &st.particles, &mut list);
         crate::particles::draw_3d(&st.tree, &st.particles_3d, &mut list);
+        let ragdolls: HashMap<NodeId, std::sync::Arc<Vec<glam::Mat4>>> = st.physics.ragdoll_poses(&st.tree).into_iter().map(|(id, p)| (id, std::sync::Arc::new(p))).collect();
         for m in &mut list.meshes {
+            if let Some(p) = ragdolls.get(&m.node) {
+                m.pose = Some(p.clone());
+            }
             if let Some((prev, t, k, _)) = st.anim_blends.get(&m.node) {
                 m.prev_animation = prev.clone();
                 m.prev_time = *t;

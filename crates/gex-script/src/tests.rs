@@ -709,3 +709,60 @@ fn collision_layers_and_3d_areas() {
     let ghosts = st.physics.layers.bits("ghosts", 0);
     assert!(st.physics.raycast_3d(glam::Vec3::new(3.0, 10.0, 0.0), glam::Vec3::NEG_Y, 100.0, None, ghosts).is_none());
 }
+
+/// With a real map: `GEX_TEST_BSP=/folder/with/map.bsp cargo test -p gex-script real_map -- --ignored`.
+#[test]
+#[ignore]
+fn real_map_entities_and_props() {
+    let Ok(file) = std::env::var("GEX_TEST_BSP") else { return };
+    let path = std::path::Path::new(&file);
+    let dir = path.parent().unwrap();
+    let name = path.file_name().unwrap().to_string_lossy();
+    let scene = format!(r#"(root: (name: "Root", kind: Some(Node3D), scripts: ["res://probe.jlb"], children: [
+        (name: "Map", kind: Some(Mesh3D), props: {{"mesh": Text("res://{}"), "collision": Bool(true)}}),
+    ]))"#, name);
+    std::fs::write(dir.join("main.jscene"), scene).unwrap();
+    std::fs::write(dir.join("probe.jlb"), "DEF on_create() {\n\tall = MAP_ENTITIES(\"Map\")\n\tspawns = MAP_ENTITIES(\"Map\", \"info_player*\")\n\tPRINT(LEN(all) + \" entities, \" + LEN(spawns) + \" spawns\")\n\ts = spawns[1]\n\tPRINT(s.classname + \" at \" + ROUND(s.x, 2) + \" \" + ROUND(s.y, 2) + \" \" + ROUND(s.z, 2) + \" facing \" + ROUND(s.rotation_y))\n}\n").unwrap();
+    std::fs::write(dir.join("project.jproj"), "(name: \"maptest\")").unwrap();
+    let p = gex_core::project::Project::open(dir).unwrap();
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..3 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    for l in g.take_logs() {
+        println!("{:?}: {}", l.kind, l.text);
+    }
+    let props = g.tree().in_group("map_props").len();
+    println!("{} physics props", props);
+}
+
+/// With a skinned model: `GEX_TEST_SKINNED=/folder/Fox.glb cargo test -p gex-script ragdoll -- --ignored`.
+#[test]
+#[ignore]
+fn ragdoll_falls() {
+    let Ok(file) = std::env::var("GEX_TEST_SKINNED") else { return };
+    let path = std::path::Path::new(&file);
+    let dir = path.parent().unwrap();
+    let name = path.file_name().unwrap().to_string_lossy();
+    let scene = format!(r#"(root: (name: "Root", kind: Some(Node3D), children: [
+        (name: "Floor", kind: Some(Mesh3D), props: {{"mesh": Text("plane"), "collision": Bool(true)}}, transform: Some((scale: (40.0, 1.0, 40.0)))),
+        (name: "Guy", kind: Some(Mesh3D), transform: Some((position: (0.0, 1.0, 0.0), scale: (0.02, 0.02, 0.02))), props: {{"mesh": Text("res://{}")}}, scripts: ["res://drop.jlb"]),
+    ]))"#, name);
+    std::fs::write(dir.join("main.jscene"), scene).unwrap();
+    std::fs::write(dir.join("drop.jlb"), "DEF on_create() {\n\tRAGDOLL(NULL, 0, 0, 2)\n}\n").unwrap();
+    std::fs::write(dir.join("project.jproj"), "(name: \"ragdolltest\")").unwrap();
+    let p = gex_core::project::Project::open(dir).unwrap();
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    let first = g.render_list().meshes.iter().find_map(|m| m.pose.clone()).expect("posed by the ragdoll");
+    for _ in 0..180 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let last = g.render_list().meshes.iter().find_map(|m| m.pose.clone()).unwrap();
+    assert!(last.iter().all(|m| m.is_finite()));
+    let moved = first.iter().zip(last.iter()).map(|(a, b)| a.w_axis.distance(b.w_axis)).fold(0.0f32, f32::max);
+    println!("bones: {}, most moved: {}", last.len(), moved);
+    assert!(moved > 0.1);
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:?}", errs);
+}

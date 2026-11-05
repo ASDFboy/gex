@@ -114,6 +114,8 @@ pub struct MeshDraw {
     pub billboard: bool,
     /// A .wgsl file with a custom `fn material(...)` (see docs/SHADERS.md).
     pub shader: String,
+    /// Joint matrices set from outside (a ragdoll), instead of an animation.
+    pub pose: Option<std::sync::Arc<Vec<Mat4>>>,
 }
 
 impl MeshDraw {
@@ -137,6 +139,7 @@ impl MeshDraw {
             unlit: false,
             billboard: false,
             shader: String::new(),
+            pose: None,
         }
     }
 }

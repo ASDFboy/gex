@@ -27,7 +27,7 @@ mounts: [(scheme: "hl2", kind: SourceGame(install: "C:\\...\\Half-Life 2", games
 | `.vmt` materials | resolved through `$basetexture`; use them anywhere a texture goes |
 | `.wav` / `.mp3` sounds | `PLAY_SOUND("hl2://sound/weapons/crowbar/crowbar_impact1.wav")`, `MUSIC(...)`, or a Sound node |
 | `.mdl` models | set a Mesh3D's `mesh` to the `.mdl` (or drag it into the 3D view); textures come from its materials, and `ANIMATIONS(node)` / `ANIMATE(node, name)` play its sequences |
-| `.bsp` maps | a Mesh3D with `mesh` = `hl2://maps/d1_trainstation_01.bsp` draws the map's brushes, displacements and static props; turn on its `collision` to walk on it |
+| `.bsp` maps | a Mesh3D with `mesh` = `hl2://maps/d1_trainstation_01.bsp` draws the map with its baked lighting: brushes, displacements, brush entities (doors, func_brush...), static and dynamic props; turn on its `collision` to walk on it |
 
 ## Walking around a map
 
@@ -37,6 +37,34 @@ mounts: [(scheme: "hl2", kind: SourceGame(install: "C:\\...\\Half-Life 2", games
    from the demo (`scenes/fps.jscene`, `scripts/fps.jlb`) fits. Copy its Player node (Ctrl+C,
    Ctrl+V into your scene) and put it somewhere above the floor.
 3. Add a Light3D (directional) and an Environment, then press F5.
+
+4. Put the player where the map's own spawn point is:
+
+```
+DEF on_create() {
+	spawn = MAP_ENTITIES("Map", "info_player_start")[1]
+	SET("Player", "x", spawn.x)
+	SET("Player", "y", spawn.y + 1)
+	SET("Player", "z", spawn.z)
+}
+```
+
+`MAP_ENTITIES(map, classname)` lists any kind of entity (lights, `info_target`s, item spots,
+`npc_*` placements) with its position, facing and every setting it has, so scripts can build on
+the map: spawn enemies where the map put NPCs, play sounds at `ambient_generic`s, and so on.
+
+**Physics props.** When the game starts, the map's `prop_physics` become real objects: a
+Body3D shaped like the model's outline, holding the model, in the group `map_props`. Push them
+with `IMPULSE`, shoot them with `RAYCAST_3D`. (Turn the Mesh3D's `map_props` off to leave
+them out.) They don't show in the editor, only when playing.
+
+**Ragdolls.** Characters (`hl2://models/humans/group01/male_07.mdl`, say) load with their
+skeleton. `RAGDOLL(node)` makes one go limp and fall; `IMPULSE(node, x, y, z)` shoves it. The
+bodies are worked out from the skeleton (a capsule per bone), not from the model's own `.phy`
+file, so they're a rough fit.
+
+What isn't there yet: Source models' animations (they stand in their reference pose), doors
+that open (they're drawn shut), NPC behaviour and map logic (triggers, outputs).
 
 Big maps take a few seconds to load the first time; the model cache keeps them after that.
 
