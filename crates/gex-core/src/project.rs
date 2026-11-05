@@ -22,11 +22,17 @@ pub struct ProjectConfig {
     /// Input actions: a name scripts use ("jump") → the keys and buttons that trigger it
     /// (["space", "w", "pad_a"]). `KEY_DOWN("jump")` and `on_press_jump()` then work with any.
     pub actions: std::collections::BTreeMap<String, Vec<String>>,
+    /// The exported game's window: full screen, resizable, vsync (no tearing, capped to the screen's rate).
+    pub fullscreen: bool,
+    pub resizable: bool,
+    pub vsync: bool,
+    /// A .png for the window and the exported program's icon.
+    pub icon: String,
 }
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        ProjectConfig { name: "New Game".into(), main_scene: "res://scenes/main.jscene".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: [0.0, 980.0], gravity_3d: [0.0, -9.81, 0.0], actions: Default::default() }
+        ProjectConfig { name: "New Game".into(), main_scene: "res://scenes/main.jscene".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: [0.0, 980.0], gravity_3d: [0.0, -9.81, 0.0], actions: Default::default(), fullscreen: false, resizable: true, vsync: true, icon: String::new() }
     }
 }
 

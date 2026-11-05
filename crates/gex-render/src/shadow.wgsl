@@ -15,6 +15,7 @@ struct InstanceIn {
     @location(6) m3: vec4<f32>,
     @location(7) color: vec4<f32>,
     @location(8) uv: vec4<f32>,
+    @location(9) mat: vec4<f32>,
 };
 
 @vertex

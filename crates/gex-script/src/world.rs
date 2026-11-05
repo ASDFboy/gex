@@ -145,10 +145,14 @@ pub struct WorldState {
     pub mouse_delta: [f32; 2],
     /// A script asked for the mouse to be hidden and held (first-person look).
     pub mouse_locked: bool,
+    pub fullscreen: Option<bool>,
+    pub window_title: Option<String>,
     /// DRAW_* commands from this frame.
     pub draws: Vec<crate::commands::Draw>,
     /// Sprite animations: node → (animation, time, ended).
     pub(crate) anims: HashMap<NodeId, (String, f64, bool)>,
+    /// Model crossfades: node → (from animation, its time, progress 0..1, length).
+    pub(crate) anim_blends: HashMap<NodeId, (String, f32, f32, f32)>,
     /// Tilemap collision boxes: node → (what they were made from, boxes).
     pub(crate) tile_boxes: HashMap<NodeId, (String, Vec<crate::physics::StaticBox2>)>,
     /// Collision meshes made from Mesh3D models: node → (what they were made from, mesh).
@@ -169,6 +173,7 @@ pub struct WorldState {
     pub time_scale: f64,
     /// Particles2D emitters and their live particles.
     pub(crate) particles: HashMap<NodeId, crate::particles::Emitter>,
+    pub(crate) particles_3d: HashMap<NodeId, crate::particles::Emitter3>,
 }
 
 impl WorldState {
@@ -247,11 +252,15 @@ impl Game {
             wheel: 0.0,
             mouse_delta: [0.0; 2],
             mouse_locked: false,
+            fullscreen: None,
+            window_title: None,
             draws: Vec::new(),
             anims: HashMap::new(),
+            anim_blends: HashMap::new(),
             mesh_colliders: HashMap::new(),
             tile_boxes: HashMap::new(),
             particles: HashMap::new(),
+            particles_3d: HashMap::new(),
             tweens: Vec::new(),
             paused: false,
             time_scale: 1.0,
@@ -648,6 +657,8 @@ impl Game {
             let st = &mut *st;
             let frozen: Vec<NodeId> = if st.paused { st.particles.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
             crate::particles::update(&st.tree, &mut st.particles, dt as f32, &frozen);
+            let frozen3: Vec<NodeId> = if st.paused { st.particles_3d.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
+            crate::particles::update_3d(&st.tree, &mut st.particles_3d, dt as f32, &frozen3);
         }
         self.timers(dt);
         let finished = {
@@ -787,11 +798,23 @@ impl Game {
                 let Some(anim) = model.animation(&name) else { continue };
                 let speed = n.num("anim_speed", 1.0);
                 let looped = n.prop("anim_loop").is_none_or(|v| v.as_bool());
+                let blend_len = n.num("anim_blend", 0.2).max(0.0) as f32;
                 let a = st.anims.entry(id).or_insert_with(|| (name.clone(), n.num("anim_time", 0.0), false));
                 if a.0 != name {
+                    // Crossfade from the old animation, frozen where it was.
+                    if blend_len > 0.0 && !a.0.is_empty() {
+                        st.anim_blends.insert(id, (a.0.clone(), a.1 as f32, 0.0, blend_len));
+                    }
                     *a = (name.clone(), 0.0, false);
                 }
                 a.1 += dt * speed;
+                if let Some(b) = st.anim_blends.get_mut(&id) {
+                    b.2 += dt as f32 / b.3.max(1e-3);
+                    if b.2 >= 1.0 {
+                        st.anim_blends.remove(&id);
+                    }
+                }
+                let Some(a) = st.anims.get_mut(&id) else { continue };
                 let dur = anim.duration as f64;
                 if dur > 0.0 && a.1 >= dur {
                     if looped {
@@ -962,7 +985,17 @@ impl Game {
         let st = self.st.borrow();
         let mut list = gex_core::render::extract(&st.tree);
         crate::particles::draw(&st.tree, &st.particles, &mut list);
+        crate::particles::draw_3d(&st.tree, &st.particles_3d, &mut list);
+        for m in &mut list.meshes {
+            if let Some((prev, t, k, _)) = st.anim_blends.get(&m.node) {
+                m.prev_animation = prev.clone();
+                m.prev_time = *t;
+                m.blend = k.clamp(0.0, 1.0);
+            }
+        }
         list.mouse_locked = st.mouse_locked;
+        list.fullscreen = st.fullscreen;
+        list.window_title = st.window_title.clone();
         let jolt = Self::shake_offset(&st);
         if let Some(cam) = &mut list.camera2d {
             if let Some(c) = st.cam2_center {
@@ -979,6 +1012,7 @@ impl Game {
             list.fade = c;
         }
         crate::commands::append_draws(&st.draws, &mut list);
+        list.sprites.sort_by(|a, b| a.layer.total_cmp(&b.layer));
         list
     }
 

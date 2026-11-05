@@ -82,8 +82,8 @@ impl ModelData {
         !self.joints.is_empty() && self.parts.iter().any(|p| !p.joints.is_empty())
     }
 
-    /// Joint matrices (world-from-bind) for an animation at a time; rest pose without one.
-    pub fn pose(&self, anim: Option<&Animation>, t: f32) -> Vec<Mat4> {
+    /// Each joint's local (translation, rotation, scale) for an animation at a time.
+    fn local_pose(&self, anim: Option<&Animation>, t: f32) -> Vec<(Vec3, Quat, Vec3)> {
         let mut local: Vec<(Vec3, Quat, Vec3)> = self.joints.iter().map(|j| j.rest).collect();
         if let Some(a) = anim {
             let t = if a.duration > 0.0 { t.rem_euclid(a.duration.max(1e-6)).min(a.duration) } else { 0.0 };
@@ -98,6 +98,10 @@ impl ModelData {
                 }
             }
         }
+        local
+    }
+
+    fn joint_matrices(&self, local: &[(Vec3, Quat, Vec3)]) -> Vec<Mat4> {
         let mut world = vec![Mat4::IDENTITY; self.joints.len()];
         // Joints are stored parents first.
         for (i, j) in self.joints.iter().enumerate() {
@@ -111,7 +115,20 @@ impl ModelData {
         world.iter().zip(&self.joints).map(|(w, j)| *w * j.inverse_bind).collect()
     }
 
-    /// A part's vertices posed with the given joint matrices.
+    /// Joint matrices (world-from-bind) for an animation at a time; rest pose without one.
+    pub fn pose(&self, anim: Option<&Animation>, t: f32) -> Vec<Mat4> {
+        self.joint_matrices(&self.local_pose(anim, t))
+    }
+
+    /// A crossfade: `from` at `t_from`, turning into `to` at `t_to` by `k` (0 = all `from`, 1 = all `to`).
+    pub fn pose_blend(&self, from: Option<&Animation>, t_from: f32, to: Option<&Animation>, t_to: f32, k: f32) -> Vec<Mat4> {
+        let a = self.local_pose(from, t_from);
+        let b = self.local_pose(to, t_to);
+        let k = k.clamp(0.0, 1.0);
+        let mixed: Vec<(Vec3, Quat, Vec3)> = a.iter().zip(&b).map(|(x, y)| (x.0.lerp(y.0, k), x.1.slerp(y.1, k), x.2.lerp(y.2, k))).collect();
+        self.joint_matrices(&mixed)
+    }
+
     pub fn skin(&self, part: &Part, joints: &[Mat4]) -> (Vec<Vec3>, Vec<Vec3>) {
         if part.joints.is_empty() || joints.is_empty() {
             return (part.positions.clone(), part.normals.clone());

@@ -29,6 +29,20 @@ pub struct Sprite {
     pub layer: f32,
     pub region: Region,
     pub flip: [bool; 2],
+    /// How much it moves with the camera: 1 normally, 0.5 for a far-off background, 0 stuck to the screen.
+    pub parallax: Vec2,
+    /// Repeats sideways / up and down to fill the view (for backgrounds).
+    pub repeat: [bool; 2],
+}
+
+/// A Light2D: brightens the dark set by a Camera2D's `ambient`.
+#[derive(Clone, Debug)]
+pub struct Light2DDraw {
+    pub node: NodeId,
+    pub pos: Vec2,
+    pub radius: f32,
+    pub color: [f32; 4],
+    pub texture: String,
 }
 
 /// A UI node, drawn in game-window pixels (by the editor/player, on top of the game).
@@ -69,6 +83,8 @@ pub struct Label {
     pub size: f32,
     pub color: [f32; 4],
     pub layer: f32,
+    /// A .ttf / .otf font file, or "" for the default.
+    pub font: String,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +101,55 @@ pub struct MeshDraw {
     /// Model animations: which one, and how far into it (seconds).
     pub animation: String,
     pub anim_time: f32,
+    /// The animation it's blending from (crossfade), its time, and how far the blend is (0..1, 1 = done).
+    pub prev_animation: String,
+    pub prev_time: f32,
+    pub blend: f32,
+    /// Material: a normal map, shininess (0 = matte), how much it glows, and no lighting at all.
+    pub normal_map: String,
+    pub specular: f32,
+    pub emissive: f32,
+    pub unlit: bool,
+    /// Always faces the camera (Sprite3D, 3D particles).
+    pub billboard: bool,
+    /// A .wgsl file with a custom `fn material(...)` (see docs/SHADERS.md).
+    pub shader: String,
+}
+
+impl MeshDraw {
+    pub fn new(node: NodeId, model: Mat4, mesh: &str) -> MeshDraw {
+        MeshDraw {
+            node,
+            model,
+            mesh: mesh.to_string(),
+            color: [1.0; 4],
+            texture: String::new(),
+            uv_scale: [1.0, 1.0],
+            cast_shadows: true,
+            animation: String::new(),
+            anim_time: 0.0,
+            prev_animation: String::new(),
+            prev_time: 0.0,
+            blend: 1.0,
+            normal_map: String::new(),
+            specular: 0.15,
+            emissive: 0.0,
+            unlit: false,
+            billboard: false,
+            shader: String::new(),
+        }
+    }
+}
+
+/// Text placed in the 3D world (drawn on top, facing the screen).
+#[derive(Clone, Debug)]
+pub struct Label3D {
+    pub node: NodeId,
+    pub pos: Vec3,
+    pub text: String,
+    pub size: f32,
+    pub color: [f32; 4],
+    pub font: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,6 +182,11 @@ pub struct Environment3D {
     pub fog_color: [f32; 4],
     pub fog_start: f32,
     pub fog_end: f32,
+    /// How far from the camera shadows reach (metres).
+    pub shadow_distance: f32,
+    /// Glow around bright things: strength (0 = off), and how bright counts.
+    pub bloom: f32,
+    pub bloom_threshold: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -161,6 +231,13 @@ pub struct RenderList {
     pub mouse_locked: bool,
     /// A color over the whole game (fading between scenes); alpha 0 = none.
     pub fade: [f32; 4],
+    pub labels_3d: Vec<Label3D>,
+    /// 2D lighting: the dark (from the Camera2D's ambient; white = none) and the lights in it.
+    pub ambient_2d: [f32; 4],
+    pub lights_2d: Vec<Light2DDraw>,
+    /// What the game wants the window to be (FULLSCREEN, WINDOW_TITLE); None = as it is.
+    pub fullscreen: Option<bool>,
+    pub window_title: Option<String>,
 }
 
 impl RenderList {
@@ -170,7 +247,7 @@ impl RenderList {
 }
 
 pub fn extract(tree: &SceneTree) -> RenderList {
-    let mut out = RenderList { clear: [0.08, 0.08, 0.1, 1.0], ..Default::default() };
+    let mut out = RenderList { clear: [0.08, 0.08, 0.1, 1.0], ambient_2d: [1.0; 4], ..Default::default() };
     for id in tree.walk() {
         if !tree.visible_in_tree(id) {
             continue;
@@ -191,6 +268,8 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     if h * v > 1 { Region::Frame { h, v, frame: n.num("frame", 0.0).max(0.0) as u32 } } else { Region::Whole }
                 },
                 flip: [n.prop("flip_h").is_some_and(|v| v.as_bool()), n.prop("flip_v").is_some_and(|v| v.as_bool())],
+                parallax: Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32),
+                repeat: [n.prop("repeat_x").is_some_and(|v| v.as_bool()), n.prop("repeat_y").is_some_and(|v| v.as_bool())],
             }),
             NodeKind::TileMap2D => {
                 let grid = crate::tiles::parse(n.text("tiles"));
@@ -198,6 +277,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 let tex = n.text("tileset").to_string();
                 let color = n.color("color");
                 let layer = n.num("layer", -5.0) as f32;
+                let parallax = Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32);
                 for (r, row) in grid.iter().enumerate() {
                     for (c, tile) in row.iter().enumerate() {
                         if *tile < 0 {
@@ -214,6 +294,8 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                             layer,
                             region: Region::Tile { w: tw, h: th, id: *tile as u32 },
                             flip: [false; 2],
+                            parallax,
+                            repeat: [false; 2],
                         });
                     }
                 }
@@ -235,6 +317,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 size: n.num("size", 16.0) as f32,
                 color: n.color("color"),
                 layer: n.num("layer", 10.0) as f32,
+                font: n.text("font").to_string(),
             }),
             NodeKind::Collider2D => out.colliders.push(Rect2D {
                 node: id,
@@ -250,8 +333,20 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     size: if circle { Vec2::splat(r) } else { Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32) },
                 });
             }
+            NodeKind::Light2D => out.lights_2d.push(Light2DDraw {
+                node: id,
+                pos: model.w_axis.truncate().truncate(),
+                radius: n.num("radius", 200.0) as f32 * model.x_axis.truncate().length(),
+                color: {
+                    let c = n.color("color");
+                    let e = n.num("energy", 1.0) as f32;
+                    [c[0] * e, c[1] * e, c[2] * e, c[3]]
+                },
+                texture: n.text("texture").to_string(),
+            }),
             NodeKind::Camera2D => {
                 if n.prop("current").is_none_or(|v| v.as_bool()) && out.camera2d.is_none() {
+                    out.ambient_2d = n.color("ambient");
                     let (_, rot, pos) = model.to_scale_rotation_translation();
                     out.camera2d = Some(Camera2D {
                         center: pos.truncate(),
@@ -261,15 +356,37 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 }
             }
             NodeKind::Mesh3D => out.meshes.push(MeshDraw {
-                node: id,
-                model,
-                mesh: n.text("mesh").to_string(),
                 color: n.color("color"),
                 texture: n.text("texture").to_string(),
                 uv_scale: [n.num("uv_scale_x", 1.0) as f32, n.num("uv_scale_y", 1.0) as f32],
                 cast_shadows: n.prop("cast_shadows").is_none_or(|v| v.as_bool()),
                 animation: n.text("animation").to_string(),
                 anim_time: n.num("anim_time", 0.0) as f32,
+                normal_map: n.text("normal_map").to_string(),
+                specular: n.num("specular", 0.15) as f32,
+                emissive: n.num("emissive", 0.0) as f32,
+                unlit: n.prop("unlit").is_some_and(|v| v.as_bool()),
+                shader: n.text("shader").to_string(),
+                ..MeshDraw::new(id, model, n.text("mesh"))
+            }),
+            NodeKind::Sprite3D => {
+                let (w, h) = (n.num("width", 1.0) as f32, n.num("height", 1.0) as f32);
+                out.meshes.push(MeshDraw {
+                    color: n.color("color"),
+                    texture: n.text("texture").to_string(),
+                    cast_shadows: n.prop("cast_shadows").is_some_and(|v| v.as_bool()),
+                    unlit: n.prop("unlit").is_none_or(|v| v.as_bool()),
+                    billboard: n.prop("billboard").is_none_or(|v| v.as_bool()),
+                    ..MeshDraw::new(id, model * Mat4::from_scale(Vec3::new(w, h, 1.0)), "quad")
+                });
+            }
+            NodeKind::Label3D => out.labels_3d.push(Label3D {
+                node: id,
+                pos: model.w_axis.truncate(),
+                text: n.text("text").to_string(),
+                size: n.num("size", 24.0) as f32,
+                color: n.color("color"),
+                font: n.text("font").to_string(),
             }),
             NodeKind::Environment => {
                 if out.environment.is_none() {
@@ -284,6 +401,9 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                         fog_color: n.color("fog_color"),
                         fog_start: n.num("fog_start", 0.0) as f32,
                         fog_end: n.num("fog_end", 0.0) as f32,
+                        shadow_distance: n.num("shadow_distance", 40.0) as f32,
+                        bloom: n.num("bloom", 0.0) as f32,
+                        bloom_threshold: n.num("bloom_threshold", 0.9) as f32,
                     });
                 }
             }

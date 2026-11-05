@@ -14,6 +14,7 @@ mod gamepad;
 mod panels;
 mod state;
 mod templates;
+mod text;
 mod theme;
 mod ui_layer;
 mod vim;
@@ -32,6 +33,16 @@ fn options(title: &str, size: [f32; 2]) -> eframe::NativeOptions {
         run_and_return: false,
         ..Default::default()
     }
+}
+
+/// The project's icon picture, for the window.
+fn window_icon(p: &gex_core::project::Project) -> Option<egui::IconData> {
+    if p.config.icon.is_empty() {
+        return None;
+    }
+    let vfs = gex_assets::Vfs::new(&p.dir, &p.config);
+    let img = gex_assets::load_image(&vfs, &p.config.icon).ok()?;
+    Some(egui::IconData { rgba: img.pixels, width: img.width, height: img.height })
 }
 
 fn main() -> eframe::Result {
@@ -55,9 +66,18 @@ fn main() -> eframe::Result {
         };
         let [w, h] = project.config.window_size;
         let title = project.config.name.clone();
+        let c = &project.config;
+        let mut opts = options(&title, [w as f32, h as f32]);
+        if !c.vsync {
+            opts.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::AutoNoVsync;
+        }
+        opts.viewport = opts.viewport.with_min_inner_size([160.0, 90.0]).with_resizable(c.resizable).with_fullscreen(c.fullscreen);
+        if let Some(icon) = window_icon(&project) {
+            opts.viewport = opts.viewport.with_icon(icon);
+        }
         return eframe::run_native(
             &title,
-            options(&title, [w as f32, h as f32]),
+            opts,
             Box::new(move |_cc| app::PlayerApp::new(project).map(|a| Box::new(a) as Box<dyn eframe::App>).map_err(|e| e.into())),
         );
     }

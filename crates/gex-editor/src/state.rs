@@ -120,6 +120,7 @@ pub struct EditorState {
     pub vim_enabled: bool,
     /// Particles2D previews in the scene view (not while playing).
     pub preview_particles: HashMap<NodeId, gex_script::particles::Emitter>,
+    pub preview_particles_3d: HashMap<NodeId, gex_script::particles::Emitter3>,
     pub particle_clock: Instant,
     /// Script tabs whose file was renamed: (old, new), for the dock to follow.
     pub renamed_scripts: Vec<(String, String)>,
@@ -163,6 +164,7 @@ impl EditorState {
             breakpoints: HashMap::new(),
             game_breakpoints: Default::default(),
             preview_particles: HashMap::new(),
+            preview_particles_3d: HashMap::new(),
             renamed_scripts: Vec::new(),
             particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
@@ -218,6 +220,7 @@ impl EditorState {
 
     fn take_doc(&mut self) -> SceneDoc {
         self.preview_particles.clear();
+        self.preview_particles_3d.clear();
         SceneDoc {
             tree: std::mem::take(&mut self.tree),
             scene_res: self.scene_res.take(),

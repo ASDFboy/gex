@@ -205,6 +205,10 @@ struct SettingsForm {
     gravity_3d: f32,
     /// (action name, keys as "space, w, pad_a").
     actions: Vec<(String, String)>,
+    fullscreen: bool,
+    resizable: bool,
+    vsync: bool,
+    icon: String,
 }
 
 impl EditorApp {
@@ -588,6 +592,10 @@ impl EditorApp {
             f.gravity_2d = st.project.config.gravity_2d[1];
             f.gravity_3d = -st.project.config.gravity_3d[1];
             f.actions = st.project.config.actions.iter().map(|(k, v)| (k.clone(), v.join(", "))).collect();
+            f.fullscreen = st.project.config.fullscreen;
+            f.resizable = st.project.config.resizable;
+            f.vsync = st.project.config.vsync;
+            f.icon = st.project.config.icon.clone();
             f.hl2_on = false;
             f.hl2_games = "ep2, episodic, hl2".into();
             f.hl2_path.clear();
@@ -626,6 +634,19 @@ impl EditorApp {
                         }
                     }
                 });
+                ui.end_row();
+                ui.label("Window");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut f.fullscreen, "full screen").on_hover_text("start the exported game full screen (Alt+Enter or F11 switches)");
+                    ui.checkbox(&mut f.resizable, "resizable");
+                    ui.checkbox(&mut f.vsync, "vsync").on_hover_text("no tearing; frames capped to the screen's refresh rate");
+                });
+                ui.end_row();
+                ui.label("Icon");
+                let r = ui.add(egui::TextEdit::singleline(&mut f.icon).hint_text("drop a .png here").desired_width(300.0));
+                if let Some(p) = r.dnd_release_payload::<panels::AssetPath>() {
+                    f.icon = p.0.clone();
+                }
                 ui.end_row();
                 ui.label("Gravity 2D");
                 ui.add(egui::DragValue::new(&mut f.gravity_2d).speed(10.0).suffix(" px/s² down"));
@@ -692,6 +713,10 @@ impl EditorApp {
                 st.project.config.name = f.name.clone();
                 st.project.config.main_scene = f.main_scene.clone();
                 st.project.config.window_size = f.window;
+                st.project.config.fullscreen = f.fullscreen;
+                st.project.config.resizable = f.resizable;
+                st.project.config.vsync = f.vsync;
+                st.project.config.icon = f.icon.trim().to_string();
                 st.project.config.gravity_2d = [0.0, f.gravity_2d];
                 st.project.config.gravity_3d = [0.0, -f.gravity_3d, 0.0];
                 st.project.config.actions = f
@@ -995,6 +1020,9 @@ pub struct PlayerApp {
     tap_buttons: std::collections::HashSet<String>,
     mouse_delta: [f32; 2],
     cursor_locked: bool,
+    /// The window state last asked of the OS (fullscreen, title).
+    applied_full: Option<bool>,
+    applied_title: Option<String>,
 }
 
 impl PlayerApp {
@@ -1004,7 +1032,7 @@ impl PlayerApp {
         let tree = gex_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let list = gex_core::render::extract(&tree);
-        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false })
+        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied_full: None, applied_title: None })
     }
 }
 
@@ -1054,6 +1082,19 @@ impl eframe::App for PlayerApp {
         let d = ctx.input(mouse_motion);
         self.mouse_delta[0] += d[0];
         self.mouse_delta[1] += d[1];
+        // FULLSCREEN / WINDOW_TITLE from the game; Alt+Enter or F11 toggles full screen too.
+        if ctx.input(|i| (i.modifiers.alt && i.key_pressed(egui::Key::Enter)) || i.key_pressed(egui::Key::F11)) {
+            let now = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!now));
+        }
+        if self.list.fullscreen.is_some() && self.list.fullscreen != self.applied_full {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.list.fullscreen.unwrap()));
+            self.applied_full = self.list.fullscreen;
+        }
+        if self.list.window_title.is_some() && self.list.window_title != self.applied_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.list.window_title.clone().unwrap()));
+            self.applied_title = self.list.window_title.clone();
+        }
         // MOUSE_LOCK, let go while the window isn't focused.
         let want = self.list.mouse_locked && ctx.input(|i| i.focused);
         if want != self.cursor_locked {

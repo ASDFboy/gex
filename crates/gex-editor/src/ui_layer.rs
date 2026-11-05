@@ -30,7 +30,8 @@ pub fn paint_ui(
     for it in items {
         let tl = it.top_left(design);
         let rect = Rect::from_min_max(to_screen(tl), to_screen(tl + it.size));
-        let font = |size: f64| egui::FontId::proportional(((size as f32) * scale).max(4.0));
+        let fam = crate::text::family(ui.ctx(), vfs, it.text("font"));
+        let font = |size: f64| egui::FontId::new(((size as f32) * scale).max(4.0), fam.clone());
         match it.kind {
             NodeKind::Panel => {
                 let r = CornerRadius::same((it.num("radius", 4.0) as f32 * scale).clamp(0.0, 255.0) as u8);
@@ -51,7 +52,7 @@ pub fn paint_ui(
                     "right" => to_screen(Vec2::new(tl.x + it.size.x, tl.y)),
                     _ => rect.min,
                 };
-                painter.text(at, align, it.text("text"), font(it.num("size", 18.0)), c32(it.color("color")));
+                crate::text::paint(&painter, at, align, it.text("text"), font(it.num("size", 18.0)), c32(it.color("color")), scale);
             }
             NodeKind::Button => {
                 let disabled = it.props.get("disabled").is_some_and(|v| v.as_bool());
@@ -72,7 +73,7 @@ pub fn paint_ui(
                     fill = fill.gamma_multiply(0.5);
                 }
                 painter.rect_filled(rect, CornerRadius::same((4.0 * scale) as u8), fill);
-                painter.text(rect.center(), egui::Align2::CENTER_CENTER, it.text("text"), font(it.num("size", 16.0)), c32(it.color("text_color")));
+                crate::text::paint(&painter, rect.center(), egui::Align2::CENTER_CENTER, it.text("text"), font(it.num("size", 16.0)), c32(it.color("text_color")), scale);
             }
             NodeKind::ProgressBar => {
                 let f = (it.num("value", 0.5) / it.num("max", 1.0).max(1e-9)).clamp(0.0, 1.0) as f32;

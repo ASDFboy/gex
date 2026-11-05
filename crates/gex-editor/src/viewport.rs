@@ -100,7 +100,27 @@ pub fn paint_list(ui: &egui::Ui, rs: &egui_wgpu::RenderState, renderer: &mut Opt
             let zoom = (cams.view_proj_2d.x_axis.x * cams.size[0] as f32 / 2.0).abs();
             let c = l.color;
             let color = Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8);
-            painter.text(rect.min + egui::vec2(s.x, s.y), egui::Align2::LEFT_TOP, &l.text, egui::FontId::proportional((l.size * zoom / ppp).max(4.0)), color);
+            let fam = crate::text::family(ui.ctx(), vfs, &l.font);
+            crate::text::paint(&painter, rect.min + egui::vec2(s.x, s.y), egui::Align2::LEFT_TOP, &l.text, egui::FontId::new((l.size * zoom / ppp).max(4.0), fam), color, zoom / ppp);
+        }
+    }
+    // Label3D: text at a 3D point, facing the screen.
+    if cams.draw_3d {
+        let ppp = ui.ctx().pixels_per_point();
+        for l in &list.labels_3d {
+            let c = cams.view_proj_3d * l.pos.extend(1.0);
+            if c.w <= 0.01 {
+                continue;
+            }
+            let ndc = c.truncate() / c.w;
+            if ndc.x.abs() > 1.2 || ndc.y.abs() > 1.2 || ndc.z > 1.0 {
+                continue;
+            }
+            let at = Pos2::new(rect.min.x + (ndc.x * 0.5 + 0.5) * rect.width(), rect.min.y + (0.5 - ndc.y * 0.5) * rect.height());
+            let cl = l.color;
+            let color = Color32::from_rgba_unmultiplied((cl[0] * 255.0) as u8, (cl[1] * 255.0) as u8, (cl[2] * 255.0) as u8, (cl[3] * 255.0) as u8);
+            let fam = crate::text::family(ui.ctx(), vfs, &l.font);
+            crate::text::paint(&painter, at, egui::Align2::CENTER_BOTTOM, &l.text, egui::FontId::new((l.size / ppp).max(4.0), fam), color, 1.0 / ppp);
         }
     }
     std::mem::take(&mut r.problems)
@@ -704,13 +724,15 @@ fn preview_particles(ctx: &egui::Context, st: &mut EditorState, list: &mut gex_c
     let now = std::time::Instant::now();
     let dt = now.duration_since(st.particle_clock).as_secs_f32().min(0.1);
     st.particle_clock = now;
-    let any = st.tree.walk().into_iter().any(|i| st.tree.nodes[i].kind == NodeKind::Particles2D);
-    if !any && st.preview_particles.is_empty() {
+    let any = st.tree.walk().into_iter().any(|i| matches!(st.tree.nodes[i].kind, NodeKind::Particles2D | NodeKind::Particles3D));
+    if !any && st.preview_particles.is_empty() && st.preview_particles_3d.is_empty() {
         return;
     }
     gex_script::particles::update(&st.tree, &mut st.preview_particles, dt, &[]);
     gex_script::particles::draw(&st.tree, &st.preview_particles, list);
-    if st.preview_particles.values().any(|e| e.count() > 0) {
+    gex_script::particles::update_3d(&st.tree, &mut st.preview_particles_3d, dt, &[]);
+    gex_script::particles::draw_3d(&st.tree, &st.preview_particles_3d, list);
+    if st.preview_particles.values().any(|e| e.count() > 0) || st.preview_particles_3d.values().any(|e| e.count() > 0) {
         ctx.request_repaint();
     }
 }

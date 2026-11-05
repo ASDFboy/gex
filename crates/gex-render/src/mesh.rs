@@ -49,6 +49,18 @@ pub fn plane() -> MeshData {
     MeshData { vertices, indices: vec![0, 1, 2, 0, 2, 3] }
 }
 
+/// A square standing up, facing +Z (sprites in 3D, particles).
+pub fn quad() -> MeshData {
+    let n = [0.0, 0.0, 1.0];
+    let vertices = vec![
+        Vertex { pos: [-0.5, -0.5, 0.0], normal: n, uv: [0.0, 1.0] },
+        Vertex { pos: [0.5, -0.5, 0.0], normal: n, uv: [1.0, 1.0] },
+        Vertex { pos: [0.5, 0.5, 0.0], normal: n, uv: [1.0, 0.0] },
+        Vertex { pos: [-0.5, 0.5, 0.0], normal: n, uv: [0.0, 0.0] },
+    ];
+    MeshData { vertices, indices: vec![0, 1, 2, 0, 2, 3] }
+}
+
 pub fn sphere(rings: u32, segments: u32) -> MeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -76,6 +88,7 @@ pub fn primitive(name: &str) -> &'static str {
     match name.to_ascii_lowercase().as_str() {
         "sphere" | "ball" => "sphere",
         "plane" | "floor" => "plane",
+        "quad" => "quad",
         _ => "cube",
     }
 }

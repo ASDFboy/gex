@@ -191,9 +191,9 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                 let next = game.st.borrow_mut().change_scene.take();
                 if let Some(res) = next {
                     let mut logs = game.take_logs();
-                    let (shared, fade) = {
+                    let (shared, fade, full, title) = {
                         let st = game.st.borrow();
-                        (st.shared.clone(), st.fade.clone())
+                        (st.shared.clone(), st.fade.clone(), st.fullscreen, st.window_title.clone())
                     };
                     match project.read_text(&res).map_err(|e| e).and_then(|t| scene::load(&t, &|p: &str| project.read_text(p)).map_err(|e| e.0)) {
                         Ok(t) => {
@@ -201,6 +201,8 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                             game.set_pause_hook(pause_hook(bp.clone(), tx.clone(), debug.clone(), cancel.clone()));
                             let mut st = game.st.borrow_mut();
                             st.shared = shared;
+                            st.fullscreen = full;
+                            st.window_title = title;
                             // The fade comes back in from its color.
                             st.fade = fade.map(|f| crate::world::Fade { to_scene: None, time: 0.0, ..f });
                         }

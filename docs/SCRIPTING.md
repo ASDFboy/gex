@@ -138,7 +138,7 @@ The script editor completes these as you type and shows each one's inputs.
 
 | Command | |
 |---|---|
-| `BURST(node, count)` | a Particles2D throws out this many particles at once (an explosion, a puff) |
+| `BURST(node, count)` | a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff) |
 | `ANIMATE(node, name, restart)` | plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE |
 | `ANIMATIONS(node)` | the names of a Mesh3D model's animations |
 | `TILE(node, col, row)` | a TileMap2D's tile id at a cell (-1 = empty) |
@@ -188,6 +188,8 @@ The script editor completes these as you type and shows each one's inputs.
 |---|---|
 | `CHANGE_SCENE(scene, fade, color)` | switches to another scene file; with fade (seconds) the screen fades to color (default black) and back |
 | `QUIT()` | stops the game |
+| `FULLSCREEN(on)` | switches the game window to full screen (TRUE) or back (FALSE); with no input, gives whether it is |
+| `WINDOW_TITLE(text)` | changes the game window's title |
 | `PAUSE(on)` | pauses the game (TRUE) or carries on (FALSE): only nodes in the group while_paused keep running, for a pause menu |
 | `PAUSED()` | TRUE while the game is paused |
 | `TIME_SCALE(scale)` | how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale |

@@ -27,6 +27,18 @@ fn main() {
     add(&mut tree, NodeKind::Environment, Vec3::ZERO, &|n| {
         n.props.insert("fog_start".into(), Variant::Num(8.0));
         n.props.insert("fog_end".into(), Variant::Num(30.0));
+        n.props.insert("bloom".into(), Variant::Num(std::env::var("GEX_SNAP_BLOOM").ok().and_then(|b| b.parse().ok()).unwrap_or(0.0)));
+    });
+    add(&mut tree, NodeKind::Sprite3D, Vec3::new(-1.0, 2.0, 0.5), &|n| {
+        n.props.insert("color".into(), Variant::Color([0.2, 1.0, 0.4, 1.0]));
+    });
+    add(&mut tree, NodeKind::Mesh3D, Vec3::new(0.0, 2.2, -1.5), &|n| {
+        n.props.insert("mesh".into(), Variant::Text("sphere".into()));
+        n.props.insert("emissive".into(), Variant::Num(3.0));
+        n.props.insert("color".into(), Variant::Color([1.0, 0.8, 0.3, 1.0]));
+        if let Ok(sh) = std::env::var("GEX_SNAP_SHADER") {
+            n.props.insert("shader".into(), Variant::Res(sh));
+        }
     });
     add(&mut tree, NodeKind::Light3D, Vec3::ZERO, &|n| n.transform.rotation = Vec3::new(-50.0, 30.0, 0.0));
     add(&mut tree, NodeKind::Light3D, Vec3::new(2.0, 1.0, 1.5), &|n| {
@@ -61,6 +73,25 @@ fn main() {
     s.transform.position = Vec3::new(100.0, 100.0, 0.0);
     s.props.insert("color".into(), Variant::Color([1.0, 0.3, 0.2, 1.0]));
     tree.add(Some(root), s);
+    // 2D lighting: a dark camera ambient and one light.
+    if std::env::var("GEX_SNAP_DARK").is_ok() {
+        let mut c = Node::new("Cam", NodeKind::Camera2D);
+        c.transform.position = Vec3::new(320.0, 180.0, 0.0);
+        c.props.insert("ambient".into(), Variant::Color([0.15, 0.15, 0.25, 1.0]));
+        tree.add(Some(root), c);
+        let mut bg = Node::new("BG", NodeKind::Sprite2D);
+        bg.transform.position = Vec3::new(320.0, 180.0, 0.0);
+        bg.props.insert("width".into(), Variant::Num(200.0));
+        bg.props.insert("height".into(), Variant::Num(100.0));
+        bg.props.insert("repeat_x".into(), Variant::Bool(true));
+        bg.props.insert("parallax_x".into(), Variant::Num(0.5));
+        bg.props.insert("layer".into(), Variant::Num(-1.0));
+        bg.props.insert("color".into(), Variant::Color([0.5, 0.6, 0.7, 1.0]));
+        tree.add(Some(root), bg);
+        let mut l = Node::new("L", NodeKind::Light2D);
+        l.transform.position = Vec3::new(120.0, 120.0, 0.0);
+        tree.add(Some(root), l);
+    }
     let list = extract(&tree);
 
     let size = [640u32, 360u32];

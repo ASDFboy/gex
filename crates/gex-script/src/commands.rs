@@ -45,7 +45,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("STOP", "(node)", "stops a Sound node"),
     ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
-    ("BURST", "(node, count)", "a Particles2D throws out this many particles at once (an explosion, a puff)"),
+    ("BURST", "(node, count)", "a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff)"),
     ("ANIMATE", "(node, name, restart)", "plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE"),
     ("ANIMATIONS", "(node)", "the names of a Mesh3D model's animations"),
     ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
@@ -79,6 +79,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("PAUSE", "(on)", "pauses the game (TRUE) or carries on (FALSE): only nodes in the group while_paused keep running, for a pause menu"),
     ("PAUSED", "()", "TRUE while the game is paused"),
     ("TIME_SCALE", "(scale)", "how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale"),
+    ("FULLSCREEN", "(on)", "switches the game window to full screen (TRUE) or back (FALSE); with no input, gives whether it is"),
+    ("WINDOW_TITLE", "(text)", "changes the game window's title"),
     ("QUIT", "()", "stops the game"),
 ];
 
@@ -198,6 +200,8 @@ pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
         layer: 1000.0,
         region: Region::Whole,
         flip: [false; 2],
+        parallax: glam::Vec2::ONE,
+        repeat: [false; 2],
     };
     for d in draws {
         match d {
@@ -218,7 +222,7 @@ pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
                     list.lines_2d.push(([x + r * a0.cos(), y + r * a0.sin()], [x + r * a1.cos(), y + r * a1.sin()], *color));
                 }
             }
-            Draw::Text { x, y, text, size, color } => list.labels.push(Label { node, pos: glam::Vec2::new(*x, *y), text: text.clone(), size: *size, color: *color, layer: 1000.0 }),
+            Draw::Text { x, y, text, size, color } => list.labels.push(Label { node, pos: glam::Vec2::new(*x, *y), text: text.clone(), size: *size, color: *color, layer: 1000.0, font: String::new() }),
             Draw::Image { file, x, y, w, h } => list.sprites.push(sprite(*x, *y, *w, *h, [1.0; 4], file)),
         }
     }
@@ -394,12 +398,13 @@ impl Host for EngineHost {
             }
             "BURST" => {
                 let id = target(st, a.first())?;
-                if st.tree.nodes[id].kind != gex_core::NodeKind::Particles2D {
-                    return err(format!("{} isn't a Particles2D", st.tree.nodes[id].name));
-                }
                 let n = num_arg(&a, 1, 20.0).max(0.0) as usize;
                 let st = &mut *st;
-                st.particles.entry(id).or_default().spawn(&st.tree, id, n);
+                match st.tree.nodes[id].kind {
+                    gex_core::NodeKind::Particles2D => st.particles.entry(id).or_default().spawn(&st.tree, id, n),
+                    gex_core::NodeKind::Particles3D => st.particles_3d.entry(id).or_default().spawn(&st.tree, id, n),
+                    _ => return err(format!("{} isn't a Particles2D or Particles3D", st.tree.nodes[id].name)),
+                }
                 Ok(Value::Null)
             }
             "TWEEN" => {
@@ -659,6 +664,16 @@ impl Host for EngineHost {
                     st.time_scale = v.clamp(0.0, 100.0);
                 }
                 Ok(num(st.time_scale))
+            }
+            "FULLSCREEN" => {
+                if let Some(v) = a.first() {
+                    st.fullscreen = Some(!matches!(v, Value::Bool(false) | Value::Null));
+                }
+                Ok(Value::Bool(st.fullscreen.unwrap_or(st.project.config.fullscreen)))
+            }
+            "WINDOW_TITLE" => {
+                st.window_title = Some(text_arg(name, &a, 0)?);
+                Ok(Value::Null)
             }
             "QUIT" => {
                 st.quit = true;

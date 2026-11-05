@@ -14,6 +14,12 @@ struct Globals {
     view_proj_2d: mat4x4<f32>,
     inv_view_proj_3d: mat4x4<f32>,
     light_view_proj: mat4x4<f32>,
+    // The far shadow cascade.
+    light_view_proj1: mat4x4<f32>,
+    // x = near cascade's reach, y = far cascade's reach, z = on
+    shadow: vec4<f32>,
+    // x = bloom strength, y = bloom threshold, z = time (seconds)
+    post: vec4<f32>,
     eye: vec4<f32>,
     ambient: vec4<f32>,
     fog_color: vec4<f32>,
@@ -32,6 +38,8 @@ struct Globals {
 @group(0) @binding(2) var shadow_samp: sampler_comparison;
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
+// Meshes only: the normal map (flat blue when there's none).
+@group(1) @binding(2) var normal_tex: texture_2d<f32>;
 
 fn encode(c: vec4<f32>) -> vec4<f32> {
     let lo = c.rgb * 12.92;
@@ -46,6 +54,8 @@ struct InstanceIn {
     @location(6) m3: vec4<f32>,
     @location(7) color: vec4<f32>,
     @location(8) uv: vec4<f32>,
+    // x = specular, y = emissive, z = unlit, w = has a normal map
+    @location(9) mat: vec4<f32>,
 };
 
 // ---------- meshes ----------
@@ -62,6 +72,7 @@ struct MeshOut {
     @location(1) uv: vec2<f32>,
     @location(2) color: vec4<f32>,
     @location(3) world: vec3<f32>,
+    @location(4) mat: vec4<f32>,
 };
 
 @vertex
@@ -74,30 +85,67 @@ fn vs_mesh(v: MeshIn, i: InstanceIn) -> MeshOut {
     o.normal = normalize((model * vec4<f32>(v.normal, 0.0)).xyz);
     o.uv = v.uv * i.uv.zw + i.uv.xy;
     o.color = i.color;
+    o.mat = i.mat;
     return o;
 }
 
+fn shadow_tap(c: f32, uv: vec2<f32>, z: f32) -> f32 {
+    // The atlas holds the two cascades side by side; stay inside this one's half.
+    let t = g.counts.z;
+    let u = clamp(uv.x, t, 1.0 - t) * 0.5 + c * 0.5;
+    return textureSampleCompareLevel(shadow_map, shadow_samp, vec2<f32>(u, uv.y), z);
+}
+
 fn shadow_factor(world: vec3<f32>, n: vec3<f32>) -> f32 {
-    if (g.fog.w < 0.5) {
+    if (g.shadow.z < 0.5) {
         return 1.0;
     }
-    let lc = g.light_view_proj * vec4<f32>(world + n * 0.04, 1.0);
+    let d = distance(g.eye.xyz, world);
+    if (d > g.shadow.y) {
+        return 1.0;
+    }
+    var c = 0.0;
+    var lc = g.light_view_proj * vec4<f32>(world + n * 0.04, 1.0);
+    if (d > g.shadow.x) {
+        c = 1.0;
+        lc = g.light_view_proj1 * vec4<f32>(world + n * 0.12, 1.0);
+    }
     let p = lc.xyz / lc.w;
     let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || p.z > 1.0) {
         return 1.0;
     }
-    let t = g.counts.z;
+    let t = g.counts.z * 2.0;
+    let z = p.z - 0.002;
     var s = 0.0;
-    s = s + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(-t, -t), p.z - 0.002);
-    s = s + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(t, -t), p.z - 0.002);
-    s = s + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(-t, t), p.z - 0.002);
-    s = s + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(t, t), p.z - 0.002);
-    return s * 0.25;
+    s = s + shadow_tap(c, uv + vec2<f32>(-t, -t), z);
+    s = s + shadow_tap(c, uv + vec2<f32>(t, -t), z);
+    s = s + shadow_tap(c, uv + vec2<f32>(-t, t), z);
+    s = s + shadow_tap(c, uv + vec2<f32>(t, t), z);
+    // Fade out at the far edge instead of stopping in a line.
+    let fade = smoothstep(g.shadow.y * 0.85, g.shadow.y, d);
+    return mix(s * 0.25, 1.0, fade);
 }
 
-fn shade(o: MeshOut, base: vec4<f32>) -> vec4<f32> {
-    var n = normalize(o.normal);
+// The surface normal, bent by the normal map (tangents worked out from screen derivatives).
+fn surface_normal(o: MeshOut, nm: vec4<f32>) -> vec3<f32> {
+    let n = normalize(o.normal);
+    let dp1 = dpdx(o.world);
+    let dp2 = dpdy(o.world);
+    let duv1 = dpdx(o.uv);
+    let duv2 = dpdy(o.uv);
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let inv = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-20));
+    let tbn = mat3x3<f32>(t * inv, b * inv, n);
+    let mapped = normalize(tbn * (nm.xyz * 2.0 - 1.0));
+    return select(n, mapped, o.mat.w > 0.5 && all(mapped == mapped));
+}
+
+fn shade(o: MeshOut, base: vec4<f32>, nm: vec4<f32>) -> vec4<f32> {
+    var n = surface_normal(o, nm);
     let view = normalize(g.eye.xyz - o.world);
     // Two-sided surfaces: light the side we're looking at.
     if (dot(n, view) < 0.0) {
@@ -129,10 +177,14 @@ fn shade(o: MeshOut, base: vec4<f32>) -> vec4<f32> {
         }
         let diff = max(dot(n, to_light), 0.0);
         let h = normalize(to_light + view);
-        let spec = pow(max(dot(n, h), 0.0), 32.0) * 0.15;
+        let spec = pow(max(dot(n, h), 0.0), 8.0 + 120.0 * o.mat.x) * o.mat.x;
         light = light + l.color.rgb * (diff + spec) * atten;
     }
-    var c = base.rgb * light;
+    var c = base.rgb * light + base.rgb * o.mat.y;
+    if (o.mat.z > 0.5) {
+        // Unlit: the texture as it is (plus glow).
+        c = base.rgb * (1.0 + o.mat.y);
+    }
     if (g.fog.z > 0.5) {
         let d = distance(g.eye.xyz, o.world);
         let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 0.001), 0.0, 1.0);
@@ -144,17 +196,19 @@ fn shade(o: MeshOut, base: vec4<f32>) -> vec4<f32> {
 @fragment
 fn fs_mesh(o: MeshOut) -> @location(0) vec4<f32> {
     let base = textureSample(tex, samp, o.uv) * o.color;
+    let nm = textureSample(normal_tex, samp, o.uv);
     // Cut-out textures (fences, leaves): treat mostly clear texels as holes.
     if (base.a < 0.5) {
         discard;
     }
-    return encode(shade(o, vec4<f32>(base.rgb, 1.0)));
+    return encode(shade(o, vec4<f32>(base.rgb, 1.0), nm));
 }
 
 @fragment
 fn fs_mesh_alpha(o: MeshOut) -> @location(0) vec4<f32> {
     let base = textureSample(tex, samp, o.uv) * o.color;
-    return encode(shade(o, base));
+    let nm = textureSample(normal_tex, samp, o.uv);
+    return encode(shade(o, base, nm));
 }
 
 // ---------- sky ----------
@@ -254,3 +308,55 @@ fn vs_line(v: LineIn) -> LineOut {
 fn fs_line(o: LineOut) -> @location(0) vec4<f32> {
     return o.color;
 }
+
+// ---------- full-screen passes (2D light, bloom) ----------
+
+fn screen_uv(ndc: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+// The 2D light map, multiplied over the picture.
+@fragment
+fn fs_copy(o: SkyOut) -> @location(0) vec4<f32> {
+    return textureSampleLevel(tex, samp, screen_uv(o.ndc), 0.0);
+}
+
+// Bloom: the bright parts of the picture.
+@fragment
+fn fs_bright(o: SkyOut) -> @location(0) vec4<f32> {
+    let c = textureSampleLevel(tex, samp, screen_uv(o.ndc), 0.0).rgb;
+    let l = max(c.r, max(c.g, c.b));
+    let k = smoothstep(g.post.y, g.post.y + 0.25, l);
+    return vec4<f32>(c * k, 1.0);
+}
+
+fn blur(uv: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
+    let px = dir / vec2<f32>(textureDimensions(tex, 0));
+    var c = textureSampleLevel(tex, samp, uv, 0.0).rgb * 0.227027;
+    c = c + textureSampleLevel(tex, samp, uv + px * 1.3846, 0.0).rgb * 0.3162162;
+    c = c + textureSampleLevel(tex, samp, uv - px * 1.3846, 0.0).rgb * 0.3162162;
+    c = c + textureSampleLevel(tex, samp, uv + px * 3.2308, 0.0).rgb * 0.0702703;
+    c = c + textureSampleLevel(tex, samp, uv - px * 3.2308, 0.0).rgb * 0.0702703;
+    return vec4<f32>(c, 1.0);
+}
+
+@fragment
+fn fs_blur_h(o: SkyOut) -> @location(0) vec4<f32> {
+    return blur(screen_uv(o.ndc), vec2<f32>(1.0, 0.0));
+}
+
+@fragment
+fn fs_blur_v(o: SkyOut) -> @location(0) vec4<f32> {
+    return blur(screen_uv(o.ndc), vec2<f32>(0.0, 1.0));
+}
+
+// Bloom added back on top, scaled by its strength.
+@fragment
+fn fs_bloom_add(o: SkyOut) -> @location(0) vec4<f32> {
+    let c = textureSampleLevel(tex, samp, screen_uv(o.ndc), 0.0).rgb * g.post.x;
+    return vec4<f32>(c, 1.0);
+}
+
+// Custom material shaders: a project .wgsl defines
+//     fn material(base: vec4<f32>, uv: vec2<f32>, world: vec3<f32>, normal: vec3<f32>, time: f32) -> vec4<f32>
+// and the engine appends fs_custom (below) after it.
