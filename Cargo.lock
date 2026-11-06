@@ -1580,6 +1580,7 @@ dependencies = [
  "gilrs",
  "image",
  "jlb",
+ "log",
  "rfd",
  "ron",
  "serde",

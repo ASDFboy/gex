@@ -23,6 +23,7 @@ serde.workspace = true
 gilrs.workspace = true
 editpe = "0.2"
 image.workspace = true
+log = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 rfd.workspace = true

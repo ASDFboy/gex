@@ -980,6 +980,7 @@ fn browse_button(ui: &mut egui::Ui) -> Option<String> {
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        crate::startup::mark_running();
         let ctx = ui.ctx().clone();
         if self.st.is_none() {
             self.launcher(ui);
@@ -1113,6 +1114,7 @@ impl PlayerApp {
 
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        crate::startup::mark_running();
         let ctx = ui.ctx().clone();
         for m in self.handle.poll() {
             match m {

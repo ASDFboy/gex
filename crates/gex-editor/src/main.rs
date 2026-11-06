@@ -14,6 +14,7 @@ mod files;
 mod gamepad;
 mod panels;
 mod preview;
+mod startup;
 mod state;
 mod templates;
 mod text;
@@ -32,9 +33,9 @@ fn options(title: &str, size: [f32; 2]) -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title(title).with_inner_size(size).with_min_inner_size([640.0, 400.0]),
         renderer: eframe::Renderer::Wgpu,
-        // Only redraw when something changes (or a game is running), so an idle editor
-        // costs next to nothing.
-        run_and_return: false,
+        // Come back from run_native on errors (instead of eframe quietly exiting), so
+        // startup::run can try another graphics API or say what went wrong.
+        run_and_return: true,
         ..Default::default()
     }
 }
@@ -49,7 +50,8 @@ fn window_icon(p: &gex_core::project::Project) -> Option<egui::IconData> {
     Some(egui::IconData { rgba: img.pixels, width: img.width, height: img.height })
 }
 
-fn main() -> eframe::Result {
+fn main() -> std::process::ExitCode {
+    startup::init();
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // An exported game: the program sits next to a "game" folder; play it.
     if args.is_empty() {
@@ -62,8 +64,8 @@ fn main() -> eframe::Result {
         let project = match gex_core::project::Project::open(&dir) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("{}", e);
-                std::process::exit(1);
+                log::error!(target: "gex", "{}", e);
+                return std::process::ExitCode::FAILURE;
             }
         };
         let [w, h] = project.config.window_size;
@@ -77,15 +79,15 @@ fn main() -> eframe::Result {
         if let Some(icon) = window_icon(&project) {
             opts.viewport = opts.viewport.with_icon(icon);
         }
-        return eframe::run_native(
+        return startup::run(eframe::run_native(
             &title,
             opts,
             Box::new(move |cc| {
                 cc.egui_ctx.set_theme(egui::Theme::Dark);
                 app::PlayerApp::new(project).map(|a| Box::new(a) as Box<dyn eframe::App>).map_err(|e| e.into())
             }),
-        );
+        ));
     }
     let project = args.first().map(PathBuf::from);
-    eframe::run_native("GEX", options("GEX", [1500.0, 900.0]), Box::new(move |cc| Ok(Box::new(app::EditorApp::new(cc, project)))))
+    startup::run(eframe::run_native("GEX", options("GEX", [1500.0, 900.0]), Box::new(move |cc| Ok(Box::new(app::EditorApp::new(cc, project))))))
 }
