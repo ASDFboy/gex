@@ -236,7 +236,7 @@ pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
 
 /// A color given as a table ([r:, g:, b:, a:] or [r, g, b, a], 0 to 1), as text ("#ff8800",
 /// "red"...), or NULL for white.
-fn color_arg(v: Option<&Value>) -> [f32; 4] {
+pub(crate) fn color_arg(v: Option<&Value>) -> [f32; 4] {
     match v {
         None | Some(Value::Null) => [1.0; 4],
         Some(Value::Text(t)) => {
@@ -264,16 +264,14 @@ fn color_arg(v: Option<&Value>) -> [f32; 4] {
                 [1.0; 4]
             }
         }
-        Some(t @ Value::Table(..)) => match to_variant(t, Some(&gex_core::Variant::Color([1.0; 4]))) {
-            Some(gex_core::Variant::Color(c)) if jlb::embed::table_get(t, "r").is_some() => c,
-            _ => match t {
-                Value::Table(rc, _) => {
-                    let g = |i: usize, d: f32| rc.items.get(i).and_then(|s| as_f64(&s.borrow())).map(|v| v as f32).unwrap_or(d);
-                    [g(0, 1.0), g(1, 1.0), g(2, 1.0), g(3, 1.0)]
-                }
-                _ => [1.0; 4],
-            },
+        Some(t @ Value::Table(rc, _)) if rc.named.len() > 0 => match to_variant(t, Some(&gex_core::Variant::Color([1.0; 4]))) {
+            Some(gex_core::Variant::Color(c)) => c,
+            _ => [1.0; 4],
         },
+        Some(Value::Table(rc, _)) => {
+            let g = |i: usize, d: f32| rc.items.get(i).and_then(|s| as_f64(&s.borrow())).map(|v| v as f32).unwrap_or(d);
+            [g(0, 1.0), g(1, 1.0), g(2, 1.0), g(3, 1.0)]
+        }
         Some(_) => [1.0; 4],
     }
 }

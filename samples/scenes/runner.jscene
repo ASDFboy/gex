@@ -1,0 +1,33 @@
+(
+  format: 1,
+  root: (
+    name: "Runner",
+    kind: Some(Node3D),
+    scripts: ["res://scripts/runner.jlb", "res://scripts/back_to_menu.jlb"],
+    children: [
+      (name: "Sky", kind: Some(Environment),
+        props: {"sky_top": Color((0.02, 0.0, 0.08, 1.0)), "sky_horizon": Color((0.35, 0.05, 0.35, 1.0)), "ground": Color((0.02, 0.0, 0.05, 1.0)),
+          "ambient": Color((0.5, 0.4, 0.9, 1.0)), "ambient_energy": Num(0.35),
+          "fog_color": Color((0.3, 0.05, 0.3, 1.0)), "fog_start": Num(15.0), "fog_end": Num(70.0),
+          "bloom": Num(0.9), "bloom_threshold": Num(0.6)}),
+      (name: "Moon", kind: Some(Light3D), transform: Some((rotation: (-35.0, 160.0, 0.0))), props: {"color": Color((0.7, 0.6, 1.0, 1.0)), "energy": Num(0.7)}),
+      (name: "Track", kind: Some(Mesh3D), transform: Some((position: (0.0, 0.0, -40.0), scale: (8.0, 1.0, 120.0))),
+        props: {"mesh": Text("plane"), "texture": Res("res://assets/grid.png"), "uv_scale_x": Num(4.0), "uv_scale_y": Num(60.0), "emissive": Num(0.6)},
+        scripts: ["res://scripts/track.jlb"]),
+      (name: "Player", kind: Some(Node3D), transform: Some((position: (0.0, 0.5, 0.0))),
+        scripts: ["res://scripts/runner_player.jlb"],
+        children: [
+          (name: "Look", kind: Some(Mesh3D), transform: Some((scale: (0.8, 0.8, 0.8))), props: {"color": Color((0.3, 1.0, 0.95, 1.0)), "emissive": Num(1.0), "specular": Num(0.8)}),
+          (name: "Glow", kind: Some(Light3D), transform: Some((position: (0.0, 0.8, 0.0))), props: {"type": Text("point"), "color": Color((0.3, 1.0, 0.95, 1.0)), "energy": Num(2.0), "range": Num(5.0), "shadows": Bool(false)}),
+          (name: "Trail", kind: Some(Particles3D), props: {"rate": Num(50.0), "direction_x": Num(0.0), "direction_y": Num(0.3), "direction_z": Num(1.0), "spread": Num(15.0), "speed": Num(5.0), "lifetime": Num(0.4), "size": Num(0.25), "size_end": Num(0.0), "gravity": Num(0.0), "color": Color((0.4, 1.0, 1.0, 1.0)), "color_end": Color((0.2, 0.3, 1.0, 0.0))}),
+        ]),
+      (name: "Crash", kind: Some(Particles3D),
+        props: {"emitting": Bool(false), "speed": Num(6.0), "spread": Num(180.0), "lifetime": Num(1.0), "size": Num(0.3), "size_end": Num(0.0), "gravity": Num(-8.0), "color": Color((1.0, 0.4, 0.8, 1.0)), "color_end": Color((0.5, 0.1, 1.0, 0.0))}),
+      (name: "Camera", kind: Some(Camera3D), transform: Some((position: (0.0, 3.2, 6.5), rotation: (-16.0, 0.0, 0.0))), props: {"fov": Num(75.0)}),
+      (name: "Score", kind: Some(Label), transform: Some((position: (24.0, 16.0, 0.0))),
+        props: {"text": Text("0 m"), "size": Num(30.0), "color": Color((0.5, 1.0, 1.0, 1.0))}),
+      (name: "Message", kind: Some(Label), transform: Some((position: (0.0, 280.0, 0.0))),
+        props: {"text": Text("Left / Right switch lanes - Space jump  (P: autopilot)"), "size": Num(28.0), "align": Text("center"), "width": Num(1280.0), "color": Color((1.0, 0.8, 1.0, 1.0))}),
+    ],
+  ),
+)

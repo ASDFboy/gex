@@ -1,0 +1,60 @@
+>> Flappy: scrolls the ground and hills, spawns pipes, keeps the score.
+
+score = 0
+speed = 220
+started = FALSE
+over = FALSE
+scroll = 0
+
+DEF on_step(dt) {
+	IF over { RETURN }
+	GLOBAL scroll += speed * dt
+	>> Hills move slower than the ground: a cheap sense of depth.
+	SET("Ground", "x", 0 - scroll % 512)
+	SET("Hills", "x", 0 - (scroll * 0.35) % 512)
+}
+
+DEF on_started() {
+	GLOBAL started = TRUE
+	SET("Message", "visible", FALSE)
+	spawn_pipes()
+	TIMER("pipes", 1.6, TRUE)
+}
+
+DEF on_timer_pipes() {
+	IF !over { spawn_pipes() }
+}
+
+DEF spawn_pipes() {
+	gap_y = RANDOM(200, 470)
+	SPAWN("res://scenes/pipes.jscene", 1400, gap_y)
+}
+
+DEF on_passed() {
+	GLOBAL score += 1
+	SET("Score", "text", "" + score)
+	PLAY_SOUND("res://assets/coin.wav", 0.4)
+}
+
+DEF on_crashed() {
+	IF over { RETURN }
+	GLOBAL over = TRUE
+	>> A property on this node, so the pipes can see it with GET("..", "over").
+	self.over = TRUE
+	SHAKE(10, 0.4)
+	PLAY_SOUND("res://assets/hit.wav")
+	SET("Feathers", "x", GET("Bird", "x"))
+	SET("Feathers", "y", GET("Bird", "y"))
+	BURST("Feathers", 30)
+	best = LOAD_DATA("flappy_best")
+	IF best == NULL OR score > best {
+		best = score
+		SAVE_DATA("flappy_best", best)
+	}
+	SET("Message", "text", "Score " + score + "   Best " + best + '\nEnter to try again')
+	SET("Message", "visible", TRUE)
+}
+
+DEF on_press_enter() {
+	IF over { CHANGE_SCENE("res://scenes/flappy.jscene", 0.3) }
+}

@@ -1,0 +1,10 @@
+(
+  format: 1,
+  root: (
+    name: "Block",
+    kind: Some(Mesh3D),
+    transform: Some((scale: (1.4, 1.2, 1.0))),
+    props: {"color": Color((1.0, 0.25, 0.6, 1.0)), "emissive": Num(0.8), "specular": Num(0.6)},
+    groups: ["blocks"],
+  ),
+)

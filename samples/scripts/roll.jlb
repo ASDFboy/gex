@@ -1,0 +1,28 @@
+>> The ball: arrow keys push it (IMPULSE adds speed), Space hops when it's on the floor.
+
+DEF on_physics(dt) {
+	dx = AXIS("left_x")
+	dz = AXIS("left_y")
+	IF KEY_DOWN("left") { dx = -1 }
+	IF KEY_DOWN("right") { dx = 1 }
+	IF KEY_DOWN("up") { dz = -1 }
+	IF KEY_DOWN("down") { dz = 1 }
+	IMPULSE(NULL, dx * 14 * dt, 0, dz * 14 * dt)
+	IF KEY_PRESSED("action") AND self.on_floor {
+		IMPULSE(NULL, 0, 5.5, 0)
+		PLAY_SOUND("res://assets/jump.wav", 0.4)
+	}
+	>> Fell off somehow? Back to the middle.
+	IF self.y < -10 {
+		self.x = 0
+		self.y = 2
+		self.z = 0
+	}
+}
+
+DEF on_collide_start(other) {
+	IF GET(other, "gem") == TRUE {
+		EMIT("gem_collected", GET(other, "x"), GET(other, "y"), GET(other, "z"))
+		DESTROY(other)
+	}
+}

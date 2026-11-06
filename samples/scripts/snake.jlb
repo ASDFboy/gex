@@ -1,0 +1,156 @@
+>> Snake on a 32 x 17 grid of 40-pixel cells, drawn with DRAW_RECT every frame.
+
+cell = 40
+cols = 32
+rows = 17
+body = []
+dir = [x: 1, y: 0]
+next_dir = [x: 1, y: 0]
+food = [x: 20, y: 8]
+alive = TRUE
+best = 3
+
+DEF on_create() {
+	saved = LOAD_DATA("snake_best")
+	IF saved !== NULL { GLOBAL best = saved }
+	SET("Best", "text", "Best: " + best)
+	reset()
+	TIMER("tick", 0.09, TRUE)
+}
+
+DEF reset() {
+	GLOBAL body = [[x: 8, y: 8], [x: 7, y: 8], [x: 6, y: 8]]
+	GLOBAL dir = [x: 1, y: 0]
+	GLOBAL next_dir = [x: 1, y: 0]
+	GLOBAL alive = TRUE
+	place_food()
+	SET("Score", "text", "Length: 3")
+}
+
+DEF place_food() {
+	WHILE TRUE {
+		f = [x: RANDOM(0, cols - 1), y: RANDOM(0, rows - 1)]
+		IF !on_body(f.x, f.y) {
+			GLOBAL food = f
+			RETURN
+		}
+	}
+}
+
+DEF on_body(x, y) {
+	FOR p IN body {
+		IF p.x == x AND p.y == y { RETURN TRUE }
+	}
+	RETURN FALSE
+}
+
+DEF on_step(dt) {
+	>> No turning straight back into yourself.
+	IF KEY_PRESSED("up") AND dir.y == 0 { GLOBAL next_dir = [x: 0, y: -1] }
+	IF KEY_PRESSED("down") AND dir.y == 0 { GLOBAL next_dir = [x: 0, y: 1] }
+	IF KEY_PRESSED("left") AND dir.x == 0 { GLOBAL next_dir = [x: -1, y: 0] }
+	IF KEY_PRESSED("right") AND dir.x == 0 { GLOBAL next_dir = [x: 1, y: 0] }
+	IF KEY_PRESSED("action") AND !alive {
+		SET("Message", "visible", FALSE)
+		reset()
+	}
+	IF KEY_PRESSED("up") OR KEY_PRESSED("down") OR KEY_PRESSED("left") OR KEY_PRESSED("right") {
+		IF alive { SET("Message", "visible", FALSE) }
+	}
+}
+
+autopilot = FALSE
+
+DEF on_press_p() {
+	GLOBAL autopilot = !autopilot
+	SET("Message", "visible", FALSE)
+}
+
+>> The autopilot: of the moves that don't bite, take the one closest to the food.
+DEF pick() {
+	best_d = NULL
+	best_m = dir
+	FOR m IN [[x: 1, y: 0], [x: -1, y: 0], [x: 0, y: 1], [x: 0, y: -1]] {
+		IF (m.x == 0 - dir.x) AND (m.y == 0 - dir.y) { SKIP }
+		nx = (body[1].x + m.x + cols) % cols
+		ny = (body[1].y + m.y + rows) % rows
+		IF on_body(nx, ny) { SKIP }
+		d = ABS(nx - food.x) + ABS(ny - food.y)
+		IF best_d == NULL OR d < best_d {
+			best_d = d
+			best_m = m
+		}
+	}
+	RETURN best_m
+}
+
+dead_ticks = 0
+
+DEF on_timer_tick() {
+	IF !alive {
+		>> On autopilot, start again by itself after a moment.
+		GLOBAL dead_ticks += 1
+		IF autopilot AND dead_ticks > 15 {
+			GLOBAL dead_ticks = 0
+			SET("Message", "visible", FALSE)
+			reset()
+		}
+		RETURN
+	}
+	IF autopilot { GLOBAL next_dir = pick() }
+	GLOBAL dir = next_dir
+	head = [x: body[1].x + dir.x, y: body[1].y + dir.y]
+	>> Walls wrap around.
+	IF head.x < 0 { head.x = cols - 1 }
+	IF head.x >= cols { head.x = 0 }
+	IF head.y < 0 { head.y = rows - 1 }
+	IF head.y >= rows { head.y = 0 }
+	IF on_body(head.x, head.y) {
+		GLOBAL alive = FALSE
+		SHAKE(12, 0.5)
+		PLAY_SOUND("res://assets/hit.wav")
+		SET("Message", "text", "Ouch! Length " + LEN(body) + ". Space to try again")
+		SET("Message", "visible", TRUE)
+		RETURN
+	}
+	INSERT(body, head, 1)
+	IF head.x == food.x AND head.y == food.y {
+		PLAY_SOUND("res://assets/coin.wav", 0.5)
+		SET("Crumbs", "x", food.x * cell + cell / 2)
+		SET("Crumbs", "y", 40 + food.y * cell + cell / 2)
+		BURST("Crumbs", 20)
+		place_food()
+		SET("Score", "text", "Length: " + LEN(body))
+		IF LEN(body) > best {
+			GLOBAL best = LEN(body)
+			SAVE_DATA("snake_best", best)
+			SET("Best", "text", "Best: " + best)
+		}
+	} ELSE {
+		DROP(body, -1)
+	}
+}
+
+DEF on_draw() {
+	top = 40
+	>> The board, with a faint checker.
+	DRAW_RECT(0, top, cols * cell, rows * cell, "#0c1610", TRUE)
+	FOR y IN 0 TO rows - 1 {
+		FOR x IN 0 TO cols - 1 {
+			IF (x + y) % 2 == 0 { DRAW_RECT(x * cell, top + y * cell, cell, cell, "#101d15", TRUE) }
+		}
+	}
+	>> Food pulses.
+	p = 6 + 3 * SIN(GAME_TIME() * 360)
+	DRAW_CIRCLE(food.x * cell + 20, top + food.y * cell + 20, 12 + p / 3, "#ff4d4d", TRUE)
+	DRAW_CIRCLE(food.x * cell + 20, top + food.y * cell + 20, 22 + p, [r: 1, g: 0.3, b: 0.3, a: 0.15], TRUE)
+	>> The snake: brighter at the head.
+	n = LEN(body)
+	FOR i, s IN body {
+		k = 1 - (i - 1) / MAX(n, 1) * 0.6
+		DRAW_RECT(s.x * cell + 3, top + s.y * cell + 3, cell - 6, cell - 6, [r: 0.3 * k, g: 0.95 * k, b: 0.45 * k, a: 1], TRUE)
+	}
+	h = body[1]
+	DRAW_CIRCLE(h.x * cell + 14 + dir.x * 6, top + h.y * cell + 14 + dir.y * 6, 4, "#0a1a0f", TRUE)
+	DRAW_CIRCLE(h.x * cell + 26 + dir.x * 6, top + h.y * cell + 26 + dir.y * 6, 4, "#0a1a0f", TRUE)
+}

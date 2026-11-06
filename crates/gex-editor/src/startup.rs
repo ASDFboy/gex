@@ -47,6 +47,13 @@ pub fn note(s: &str) {
     log::info!(target: "gex", "{}", s);
 }
 
+#[cfg(not(windows))]
+fn message(title: &str, text: &str) {
+    // Elsewhere GEX is usually started from a terminal, which shows this.
+    eprintln!("{}: {}", title, text);
+}
+
+#[cfg(windows)]
 fn message(title: &str, text: &str) {
     let _ = rfd::MessageDialog::new().set_level(rfd::MessageLevel::Error).set_title(title).set_description(text).set_buttons(rfd::MessageButtons::Ok).show();
 }

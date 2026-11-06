@@ -1,0 +1,41 @@
+>> A rock: drifts and spins; a hit splits it into two smaller ones.
+
+spin = RANDOM(-60, 60)
+hit = FALSE
+
+DEF on_create() {
+	>> Size 3 is big, 1 is small; pick one of three pictures.
+	self.texture = "res://assets/rock" + RANDOM(0, 2) + ".png"
+	self.width = self.size * 34
+	self.height = self.size * 34
+	SET("Hitbox", "width", self.size * 26)
+	SET("Hitbox", "height", self.size * 26)
+}
+
+DEF on_step(dt) {
+	self.x += self.vx * dt
+	self.y += self.vy * dt
+	self.rotation += spin * dt
+	pad = self.size * 17
+	IF self.x < 0 - pad { self.x += 1280 + pad * 2 }
+	IF self.x > 1280 + pad { self.x -= 1280 + pad * 2 }
+	IF self.y < 0 - pad { self.y += 720 + pad * 2 }
+	IF self.y > 720 + pad { self.y -= 720 + pad * 2 }
+}
+
+DEF on_shot() {
+	IF hit { RETURN }
+	GLOBAL hit = TRUE
+	IF self.size > 1 {
+		FOR i IN 1 TO 2 {
+			r = SPAWN("res://scenes/rock.jscene", self.x, self.y)
+			SET(r, "size", self.size - 1)
+			a = RANDOM(0, 359)
+			s = 80 + (4 - self.size) * 40
+			SET(r, "vx", self.vx * 0.5 + COS(a) * s)
+			SET(r, "vy", self.vy * 0.5 + SIN(a) * s)
+		}
+	}
+	EMIT("rock_destroyed", self.size, self.x, self.y)
+	DESTROY(NULL)
+}

@@ -1,0 +1,33 @@
+(
+  format: 1,
+  root: (
+    name: "Space",
+    kind: Some(Node2D),
+    scripts: ["res://scripts/asteroids.jlb", "res://scripts/back_to_menu.jlb"],
+    children: [
+      (name: "Camera", kind: Some(Camera2D), transform: Some((position: (640.0, 360.0, 0.0))),
+        props: {"ambient": Color((0.8, 0.82, 0.92, 1.0))}),
+      (name: "Back", kind: Some(Sprite2D), transform: Some((position: (640.0, 360.0, 0.0))),
+        props: {"width": Num(1280.0), "height": Num(720.0), "color": Color((0.06, 0.07, 0.14, 1.0)), "layer": Num(-10.0)}),
+      (name: "Nebula", kind: Some(Sprite2D), transform: Some((position: (380.0, 260.0, 0.0))),
+        props: {"width": Num(900.0), "height": Num(700.0), "texture": Res("res://assets/glow.png"), "color": Color((0.5, 0.2, 0.7, 0.45)), "layer": Num(-9.0)}),
+      (name: "Ship", kind: Some(Sprite2D), transform: Some((position: (640.0, 360.0, 0.0))),
+        props: {"width": Num(40.0), "height": Num(46.0), "texture": Res("res://assets/ship.png"), "layer": Num(2.0)},
+        scripts: ["res://scripts/ship.jlb"],
+        children: [
+          (name: "Hitbox", kind: Some(Collider2D), props: {"width": Num(26.0), "height": Num(30.0)}),
+          (name: "Light", kind: Some(Light2D), props: {"radius": Num(320.0), "color": Color((0.75, 0.85, 1.0, 1.0)), "energy": Num(1.1)}),
+          (name: "Flame", kind: Some(Particles2D), transform: Some((position: (0.0, 22.0, 0.0))),
+            props: {"emitting": Bool(false), "rate": Num(60.0), "direction": Num(90.0), "spread": Num(15.0), "speed": Num(160.0), "lifetime": Num(0.35), "size": Num(9.0), "size_end": Num(1.0), "color": Color((0.5, 0.8, 1.0, 1.0)), "color_end": Color((0.2, 0.3, 1.0, 0.0)), "layer": Num(1.0)}),
+        ]),
+      (name: "Boom", kind: Some(Particles2D),
+        props: {"emitting": Bool(false), "speed": Num(200.0), "speed_random": Num(0.7), "spread": Num(180.0), "lifetime": Num(0.9), "size": Num(10.0), "size_end": Num(1.0), "color": Color((1.0, 0.75, 0.35, 1.0)), "color_end": Color((0.6, 0.2, 0.1, 0.0)), "layer": Num(4.0)}),
+      (name: "Score", kind: Some(Label), transform: Some((position: (24.0, 16.0, 0.0))),
+        props: {"text": Text("Score: 0"), "size": Num(24.0)}),
+      (name: "Lives", kind: Some(Label), transform: Some((position: (1056.0, 16.0, 0.0))),
+        props: {"text": Text("Ships: 3"), "size": Num(24.0), "align": Text("right"), "width": Num(200.0), "color": Color((0.6, 0.8, 1.0, 1.0))}),
+      (name: "Message", kind: Some(Label), transform: Some((position: (0.0, 600.0, 0.0))),
+        props: {"text": Text("Left/Right turn - Up thrust - Space fire"), "size": Num(22.0), "align": Text("center"), "width": Num(1280.0), "color": Color((0.7, 0.75, 0.85, 1.0))}),
+    ],
+  ),
+)

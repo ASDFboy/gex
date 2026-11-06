@@ -1,0 +1,8 @@
+>> The camera eases toward a spot above and behind the ball.
+
+DEF on_step(dt) {
+	k = MIN(1, 4 * dt)
+	self.x += (GET("../Ball", "x") - self.x) * k
+	self.y += (GET("../Ball", "y") + 8 - self.y) * k
+	self.z += (GET("../Ball", "z") + 11 - self.z) * k
+}

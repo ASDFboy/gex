@@ -1,0 +1,9 @@
+>> On every game's root: Escape (or the pad's Start button) goes back to the menu.
+
+DEF on_press_escape() {
+	CHANGE_SCENE("res://scenes/menu.jscene", 0.4)
+}
+
+DEF on_press_pad_start() {
+	CHANGE_SCENE("res://scenes/menu.jscene", 0.4)
+}

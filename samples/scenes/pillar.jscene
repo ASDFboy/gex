@@ -1,0 +1,10 @@
+(
+  format: 1,
+  root: (
+    name: "Pillar",
+    kind: Some(Mesh3D),
+    transform: Some((scale: (0.4, 6.0, 0.4))),
+    props: {"color": Color((0.3, 0.8, 1.0, 1.0)), "emissive": Num(1.2)},
+    groups: ["scenery"],
+  ),
+)

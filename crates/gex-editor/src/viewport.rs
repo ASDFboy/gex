@@ -231,7 +231,7 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
             let [w, h] = st.project.config.window_size;
             o.quad2([[0.0, 0.0], [w as f32, 0.0], [w as f32, h as f32], [0.0, h as f32]], [0.6, 0.6, 0.9, 0.5]);
         }
-        for c in &list.colliders {
+        for c in list.colliders.iter().filter(|_| st.show_colliders) {
             o.quad2(corners(c.model, c.size, true), [0.3, 0.9, 0.5, 0.8]);
         }
         for sel in st.selection.iter().copied().chain(st.selected).filter(|s| tree.contains(*s)) {
@@ -334,6 +334,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         }
         ui.separator();
         ui.checkbox(&mut st.show_grid, "grid");
+        ui.checkbox(&mut st.show_colliders, "colliders").on_hover_text("outline 2D colliders and bodies (in the editor and while playing)");
         if let Some(p) = &mut st.playing {
             ui.separator();
             ui.checkbox(&mut p.game_camera, "game camera").on_hover_text("off: look around with the editor camera while the game runs");
@@ -611,9 +612,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
 
     // ---- draw ----
     let overlay = if game_cam {
-        // Colliders stay visible while playing, as a debugging aid.
+        // Colliders stay visible while playing (unless switched off), as a debugging aid.
         let mut o = Overlay::default();
-        for c in &list.colliders {
+        for c in list.colliders.iter().filter(|_| st.show_colliders) {
             o.quad2(corners(c.model, c.size, true), [0.3, 0.9, 0.5, 0.5]);
         }
         o

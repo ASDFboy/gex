@@ -125,6 +125,7 @@ pub struct EditorState {
     pub cam2: EditorCamera2D,
     pub cam3: EditorCamera3D,
     pub show_grid: bool,
+    pub show_colliders: bool,
     /// Painting tiles into the selected TileMap2D with this tile (-1 erases).
     pub tile_brush: Option<i32>,
     /// Textures for UI Image nodes and tile palettes.
@@ -191,6 +192,7 @@ impl EditorState {
             cam2: EditorCamera2D::default(),
             cam3: EditorCamera3D::default(),
             show_grid: true,
+            show_colliders: true,
             tile_brush: None,
             ui_images: Default::default(),
             cam_fitted: false,

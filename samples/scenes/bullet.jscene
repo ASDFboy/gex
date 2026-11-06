@@ -1,0 +1,13 @@
+(
+  format: 1,
+  root: (
+    name: "Bullet",
+    kind: Some(Sprite2D),
+    props: {"width": Num(14.0), "height": Num(14.0), "texture": Res("res://assets/bullet.png"), "layer": Num(3.0), "bullet": Bool(true)},
+    scripts: ["res://scripts/bullet.jlb"],
+    children: [
+      (name: "Hitbox", kind: Some(Collider2D), props: {"width": Num(8.0), "height": Num(8.0)}),
+      (name: "Light", kind: Some(Light2D), props: {"radius": Num(60.0), "color": Color((1.0, 0.9, 0.5, 1.0)), "energy": Num(0.8)}),
+    ],
+  ),
+)

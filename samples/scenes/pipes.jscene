@@ -1,0 +1,21 @@
+(
+  format: 1,
+  root: (
+    name: "Pipes",
+    kind: Some(Node2D),
+    scripts: ["res://scripts/pipes.jlb"],
+    groups: ["pipes"],
+    children: [
+      (name: "Top", kind: Some(Sprite2D), transform: Some((position: (0.0, -400.0, 0.0))),
+        props: {"width": Num(96.0), "height": Num(600.0), "texture": Res("res://assets/pipe.png"), "deadly": Bool(true)},
+        children: [(name: "Hitbox", kind: Some(Collider2D), props: {"width": Num(88.0), "height": Num(600.0)})]),
+      (name: "TopCap", kind: Some(Sprite2D), transform: Some((position: (0.0, -95.0, 0.0))),
+        props: {"width": Num(112.0), "height": Num(28.0), "texture": Res("res://assets/pipe.png"), "deadly": Bool(true)}),
+      (name: "Bottom", kind: Some(Sprite2D), transform: Some((position: (0.0, 400.0, 0.0))),
+        props: {"width": Num(96.0), "height": Num(600.0), "texture": Res("res://assets/pipe.png"), "deadly": Bool(true)},
+        children: [(name: "Hitbox", kind: Some(Collider2D), props: {"width": Num(88.0), "height": Num(600.0)})]),
+      (name: "BottomCap", kind: Some(Sprite2D), transform: Some((position: (0.0, 95.0, 0.0))),
+        props: {"width": Num(112.0), "height": Num(28.0), "texture": Res("res://assets/pipe.png"), "deadly": Bool(true)}),
+    ],
+  ),
+)

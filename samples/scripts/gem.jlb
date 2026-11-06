@@ -1,0 +1,12 @@
+>> A gem spins and bobs.
+
+base = 0
+
+DEF on_create() {
+	GLOBAL base = self.y
+}
+
+DEF on_step(dt) {
+	self.rotation_y += 120 * dt
+	self.y = base + SIN(GAME_TIME() * 180 + self.x * 40) * 0.15
+}

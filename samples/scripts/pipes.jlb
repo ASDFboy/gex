@@ -1,0 +1,13 @@
+>> A pair of pipes: slides left, counts as passed once behind the bird.
+
+passed = FALSE
+
+DEF on_step(dt) {
+	IF GET("..", "over") == TRUE { RETURN }
+	self.x -= 220 * dt
+	IF !passed AND self.x < 320 {
+		GLOBAL passed = TRUE
+		EMIT("passed")
+	}
+	IF self.x < -100 { DESTROY(NULL) }
+}

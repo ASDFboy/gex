@@ -1,0 +1,65 @@
+>> Lane switching (a quick TWEEN between three lanes) and a jump.
+
+lane = 0
+vy = 0
+
+autopilot = FALSE
+
+DEF on_press_p() {
+	GLOBAL autopilot = !autopilot
+}
+
+>> Is a lane blocked by something coming up soon?
+DEF blocked(l) {
+	FOR b IN NODES("blocks") {
+		z = GET(b, "z")
+		IF z > -14 AND z < 1.5 AND ABS(GET(b, "x") - l * 2.2) < 0.5 { RETURN TRUE }
+	}
+	RETURN FALSE
+}
+
+>> A block in this lane about to arrive (jump now to clear it)?
+DEF soon(l) {
+	sp = GET("..", "speed")
+	IF sp == NULL { RETURN FALSE }
+	FOR b IN NODES("blocks") {
+		z = GET(b, "z")
+		IF z > 0 - sp * 0.32 AND z < 0 - sp * 0.18 AND ABS(GET(b, "x") - l * 2.2) < 0.5 { RETURN TRUE }
+	}
+	RETURN FALSE
+}
+
+DEF on_step(dt) {
+	IF GET("..", "over") == TRUE { RETURN }
+	>> The autopilot (P) steps into a free lane when its own is blocked.
+	IF autopilot AND blocked(lane) {
+		IF lane > -1 AND !blocked(lane - 1) {
+			move(-1)
+		} ELIF lane < 1 AND !blocked(lane + 1) {
+			move(1)
+		} ELIF self.y <= 0.51 AND soon(lane) {
+			>> Boxed in: jump it.
+			GLOBAL vy = 9
+		}
+	}
+	IF KEY_PRESSED("left") AND lane > -1 { move(-1) }
+	IF KEY_PRESSED("right") AND lane < 1 { move(1) }
+	IF KEY_PRESSED("action") AND self.y <= 0.51 {
+		GLOBAL vy = 9
+		PLAY_SOUND("res://assets/jump.wav", 0.4)
+	}
+	GLOBAL vy -= 28 * dt
+	self.y = MAX(0.5, self.y + vy * dt)
+	>> Spin a little while in the air.
+	IF self.y > 0.5 {
+		SET("Look", "rotation_x", GET("Look", "rotation_x") - 540 * dt)
+	} ELSE {
+		SET("Look", "rotation_x", 0)
+	}
+}
+
+DEF move(d) {
+	GLOBAL lane += d
+	TWEEN(NULL, "x", lane * 2.2, 0.12)
+	PLAY_SOUND("res://assets/blip.wav", 0.3, 1.5)
+}

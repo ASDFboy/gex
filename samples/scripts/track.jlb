@@ -1,0 +1,9 @@
+>> Slides the track's picture so it looks like it's rushing by: moves it a grid square
+>> at a time back to where it started.
+
+DEF on_step(dt) {
+	s = GET("..", "speed")
+	IF s == NULL OR GET("..", "over") == TRUE { RETURN }
+	self.z += s * dt
+	IF self.z > -40 + 4 { self.z -= 4 }
+}

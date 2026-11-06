@@ -1,0 +1,43 @@
+>> Roll-a-ball: scatters gems, times the run, and celebrates when they're all collected.
+
+total = 12
+got = 0
+clock = 0
+done = FALSE
+
+DEF on_create() {
+	FOR i IN 1 TO total {
+		a = i * 360 / total
+		r = 4 + (i % 3) * 2
+		SPAWN("res://scenes/gem.jscene", COS(a) * r, 0.7, SIN(a) * r)
+	}
+}
+
+DEF on_step(dt) {
+	IF done { RETURN }
+	GLOBAL clock += dt
+	SET("Clock", "text", ROUND(clock, 1) + " s")
+}
+
+DEF on_gem_collected(x, y, z) {
+	GLOBAL got += 1
+	SET("Gems", "text", "Gems: " + got + " / " + total)
+	SET("Sparkle", "x", x)
+	SET("Sparkle", "y", y)
+	SET("Sparkle", "z", z)
+	BURST("Sparkle", 40)
+	PLAY_SOUND("res://assets/coin.wav", 0.5, 0.9 + got * 0.05)
+	IF got >= total {
+		GLOBAL done = TRUE
+		best = LOAD_DATA("roll_best")
+		IF best == NULL OR clock < best {
+			best = clock
+			SAVE_DATA("roll_best", clock)
+		}
+		SET("Message", "text", "All gems in " + ROUND(clock, 1) + " s! (best " + ROUND(best, 1) + " s)  Enter to play again")
+	}
+}
+
+DEF on_press_enter() {
+	CHANGE_SCENE("res://scenes/rollaball.jscene", 0.4)
+}

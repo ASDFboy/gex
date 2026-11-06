@@ -148,9 +148,18 @@ pub fn job(text: &str, font: FontId, color: Color32, scale: f32, wrap: Option<f3
 
 /// Paints text (tags and all) anchored at `at`.
 pub fn paint(painter: &egui::Painter, at: egui::Pos2, align: egui::Align2, text: &str, font: FontId, color: Color32, scale: f32) {
-    let galley = painter.layout_job(job(text, font, color, scale, None));
+    paint_wrapped(painter, at, align, text, font, color, scale, None);
+}
+
+/// Paints text anchored at `at`, wrapping lines longer than `wrap` (screen points); each line
+/// lines up the way `align` says.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_wrapped(painter: &egui::Painter, at: egui::Pos2, align: egui::Align2, text: &str, font: FontId, color: Color32, scale: f32, wrap: Option<f32>) {
+    let mut j = job(text, font, color, scale, wrap);
+    j.halign = align.x();
+    let galley = painter.layout_job(j);
     let rect = align.anchor_size(at, galley.size());
-    painter.galley(rect.min, galley, color);
+    painter.galley(rect.min - galley.rect.min.to_vec2(), galley, color);
 }
 
 #[cfg(test)]

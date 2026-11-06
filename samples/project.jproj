@@ -1,0 +1,13 @@
+(
+    name: "GEX Sample Games",
+    main_scene: "res://scenes/menu.jscene",
+    window_size: (1280, 720),
+    mounts: [],
+    actions: {
+        "left": ["left", "a", "pad_left"],
+        "right": ["right", "d", "pad_right"],
+        "up": ["up", "w", "pad_up"],
+        "down": ["down", "s", "pad_down"],
+        "action": ["space", "pad_a"],
+    },
+)

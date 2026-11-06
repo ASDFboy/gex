@@ -1,0 +1,26 @@
+(
+  format: 1,
+  root: (
+    name: "Flappy",
+    kind: Some(Node2D),
+    scripts: ["res://scripts/flappy.jlb", "res://scripts/back_to_menu.jlb"],
+    children: [
+      (name: "Sky", kind: Some(Sprite2D), transform: Some((position: (640.0, 360.0, 0.0))),
+        props: {"width": Num(1280.0), "height": Num(720.0), "texture": Res("res://assets/sky.png"), "layer": Num(-10.0)}),
+      (name: "Hills", kind: Some(Sprite2D), transform: Some((position: (0.0, 470.0, 0.0))),
+        props: {"width": Num(512.0), "height": Num(160.0), "texture": Res("res://assets/hills.png"), "centered": Bool(false), "repeat_x": Bool(true), "layer": Num(-8.0), "color": Color((0.75, 0.85, 0.8, 1.0))}),
+      (name: "Ground", kind: Some(Sprite2D), transform: Some((position: (0.0, 630.0, 0.0))),
+        props: {"width": Num(512.0), "height": Num(96.0), "texture": Res("res://assets/ground.png"), "centered": Bool(false), "repeat_x": Bool(true), "layer": Num(5.0)}),
+      (name: "Bird", kind: Some(Sprite2D), transform: Some((position: (320.0, 330.0, 0.0))),
+        props: {"width": Num(52.0), "height": Num(42.0), "texture": Res("res://assets/bird.png"), "layer": Num(4.0)},
+        scripts: ["res://scripts/bird.jlb"],
+        children: [(name: "Hitbox", kind: Some(Collider2D), props: {"width": Num(34.0), "height": Num(28.0)})]),
+      (name: "Feathers", kind: Some(Particles2D),
+        props: {"emitting": Bool(false), "speed": Num(140.0), "spread": Num(180.0), "lifetime": Num(0.8), "size": Num(8.0), "size_end": Num(3.0), "gravity": Num(300.0), "color": Color((1.0, 0.85, 0.3, 1.0)), "color_end": Color((1.0, 0.6, 0.2, 0.0)), "layer": Num(6.0)}),
+      (name: "Score", kind: Some(Label), transform: Some((position: (0.0, 40.0, 0.0))),
+        props: {"text": Text("0"), "size": Num(64.0), "align": Text("center"), "width": Num(1280.0)}),
+      (name: "Message", kind: Some(Label), transform: Some((position: (0.0, 200.0, 0.0))),
+        props: {"text": Text("Space / click to flap  (P: autopilot)"), "size": Num(30.0), "align": Text("center"), "width": Num(1280.0), "color": Color((0.15, 0.2, 0.35, 1.0))}),
+    ],
+  ),
+)

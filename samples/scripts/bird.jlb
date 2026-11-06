@@ -1,0 +1,67 @@
+>> The bird: gravity, a flap, and a tilt that follows how fast it's falling.
+
+vy = 0
+flying = FALSE
+dead = FALSE
+
+autopilot = FALSE
+
+DEF on_press_p() {
+	GLOBAL autopilot = !autopilot
+}
+
+>> The autopilot flaps when it sinks below the middle of the next gap.
+DEF should_flap() {
+	gap = 330
+	nearest = 99999
+	FOR p IN NODES("pipes") {
+		x = GET(p, "x")
+		IF x > self.x - 60 AND x < nearest {
+			nearest = x
+			gap = GET(p, "y")
+		}
+	}
+	RETURN self.y > gap + 25 AND vy > -50
+}
+
+DEF on_step(dt) {
+	IF !flying AND !dead {
+		>> Bob gently until the first flap.
+		self.y = 330 + SIN(GAME_TIME() * 240) * 10
+	}
+	flap = KEY_PRESSED("action") OR KEY_PRESSED("mouse_left") OR KEY_PRESSED("up")
+	IF autopilot AND (should_flap() OR !flying) { flap = TRUE }
+	IF flap AND !dead {
+		IF !flying {
+			GLOBAL flying = TRUE
+			EMIT("started")
+		}
+		GLOBAL vy = -420
+		PLAY_SOUND("res://assets/flap.wav", 0.4)
+	}
+	IF !flying { RETURN }
+	GLOBAL vy += 1300 * dt
+	self.y += vy * dt
+	self.rotation = MAX(-25, MIN(80, vy / 8))
+	IF self.y > 610 {
+		self.y = 610
+		die()
+	}
+	IF self.y < 0 {
+		self.y = 0
+		GLOBAL vy = 0
+	}
+}
+
+DEF die() {
+	IF dead { RETURN }
+	GLOBAL dead = TRUE
+	EMIT("crashed")
+}
+
+DEF on_collide_start(other) {
+	IF GET(other, "deadly") == TRUE {
+		GLOBAL vy = 0
+		die()
+	}
+}

@@ -56,7 +56,9 @@ pub fn paint_ui(
                     "right" => to_screen(Vec2::new(tl.x + it.size.x, tl.y)),
                     _ => rect.min,
                 };
-                crate::text::paint(&painter, at, align, it.text("text"), font(it.num("size", 18.0)), c32(it.color("color")), scale);
+                // A Label given a width wraps its lines to fit it.
+                let wrap = it.props.contains_key("width").then(|| it.size.x * scale);
+                crate::text::paint_wrapped(&painter, at, align, it.text("text"), font(it.num("size", 18.0)), c32(it.color("color")), scale, wrap);
             }
             NodeKind::Button => {
                 let disabled = it.props.get("disabled").is_some_and(|v| v.as_bool());

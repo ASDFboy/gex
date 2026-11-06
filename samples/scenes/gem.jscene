@@ -1,0 +1,15 @@
+(
+  format: 1,
+  root: (
+    name: "Gem",
+    kind: Some(Node3D),
+    props: {"gem": Bool(true)},
+    scripts: ["res://scripts/gem.jlb"],
+    groups: ["gems"],
+    children: [
+      (name: "Look", kind: Some(Mesh3D), transform: Some((rotation: (45.0, 0.0, 45.0), scale: (0.45, 0.45, 0.45))),
+        props: {"color": Color((1.0, 0.82, 0.2, 1.0)), "emissive": Num(0.9), "specular": Num(0.8)}),
+      (name: "Hitbox", kind: Some(Collider3D), props: {"width": Num(0.9), "height": Num(0.9), "depth": Num(0.9)}),
+    ],
+  ),
+)

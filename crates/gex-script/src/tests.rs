@@ -826,3 +826,19 @@ fn animator_clips_play_and_end() {
     let r = g.tree().nodes[root].transform.rotation;
     assert!(r.z.abs() > 1.0, "the spin clip turns the Animator's parent");
 }
+
+#[test]
+fn colors_from_text_and_lists() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), scripts: ["res://a.jlb"], children: [
+        (name: "A", kind: Some(Sprite2D)), (name: "B", kind: Some(Sprite2D)), (name: "C", kind: Some(Sprite2D)),
+    ]))"#;
+    let script = "DEF on_create() {\n    SET(\"A\", \"color\", \"#ff0000\")\n    SET(\"B\", \"color\", [0, 1, 0, 0.5])\n    SET(\"C\", \"color\", \"blue\")\n}\n";
+    let p = project("colors", &[("main.jscene", scene), ("a.jlb", script)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    let t = g.tree();
+    let c = |n: &str| t.nodes[t.find_path(None, &format!("Root/{}", n)).unwrap()].color("color");
+    assert_eq!(c("A"), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(c("B"), [0.0, 1.0, 0.0, 0.5]);
+    assert!(c("C")[2] > 0.9 && c("C")[0] < 0.3);
+}

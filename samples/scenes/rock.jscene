@@ -1,0 +1,13 @@
+(
+  format: 1,
+  root: (
+    name: "Rock",
+    kind: Some(Sprite2D),
+    props: {"width": Num(96.0), "height": Num(96.0), "texture": Res("res://assets/rock0.png"), "size": Num(3.0), "layer": Num(1.0)},
+    scripts: ["res://scripts/rock.jlb"],
+    groups: ["rocks"],
+    children: [
+      (name: "Hitbox", kind: Some(Collider2D), props: {"width": Num(70.0), "height": Num(70.0)}),
+    ],
+  ),
+)

@@ -44,6 +44,10 @@ pub fn to_variant(v: &Value, like: Option<&Variant>) -> Option<Variant> {
         (Value::Bool(b), _) => Variant::Bool(*b),
         (Value::Num(_), _) => Variant::Num(as_f64(v)?),
         (Value::Text(s), Some(Variant::Res(_))) => Variant::Res(s.to_string()),
+        // "#ff8800" or "red" into a color property.
+        (Value::Text(_), Some(Variant::Color(_))) => Variant::Color(crate::commands::color_arg(Some(v))),
+        // [1, 0.5, 0, 1] (no names) into a color property.
+        (Value::Table(rc, _), Some(Variant::Color(_))) if rc.named.len() == 0 => Variant::Color(crate::commands::color_arg(Some(v))),
         (Value::Text(s), _) => Variant::Text(s.to_string()),
         (Value::Table(..), Some(Variant::Color(c))) => Variant::Color([
             field(v, "r", c[0] as f64) as f32,
