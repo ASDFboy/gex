@@ -42,7 +42,7 @@ pub fn profiler(ui: &mut egui::Ui, st: &mut EditorState) {
     // The last few seconds of frame times, as bars (green under 16.7 ms, yellow under 33, red above).
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(100.0), 80.0), egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 2.0, Color32::from_gray(18));
+    painter.rect_filled(rect, 0.0, Color32::from_gray(18));
     let max_ms = 50.0;
     let w = rect.width() / 240.0;
     for (i, (ft, s)) in p.stats.iter().enumerate() {

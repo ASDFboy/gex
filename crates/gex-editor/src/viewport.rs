@@ -327,21 +327,25 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
             st.mode_3d = true;
         }
         ui.separator();
-        for (t, label, key) in [(Tool::Move, "↔ Move", "W"), (Tool::Rotate, "⟲ Rotate", "E"), (Tool::Scale, "⛶ Scale", "R")] {
+        for (t, label, key) in [(Tool::Move, "Move", "W"), (Tool::Rotate, "Rotate", "E"), (Tool::Scale, "Scale", "R")] {
             if ui.selectable_label(st.tool == t, label).on_hover_text(format!("{} (hold Ctrl to snap)", key)).clicked() {
                 st.tool = t;
             }
         }
         ui.separator();
-        ui.checkbox(&mut st.show_grid, "grid");
-        ui.checkbox(&mut st.show_colliders, "colliders").on_hover_text("outline 2D colliders and bodies (in the editor and while playing)");
+        ui.checkbox(&mut st.show_grid, "Grid");
+        ui.checkbox(&mut st.show_colliders, "Colliders").on_hover_text("Outline 2D colliders and bodies (in the editor and while playing)");
         if let Some(p) = &mut st.playing {
             ui.separator();
-            ui.checkbox(&mut p.game_camera, "game camera").on_hover_text("off: look around with the editor camera while the game runs");
-            ui.label(egui::RichText::new("▶ running — click the view to give it the keyboard").color(theme::GOOD));
+            ui.checkbox(&mut p.game_camera, "Game camera").on_hover_text("Off: look around with the editor camera while the game runs");
+            ui.label(egui::RichText::new("Click the view to give the game the keyboard").small().color(theme::TEXT_DIM));
         } else {
             ui.separator();
-            ui.label(egui::RichText::new(if st.mode_3d { "RMB orbit · MMB/Shift+RMB pan · wheel zoom · RMB+WASD fly" } else { "RMB/MMB pan · wheel zoom · LMB select & drag" }).color(theme::TEXT_DIM).small());
+            ui.label(egui::RichText::new("Controls").small().color(theme::TEXT_DIM)).on_hover_text(if st.mode_3d {
+                "Right-drag: orbit\nMiddle-drag or Shift+right-drag: pan\nWheel: zoom\nRight button + WASD: fly\nLeft-click: select, drag to move"
+            } else {
+                "Right-drag or middle-drag: pan\nWheel: zoom\nLeft-click: select, drag to move (drag empty space to box-select)"
+            });
         }
     });
     let size = ui.available_size().max(egui::vec2(16.0, 16.0));

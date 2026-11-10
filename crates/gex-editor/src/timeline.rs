@@ -117,14 +117,14 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
         }
         ui.label("length");
         changed |= ui.add(egui::DragValue::new(&mut clip.length).range(0.05..=600.0).speed(0.05).suffix(" s")).changed();
-        changed |= ui.checkbox(&mut clip.looped, "loop").changed();
+        changed |= ui.checkbox(&mut clip.looped, "Loop").changed();
         let autoplay = st.tree.nodes[anim_id].text("autoplay") == clip.name;
         let mut ap = autoplay;
-        if ui.checkbox(&mut ap, "autoplay").changed() {
+        if ui.checkbox(&mut ap, "Autoplay").changed() {
             st.will_change("autoplay");
             st.tree.nodes[anim_id].props.insert("autoplay".into(), Variant::Text(if ap { clip.name.clone() } else { String::new() }));
         }
-        if ui.small_button(RichText::new("delete clip").color(theme::BAD)).clicked() {
+        if ui.small_button(RichText::new("Delete clip").color(theme::BAD)).clicked() {
             file.clips.remove(ci);
             changed = true;
         }
@@ -192,7 +192,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
                 };
                 let label = format!("{} · {}", who, tr.prop);
                 ui.add_sized([label_w - 50.0, row_h], egui::Label::new(RichText::new(label).monospace()).truncate());
-                if ui.small_button("+key").on_hover_text("key the property's current value at the playhead").clicked() {
+                if ui.small_button("+ Key").on_hover_text("key the property's current value at the playhead").clicked() {
                     key_track = Some(ti);
                 }
                 if ui.small_button("✖").on_hover_text("remove this track").clicked() {
@@ -201,7 +201,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
                 // The strip: keys as diamonds; drag to move, right-click to delete.
                 let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(60.0), row_h), Sense::click_and_drag());
                 let painter = ui.painter_at(rect);
-                painter.rect_filled(rect, 2.0, Color32::from_gray(24));
+                painter.rect_filled(rect, 0.0, Color32::from_gray(24));
                 let to_x = |t: f32| rect.left() + (t / length).clamp(0.0, 1.0) * rect.width();
                 let to_t = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0) * length;
                 for k in 0..=10 {

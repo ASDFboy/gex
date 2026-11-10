@@ -215,20 +215,23 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
         }
         l.show_workspace(wi);
     }
-    let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0).corner_radius(4.0);
+    let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0);
     if l.show_assets {
         egui::Panel::right("ws assets").resizable(true).default_size(300.0).size_range(180.0..=700.0).frame(glass).show(ui, |ui| {
             // In a child that can't widen the panel (the asset grid fills whatever width it gets).
             let r = ui.available_rect_before_wrap();
             let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(r).id_salt("ws assets inner"));
             inner.set_clip_rect(r.intersect(ui.clip_rect()));
-            inner.label(RichText::new("Assets").strong());
+            theme::title(&mut inner, "Assets");
             panels::assets(&mut inner, st, previews);
             ui.allocate_rect(r, Sense::hover());
         });
     }
     if l.show_console {
-        egui::Panel::bottom("ws console").resizable(true).default_size(130.0).frame(glass).show(ui, |ui| panels::console(ui, st));
+        egui::Panel::bottom("ws console").resizable(true).default_size(130.0).frame(glass).show(ui, |ui| {
+            theme::title(ui, "Console");
+            panels::console(ui, st);
+        });
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         tab_strip(ui, l, st);
@@ -248,15 +251,15 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
         for (i, t) in l.tabs.iter().enumerate() {
             let active = i == l.active;
             let (label, dirty) = match t {
-                TopTab::Workspace(w) => (format!("🖵 {}", l.workspaces[*w].name), false),
-                TopTab::Scene(r) => (format!("🎬 {}", r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jscene")), st.is_dirty(r)),
+                TopTab::Workspace(w) => (l.workspaces[*w].name.clone(), false),
+                TopTab::Scene(r) => (format!("{}", r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jscene")), st.is_dirty(r)),
             };
             let text = if dirty { format!("{} *", label) } else { label };
             let r = ui.add(egui::Button::selectable(active, RichText::new(text).color(if active { theme::TEXT } else { theme::TEXT_DIM })));
             if active {
                 // A Monokai-green line under the tab being shown.
                 let y = r.rect.bottom() + 1.0;
-                ui.painter().line_segment([Pos2::new(r.rect.left(), y), Pos2::new(r.rect.right(), y)], Stroke::new(2.0, theme::MK_GREEN));
+                ui.painter().line_segment([Pos2::new(r.rect.left(), y), Pos2::new(r.rect.right(), y)], Stroke::new(2.0, theme::ACCENT));
             }
             if r.clicked() {
                 activate = Some(i);
@@ -265,12 +268,12 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
                 TopTab::Workspace(_) => l.tabs.iter().filter(|t| matches!(t, TopTab::Workspace(_))).count() > 1,
                 TopTab::Scene(_) => true,
             };
-            if closeable && ui.add(egui::Button::new(RichText::new("✖").small().color(theme::TEXT_DIM)).frame(false)).on_hover_text("close").clicked() {
+            if closeable && ui.add(egui::Button::new(RichText::new("✖").small().color(theme::TEXT_DIM)).frame(false)).on_hover_text("Close").clicked() {
                 close = Some(i);
             }
             ui.add_space(6.0);
         }
-        if ui.small_button("+").on_hover_text("a new workspace").clicked() {
+        if ui.small_button("+").on_hover_text("New workspace").clicked() {
             let n = l.workspaces.len() + 1;
             l.workspaces.push(Workspace { name: format!("Workspace {}", n), ..Default::default() });
             l.tabs.push(TopTab::Workspace(l.workspaces.len() - 1));
@@ -328,15 +331,15 @@ fn scene_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &str,
         st.open_scene(res);
         l.last_scene = st.scene_res.clone();
     }
-    let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0).corner_radius(4.0);
+    let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0);
     egui::Panel::left("scene tab side").resizable(true).default_size(290.0).frame(glass).show(ui, |ui| {
         egui::Panel::bottom("scene tab inspector").resizable(true).default_size(ui.available_height() * 0.6).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
-            ui.label(RichText::new("Instance").strong());
+            theme::title(ui, "Properties");
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::inspector(ui, st));
         });
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Instances").strong());
-            if ui.small_button("🖵 as window").on_hover_text("open this scene's window in the workspace (its nodes, properties and events)").clicked() {
+            theme::title(ui, "Instances");
+            if ui.small_button("Open as window").on_hover_text("Open this scene's window in the workspace (its nodes, properties and events)").clicked() {
                 l.open_scene_window(res);
             }
         });
@@ -398,7 +401,7 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "Double-click a scene or script in Assets to open its window here.\nOpen a scene as its own tab with ⤢ on its window, to place instances.\nDrag the background to look around.",
+            "Double-click a script in Assets to open it here.\nRight-click a scene in Assets and pick Open as a window, or drag it here.\nDrag the background to look around.",
             egui::FontId::proportional(14.0),
             theme::TEXT_DIM,
         );
@@ -411,7 +414,7 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
             let from = Pos2::new(a.right(), a.top() + 40.0);
             let to = Pos2::new(b.left(), b.top() + 14.0);
             let k = ((to.x - from.x).abs() * 0.5).max(40.0);
-            let curve = egui::epaint::CubicBezierShape::from_points_stroke([from, from + Vec2::new(k, 0.0), to - Vec2::new(k, 0.0), to], false, Color32::TRANSPARENT, Stroke::new(2.0, theme::alpha(theme::MK_GREEN, 170)));
+            let curve = egui::epaint::CubicBezierShape::from_points_stroke([from, from + Vec2::new(k, 0.0), to - Vec2::new(k, 0.0), to], false, Color32::TRANSPARENT, Stroke::new(2.0, theme::alpha(theme::TEXT_DIM, 150)));
             painter.add(curve);
         }
     }
@@ -431,19 +434,20 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         let mut wui = ui.new_child(egui::UiBuilder::new().max_rect(wr).id_salt(("ws win", w.id)));
         wui.set_clip_rect(clip);
         let p = wui.painter().clone();
-        p.rect_filled(wr.translate(Vec2::new(0.0, 4.0)).expand(2.0), 7.0, Color32::from_black_alpha(70));
-        p.rect_filled(wr, 6.0, theme::alpha(Color32::from_rgb(0x1a, 0x1a, 0x17), 240));
-        p.rect_stroke(wr, 6.0, theme::glass_edge(), egui::StrokeKind::Inside);
+        p.rect_filled(wr.translate(Vec2::new(0.0, 3.0)).expand(1.0), 0.0, Color32::from_black_alpha(80));
+        p.rect_filled(wr, 0.0, Color32::from_rgb(0x1a, 0x1a, 0x1a));
+        p.rect_stroke(wr, 0.0, theme::glass_edge(), egui::StrokeKind::Inside);
         // Title bar: drag to move.
         let title_r = Rect::from_min_size(wr.min, Vec2::new(wr.width(), 26.0));
         p.add(theme::header(title_r.shrink2(Vec2::new(1.0, 1.0)), false));
         let (icon, title) = match &w.kind {
-            WinKind::Scene { res, .. } => ("🎬", format!("{}{}", short(res), if st.is_dirty(res) { " *" } else { "" })),
-            WinKind::Events { res, node } => ("⚡", format!("{}: events", if node.is_empty() { short(res) } else { node.rsplit('/').next().unwrap_or(node).to_string() })),
-            WinKind::Script { res } => ("📜", format!("{}{}", short(res), if st.scripts.get(res).is_some_and(|s| s.dirty()) { " *" } else { "" })),
-            WinKind::Tool { name } => ("🔧", name.clone()),
+            WinKind::Scene { res, .. } => ("Scene", format!("{}{}", short(res), if st.is_dirty(res) { " *" } else { "" })),
+            WinKind::Events { res, node } => ("Events", format!("{}", if node.is_empty() { short(res) } else { node.rsplit('/').next().unwrap_or(node).to_string() })),
+            WinKind::Script { res } => ("Script", format!("{}{}", short(res), if st.scripts.get(res).is_some_and(|s| s.dirty()) { " *" } else { "" })),
+            WinKind::Tool { name } => ("", name.clone()),
         };
-        p.text(title_r.left_center() + Vec2::new(8.0, 0.0), egui::Align2::LEFT_CENTER, format!("{}  {}", icon, title), egui::FontId::proportional(13.0), theme::TEXT);
+        let tr = p.text(title_r.left_center() + Vec2::new(8.0, 0.0), egui::Align2::LEFT_CENTER, icon.to_uppercase(), egui::FontId::proportional(10.0), theme::TEXT_DIM);
+        p.text(Pos2::new(if icon.is_empty() { tr.left() } else { tr.right() + 8.0 }, title_r.center().y), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.0), theme::TEXT);
         let drag = wui.interact(title_r.shrink2(Vec2::new(0.0, 0.0)).with_max_x(title_r.right() - 26.0), egui::Id::new(("ws title", w.id)), Sense::click_and_drag());
         if drag.dragged() {
             moves.push((w.id, drag.drag_delta()));
@@ -602,14 +606,14 @@ fn scene_window(ui: &mut egui::Ui, st: &mut EditorState, res: &str, node: &str, 
         let mut events = false;
         let mut tab = false;
         ui.horizontal(|ui| {
-            if ui.button("⤢ Open").on_hover_text("open the scene in its own tab, to place and edit instances").clicked() {
+            if ui.button("Open in tab").on_hover_text("Open the scene in its own tab, to place and edit instances").clicked() {
                 tab = true;
             }
-            if ui.button("⚡ Events").on_hover_text("the events of the picked node's scripts").clicked() {
+            if ui.button("Events").on_hover_text("The events of the picked node's scripts").clicked() {
                 events = true;
             }
             let dirty = st.scene_dirty();
-            if ui.add_enabled(dirty, egui::Button::new("💾 Save")).clicked() {
+            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
                 st.save_scene();
             }
         });

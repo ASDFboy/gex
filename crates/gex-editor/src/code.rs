@@ -208,33 +208,28 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     let mut save = false;
     let mut toggle_vim = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(res).monospace().color(theme::TEXT_DIM));
-        if s.dirty() {
-            ui.label(RichText::new("*").color(theme::WARN)).on_hover_text("unsaved changes");
+        if ui.add_enabled(s.dirty(), egui::Button::new("Save")).on_hover_text("Ctrl+S").clicked() {
+            save = true;
+        }
+        if ui.selectable_label(s.find.is_some(), "Find").on_hover_text("Find and replace (Ctrl+F)").clicked() {
+            s.find = if s.find.is_some() { None } else { Some((String::new(), String::new())) };
+        }
+        if ui.selectable_label(vim_on, "Vim").on_hover_text("Vim keys: Esc for normal mode, i to type").clicked() {
+            toggle_vim = true;
         }
         if vim_on {
-            let m = if s.vim.mode == Mode::Insert { " INSERT " } else { " NORMAL " };
-            ui.label(RichText::new(m).monospace().strong().background_color(if s.vim.mode == Mode::Insert { theme::GOOD } else { theme::ACCENT_DIM }).color(theme::BG_DEEP));
+            let m = if s.vim.mode == Mode::Insert { "INSERT" } else { "NORMAL" };
+            ui.label(RichText::new(m).small().strong().color(if s.vim.mode == Mode::Insert { theme::GOOD } else { theme::ACCENT }));
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Save").on_hover_text("Ctrl+S").clicked() {
-                save = true;
+        ui.separator();
+        match s.problems.first() {
+            Some((l, m)) => {
+                ui.add(egui::Label::new(RichText::new(format!("Line {}: {}", l, m)).color(theme::BAD)).truncate());
             }
-            if ui.selectable_label(vim_on, "Vim").on_hover_text("Vim keys: Esc for normal mode, i to type").clicked() {
-                toggle_vim = true;
+            None => {
+                ui.add(egui::Label::new(RichText::new(res.trim_start_matches("res://")).small().color(theme::TEXT_DIM)).truncate());
             }
-            if ui.button("🔍").on_hover_text("Find and replace (Ctrl+F)").clicked() {
-                s.find = if s.find.is_some() { None } else { Some((String::new(), String::new())) };
-            }
-            match s.problems.first() {
-                Some((l, m)) => {
-                    ui.label(RichText::new(format!("line {}: {}", l, m)).color(theme::BAD));
-                }
-                None => {
-                    ui.label(RichText::new("✔ no syntax problems").color(theme::GOOD));
-                }
-            }
-        });
+        }
     });
     let id = egui::Id::new(("script", res));
     let focused = ui.memory(|m| m.has_focus(id));

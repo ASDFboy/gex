@@ -69,7 +69,7 @@ fn tile_palette(ui: &mut egui::Ui, st: &mut EditorState, id: NodeId) {
     let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
     ui.horizontal(|ui| {
         let painting = st.tile_brush.is_some();
-        if ui.selectable_label(painting, "🖌 Paint tiles").on_hover_text("LMB paints in the scene view, Shift+LMB erases").clicked() {
+        if ui.selectable_label(painting, "Paint tiles").on_hover_text("LMB paints in the scene view, Shift+LMB erases").clicked() {
             st.tile_brush = if painting { None } else { Some(0) };
         }
         if ui.selectable_label(st.tile_brush == Some(-1), "Eraser").clicked() {
@@ -242,7 +242,7 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
                 }
             }
             if r.dnd_hover_payload::<NodeId>().is_some() {
-                ui.painter().rect_stroke(r.rect, 2.0, egui::Stroke::new(1.5, theme::ACCENT), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(r.rect, 0.0, egui::Stroke::new(1.5, theme::ACCENT), egui::StrokeKind::Inside);
             }
         }
         let tip = match &n.instance_of {
@@ -259,7 +259,7 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
                     }
                 }
             });
-            if ui.button("Duplicate  (Ctrl+D)").clicked() {
+            if theme::menu_item(ui, "Duplicate", "Ctrl+D").clicked() {
                 *action = Some(Action::Duplicate(id));
                 ui.close();
             }
@@ -437,6 +437,21 @@ fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
     }
 }
 
+/// A value as plain text (for read-only views).
+fn show_variant(v: &Variant) -> String {
+    let n = |x: f64| format!("{}", (x * 1000.0).round() / 1000.0);
+    match v {
+        Variant::Null => "NULL".into(),
+        Variant::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
+        Variant::Num(x) => n(*x),
+        Variant::Text(s) | Variant::Res(s) => s.clone(),
+        Variant::Color(c) => format!("#{:02x}{:02x}{:02x}{}", (c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, if c[3] < 0.999 { format!(" {}%", (c[3] * 100.0).round()) } else { String::new() }),
+        Variant::Vec2(p) => format!("{}, {}", n(p[0]), n(p[1])),
+        Variant::Vec3(p) => format!("{}, {}, {}", n(p[0]), n(p[1]), n(p[2])),
+        Variant::List(l) => format!("list of {}", l.len()),
+    }
+}
+
 /// An asset dragged from the asset browser.
 #[derive(Clone)]
 pub struct AssetPath(pub String);
@@ -452,8 +467,8 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             ui.label("This node isn't in the running game (it was destroyed).");
             return;
         };
-        ui.heading(format!("{} {}", kind_icon(n.kind), n.name));
-        ui.label(RichText::new("live values from the running game").color(theme::GOOD));
+        ui.label(RichText::new(format!("{} {}", kind_icon(n.kind), n.name)).strong());
+        ui.label(RichText::new("Live values from the running game").small().color(theme::GOOD));
         ui.separator();
         let t = n.transform;
         egui::Grid::new("live").num_columns(2).show(ui, |ui| {
@@ -465,7 +480,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             ui.end_row();
             for (k, v) in &n.props {
                 ui.label(k);
-                ui.label(format!("{:?}", v));
+                ui.label(show_variant(v));
                 ui.end_row();
             }
         });
@@ -485,7 +500,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             st.tree.nodes[id].name = name;
         }
         let mut vis = st.tree.nodes[id].visible;
-        if ui.checkbox(&mut vis, "visible").changed() {
+        if ui.checkbox(&mut vis, "Visible").changed() {
             st.will_change("visible");
             st.tree.nodes[id].visible = vis;
         }
@@ -493,8 +508,8 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     ui.label(RichText::new(kind.name()).color(theme::TEXT_DIM));
     if let Some(p) = st.tree.nodes[id].instance_of.clone() {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("🎬 instance of {}", p)).color(theme::ACCENT));
-            if ui.small_button("open").clicked() {
+            ui.label(RichText::new(format!("Instance of {}", p.trim_start_matches("res://"))).color(theme::ACCENT));
+            if ui.small_button("Open").clicked() {
                 st.open_scene(&p);
             }
         });
@@ -507,7 +522,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.label(RichText::new(format!("{} nodes selected (editing this one; drag in the view moves them all)", n_sel)).small().color(theme::ACCENT));
     }
     ui.separator();
-    if kind == NodeKind::Animator && ui.button("🎞 Edit clips in the Timeline").clicked() {
+    if kind == NodeKind::Animator && ui.button("Edit clips in the Timeline").clicked() {
         st.open_timeline = true;
     }
     if kind != NodeKind::Node && kind != NodeKind::Animator {
@@ -565,11 +580,11 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         // Custom properties: what scripts see as self.<name>.
         let mem_id = egui::Id::new("new prop name");
         let mut name: String = ui.data_mut(|d| d.get_temp(mem_id).unwrap_or_default());
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(egui::TextEdit::singleline(&mut name).hint_text("new_property").desired_width(120.0));
             let ok = jlb::value::is_ident(&name) && !st.tree.nodes[id].props.contains_key(&name);
-            for (label, v) in [("number", Variant::Num(0.0)), ("text", Variant::Text(String::new())), ("bool", Variant::Bool(false)), ("color", Variant::Color([1.0; 4]))] {
-                if ui.add_enabled(ok, egui::Button::new(format!("+{}", label))).clicked() {
+            for (label, v) in [("Number", Variant::Num(0.0)), ("Text", Variant::Text(String::new())), ("Switch", Variant::Bool(false)), ("Color", Variant::Color([1.0; 4]))] {
+                if ui.add_enabled(ok, egui::Button::new(format!("+ {}", label))).on_hover_text("Name it first, then pick its type").clicked() {
                     st.will_change("add prop");
                     st.tree.nodes[id].props.insert(name.clone(), v);
                     name.clear();
@@ -643,7 +658,7 @@ pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
                     st.open_script(res, None);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !playing && ui.small_button("detach").on_hover_text("remove from this node (the file stays)").clicked() {
+                    if !playing && ui.small_button("Detach").on_hover_text("remove from this node (the file stays)").clicked() {
                         detach = Some(i);
                     }
                 });
@@ -781,7 +796,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 st.asset_dir = r.path.clone();
             }
         }
-        if ui.button("⚙ Mounts").on_hover_text("connect game installs (Half-Life 2...)").clicked() {
+        if ui.button("Mounts").on_hover_text("connect game installs (Half-Life 2...)").clicked() {
             st.show_settings = true;
         }
     });
@@ -878,7 +893,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                             let (rect, r) = ui.allocate_exact_size(egui::vec2(cell, cell), egui::Sense::click_and_drag());
                             let p = ui.painter_at(rect);
                             // A checkerboard behind, so dark, white and see-through pictures all show up.
-                            p.rect_filled(rect, 4.0, Color32::from_gray(if sel { 92 } else { 58 }));
+                            p.rect_filled(rect, 0.0, Color32::from_gray(if sel { 92 } else { 58 }));
                             let sq = cell / 6.0;
                             for cy in 0..6 {
                                 for cx in 0..6 {
@@ -891,7 +906,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                             let img_rect = egui::Rect::from_center_size(rect.center(), size * k * 0.9);
                             p.image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                             if sel {
-                                p.rect_stroke(rect, 4.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                                p.rect_stroke(rect, 0.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
                             }
                             r.dnd_set_drag_payload(AssetPath(e.path.clone()));
                             let r = r.on_hover_text(&e.name);
@@ -969,10 +984,10 @@ fn debugger(ui: &mut egui::Ui, st: &mut EditorState) {
     egui::Frame::group(ui.style()).fill(theme::WARN.gamma_multiply(0.08)).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("⏸ paused at {} line {}", at.file.rsplit(['/', '\\']).next().unwrap_or(""), at.line)).strong().color(theme::WARN));
-            if ui.button("▶ Continue (F8)").clicked() {
+            if ui.button("Continue (F8)").clicked() {
                 p.handle.resume();
             }
-            if ui.button("⏭ Step (F10)").clicked() {
+            if ui.button("Step (F10)").clicked() {
                 p.handle.step();
             }
         });
