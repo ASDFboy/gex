@@ -184,6 +184,22 @@ mod tests {
     }
 
     #[test]
+    fn copy_a_builtin_into_the_project() {
+        let dir = std::env::temp_dir().join(format!("gex-copy-builtin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let p = crate::templates::create_demo(&dir).unwrap();
+        let mut st = crate::state::EditorState::new(p);
+        st.copy_builtin("gex://shapes/red/star.png");
+        assert_eq!(st.asset_selected.as_deref(), Some("res://assets/placeholders/shapes/red/star.png"));
+        assert!(dir.join("assets/placeholders/shapes/red/star.png").is_file());
+        // A second copy doesn't overwrite the first.
+        st.copy_builtin("gex://shapes/red/star.png");
+        assert_eq!(st.asset_selected.as_deref(), Some("res://assets/placeholders/shapes/red/star_2.png"));
+        st.undo_file_op();
+        assert!(!dir.join("assets/placeholders/shapes/red/star_2.png").exists());
+    }
+
+    #[test]
     fn rename_import_trash() {
         let dir = std::env::temp_dir().join(format!("gex-files-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

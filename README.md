@@ -92,7 +92,9 @@ and start it again.
 2. [Tutorial 2: going further](docs/TUTORIAL-2-ADVANCED.md): physics, tilemaps and pathfinding,
    animation, cameras, tweens and particles, UI, input actions, saving, 3D, first person,
    Half-Life 2 assets, debugging.
-3. Reference: [every node](docs/NODES.md), [every script event and command](docs/SCRIPTING.md).
+3. Reference: [every node](docs/NODES.md), [every script event and command](docs/SCRIPTING.md),
+   [the built-in placeholder art](docs/PLACEHOLDERS.md) (`gex://`: 700 shapes, patterns, icons
+   and more, ready to drag into a scene).
 
 ## Layout
 

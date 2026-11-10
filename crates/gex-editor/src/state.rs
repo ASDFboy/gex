@@ -163,6 +163,8 @@ pub struct EditorState {
     pub file_undo: Vec<FileOp>,
     /// Something asked for the Timeline panel to be shown.
     pub open_timeline: bool,
+    /// Assets panel: show folders of pictures as thumbnails.
+    pub asset_grid: bool,
     /// Something asked for the command line to open (":" in Vim normal mode).
     pub open_command: bool,
 }
@@ -214,6 +216,7 @@ impl EditorState {
             previews: Default::default(),
             file_undo: Vec::new(),
             open_timeline: false,
+            asset_grid: true,
             search: Default::default(),
             particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
@@ -729,6 +732,30 @@ impl EditorState {
         self.open_script(&res, None);
         self.file_undo.push(FileOp::Created(vec![res.clone()]));
         Some(res)
+    }
+
+    /// Copies a built-in asset (gex://...) into the project, under res://assets/placeholders,
+    /// so it can be edited. Selects the copy.
+    pub fn copy_builtin(&mut self, path: &str) {
+        let Some(rel) = path.strip_prefix("gex://") else { return };
+        let (dir, name) = rel.rsplit_once('/').map(|(d, n)| (format!("res://assets/placeholders/{}", d), n)).unwrap_or(("res://assets/placeholders".into(), rel));
+        // Never overwrite an earlier (maybe edited) copy.
+        let Some(res) = crate::files::free_name(&self.project, &dir, name) else { return };
+        let r = (|| -> Result<(), String> {
+            let bytes = self.vfs.read(path)?;
+            let to = self.project.res_to_path(&res).ok_or("not a project path")?;
+            std::fs::create_dir_all(to.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::write(&to, bytes).map_err(|e| e.to_string())
+        })();
+        match r {
+            Ok(()) => {
+                self.file_undo.push(FileOp::Created(vec![res.clone()]));
+                self.log(LogKind::Info, format!("copied {} to {}", path, res));
+                self.asset_dir = res.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+                self.asset_selected = Some(res);
+            }
+            Err(e) => self.log(LogKind::Error, format!("couldn't copy {}: {}", path, e)),
+        }
     }
 
     /// Undoes the newest file change from the Assets panel.

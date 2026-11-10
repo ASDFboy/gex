@@ -79,3 +79,25 @@ fn project_files_and_images() {
     assert_eq!(vfs.list("res://").len(), 1);
     assert!(vfs.read("res://../x").is_err());
 }
+
+#[test]
+fn builtin_pack_is_readable() {
+    let dir = std::env::temp_dir().join(format!("gex-builtin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let vfs = crate::Vfs::new(&dir, &gex_core::project::ProjectConfig::default());
+    assert!(vfs.roots().iter().any(|r| r.path == "gex://"));
+    let top: Vec<String> = vfs.list("gex://").into_iter().map(|e| e.name).collect();
+    for f in ["shapes", "patterns", "colors", "ui", "icons", "characters", "particles", "skies"] {
+        assert!(top.iter().any(|t| t == f), "{} missing from {:?}", f, top);
+    }
+    let img = crate::load_image(&vfs, "gex://shapes/white/star.png").unwrap();
+    assert_eq!((img.width, img.height), (128, 128));
+    assert!(vfs.list("gex://shapes").iter().any(|e| e.is_dir && e.name == "red"));
+    assert!(vfs.list("gex://shapes/red").iter().any(|e| !e.is_dir && e.path == "gex://shapes/red/circle.png"));
+    assert!(vfs.read("gex://nope.png").is_err());
+    assert!(vfs.redistributable("gex://icons/coin.png"));
+    // Every built-in picture loads.
+    for (p, _) in crate::builtin::FILES.iter().filter(|(p, _)| p.ends_with(".png")) {
+        crate::load_image(&vfs, &format!("gex://{}", p)).unwrap_or_else(|e| panic!("{}: {}", p, e));
+    }
+}

@@ -69,6 +69,9 @@ impl Vfs {
             let p = safe_join(&self.project_dir, rel).ok_or("paths can't leave the project")?;
             return std::fs::read(&p).map_err(|e| format!("{}: {}", path, e));
         }
+        if scheme == "gex" {
+            return crate::builtin::get(rel).map(|b| b.to_vec()).ok_or_else(|| format!("{} isn't one of the built-in assets", path));
+        }
         let m = self.mounts.iter().find(|m| m.scheme == scheme).ok_or_else(|| format!("nothing is mounted at {}://", scheme))?;
         match &m.imp {
             MountImpl::Folder(base) => {
@@ -86,12 +89,16 @@ impl Vfs {
     /// Whether a file may go into an exported game. Files from mounted game installs
     /// never do: they stay on the machine they were installed on.
     pub fn redistributable(&self, path: &str) -> bool {
-        path.starts_with("res://")
+        path.starts_with("res://") || path.starts_with("gex://")
     }
 
     /// The top-level places to browse.
     pub fn roots(&self) -> Vec<Entry> {
-        let mut r = vec![Entry { name: "res://".into(), path: "res://".into(), is_dir: true }];
+        let mut r = vec![
+            Entry { name: "res://".into(), path: "res://".into(), is_dir: true },
+            // The built-in placeholder pack.
+            Entry { name: "gex:// (built-in)".into(), path: "gex://".into(), is_dir: true },
+        ];
         for m in &self.mounts {
             r.push(Entry { name: format!("{}://", m.scheme), path: format!("{}://", m.scheme), is_dir: true });
         }
@@ -120,6 +127,14 @@ impl Vfs {
         };
         if scheme == "res" {
             return from_fs(&self.project_dir);
+        }
+        if scheme == "gex" {
+            let (folders, files) = crate::builtin::list(rel);
+            return folders
+                .into_iter()
+                .map(|n| Entry { path: base(&n), name: n, is_dir: true })
+                .chain(files.into_iter().map(|n| Entry { path: base(&n), name: n, is_dir: false }))
+                .collect();
         }
         let Some(m) = self.mounts.iter().find(|m| m.scheme == scheme) else { return Vec::new() };
         match &m.imp {

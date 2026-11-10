@@ -690,6 +690,39 @@ pub fn list_files(st: &EditorState, dir: &str, ext: &str) -> Vec<String> {
 
 // ---------------------------------------------------------------- assets
 
+/// Right-click menu for a file or folder in the Assets panel.
+fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::vfs::Entry, in_project: bool) {
+    if st.playing.is_some() {
+        return;
+    }
+    if in_project {
+        r.context_menu(|ui| {
+            if ui.button("Rename…").clicked() {
+                set_dialog(ui.ctx(), AssetDialog::Rename(e.path.clone(), e.name.clone()));
+                ui.close();
+            }
+            if ui.button("Show in file manager").clicked() {
+                if let Some(p) = st.project.res_to_path(&e.path) {
+                    crate::files::reveal(&p);
+                }
+                ui.close();
+            }
+            ui.separator();
+            if ui.button(RichText::new("Delete").color(theme::BAD)).on_hover_text("moves it to the project's hidden .trash folder").clicked() {
+                set_dialog(ui.ctx(), AssetDialog::Delete(e.path.clone()));
+                ui.close();
+            }
+        });
+    } else if e.path.starts_with("gex://") && !e.is_dir {
+        r.context_menu(|ui| {
+            if ui.button("Copy into project").on_hover_text("makes a copy in res://assets/placeholders you can change").clicked() {
+                st.copy_builtin(&e.path);
+                ui.close();
+            }
+        });
+    }
+}
+
 pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::collections::HashMap<String, egui::TextureHandle>) {
     ui.horizontal_wrapped(|ui| {
         for r in st.vfs.roots() {
@@ -730,7 +763,15 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             if entries.is_empty() {
                 ui.label(RichText::new("empty").color(theme::TEXT_DIM));
             }
-            for e in entries.iter().take(3000) {
+            let images: Vec<&gex_assets::vfs::Entry> = entries.iter().filter(|e| !e.is_dir && gex_assets::image_load::is_image(&e.name)).collect();
+            // Folders full of pictures show as a grid of thumbnails (the toggle switches back).
+            let grid = st.asset_grid && images.len() >= 4;
+            if images.len() >= 4 {
+                ui.horizontal(|ui| {
+                    ui.toggle_value(&mut st.asset_grid, "▦ thumbnails").on_hover_text("show pictures as a grid");
+                });
+            }
+            for e in entries.iter().filter(|e| !grid || e.is_dir || !gex_assets::image_load::is_image(&e.name)).take(3000) {
                 let icon = if e.is_dir {
                     "📁"
                 } else if e.name.ends_with(".jscene") {
@@ -754,25 +795,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 if r.clicked() {
                     st.asset_selected = Some(e.path.clone());
                 }
-                if in_project && st.playing.is_none() {
-                    r.context_menu(|ui| {
-                        if ui.button("Rename…").clicked() {
-                            set_dialog(ui.ctx(), AssetDialog::Rename(e.path.clone(), e.name.clone()));
-                            ui.close();
-                        }
-                        if ui.button("Show in file manager").clicked() {
-                            if let Some(p) = st.project.res_to_path(&e.path) {
-                                crate::files::reveal(&p);
-                            }
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button(RichText::new("Delete").color(theme::BAD)).on_hover_text("moves it to the project's hidden .trash folder").clicked() {
-                            set_dialog(ui.ctx(), AssetDialog::Delete(e.path.clone()));
-                            ui.close();
-                        }
-                    });
-                }
+                asset_context_menu(&r, st, e, in_project);
                 if r.double_clicked() {
                     if e.is_dir {
                         st.asset_dir = e.path.clone();
@@ -787,6 +810,48 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                     }
                 }
             }
+            if grid {
+                let cell = 72.0;
+                let per_row = ((list_w / (cell + 6.0)).floor() as usize).max(1);
+                for row in images.chunks(per_row) {
+                    ui.horizontal(|ui| {
+                        for e in row {
+                            let tex = ctx_textures.entry(format!("thumb {}", e.path)).or_insert_with(|| {
+                                let img = gex_assets::load_image(&st.vfs, &e.path).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
+                                let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
+                                ui.ctx().load_texture(format!("thumb {}", e.path), ci, egui::TextureOptions::LINEAR)
+                            });
+                            let size = tex.size_vec2();
+                            let k = (cell / size.x).min(cell / size.y);
+                            let sel = st.asset_selected.as_deref() == Some(&e.path);
+                            let (rect, r) = ui.allocate_exact_size(egui::vec2(cell, cell), egui::Sense::click_and_drag());
+                            let p = ui.painter_at(rect);
+                            // A checkerboard behind, so dark, white and see-through pictures all show up.
+                            p.rect_filled(rect, 4.0, Color32::from_gray(if sel { 92 } else { 58 }));
+                            let sq = cell / 6.0;
+                            for cy in 0..6 {
+                                for cx in 0..6 {
+                                    if (cx + cy) % 2 == 0 {
+                                        let m = rect.min + egui::vec2(cx as f32 * sq, cy as f32 * sq);
+                                        p.rect_filled(egui::Rect::from_min_size(m, egui::vec2(sq, sq)), 0.0, Color32::from_gray(if sel { 110 } else { 76 }));
+                                    }
+                                }
+                            }
+                            let img_rect = egui::Rect::from_center_size(rect.center(), size * k * 0.9);
+                            p.image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                            if sel {
+                                p.rect_stroke(rect, 4.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
+                            }
+                            r.dnd_set_drag_payload(AssetPath(e.path.clone()));
+                            let r = r.on_hover_text(&e.name);
+                            if r.clicked() {
+                                st.asset_selected = Some(e.path.clone());
+                            }
+                            asset_context_menu(&r, st, e, in_project);
+                        }
+                    });
+                }
+            }
             if entries.len() > 3000 {
                 ui.label(format!("… and {} more", entries.len() - 3000));
             }
@@ -795,7 +860,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
         egui::ScrollArea::vertical().id_salt("asset preview").auto_shrink([true, false]).show(ui, |ui| ui.vertical(|ui| {
             ui.set_width(preview_w);
             let Some(sel) = st.asset_selected.clone() else {
-                ui.label(RichText::new("Select a file to preview it. Drag files onto the scene or onto texture fields.").color(theme::TEXT_DIM).small());
+                ui.label(RichText::new("Select a file to preview it. Drag files onto the scene or onto texture fields. gex:// has ready-made placeholder art: shapes, patterns, icons, UI and more.").color(theme::TEXT_DIM).small());
                 return;
             };
             ui.label(RichText::new(sel.rsplit('/').next().unwrap_or("")).strong());
@@ -811,7 +876,9 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 ui.label(RichText::new(format!("{}×{}", size.x, size.y)).small().color(theme::TEXT_DIM));
                 if let Some(id) = st.selected.filter(|_| st.playing.is_none()) {
                     let kind = st.tree.nodes.get(id).map(|n| n.kind);
-                    if matches!(kind, Some(NodeKind::Sprite2D) | Some(NodeKind::Mesh3D)) && ui.button("Use on selected").clicked() {
+                    let has_texture = st.tree.nodes.get(id).is_some_and(|n| n.props.contains_key("texture"));
+                    let _ = kind;
+                    if has_texture && ui.button("Use on selected").on_hover_text("set the selected node's texture to this").clicked() {
                         st.will_change("texture");
                         st.tree.nodes[id].props.insert("texture".into(), Variant::Res(sel.clone()));
                     }

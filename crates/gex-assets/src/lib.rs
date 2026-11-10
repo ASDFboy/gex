@@ -5,6 +5,7 @@
 //! local Half-Life 2 install. Mounted files are always read in place: nothing here
 //! copies them, and `Vfs::redistributable` lets export tools leave them out.
 
+pub mod builtin;
 pub mod image_load;
 pub mod model;
 pub mod source;
