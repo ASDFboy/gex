@@ -24,6 +24,7 @@ mod tools;
 mod ui_layer;
 mod vim;
 mod viewport;
+mod workspace;
 
 use std::path::PathBuf;
 

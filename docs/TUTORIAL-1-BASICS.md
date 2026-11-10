@@ -14,17 +14,16 @@ menu that ties them together). Every script in it is commented.
 2. Under **NEW PROJECT**, type a name and a folder, then **Create empty project**.
 3. The editor opens on `scenes/main.jscene`, which holds one node: `Main` (a Node2D).
 
-The editor's panels:
+The editor works like GameMaker's. Along the top are tabs:
 
-| Panel | What it's for |
+| Tab | What it's for |
 |---|---|
-| Hierarchy (left) | the scene's node tree. Drag to re-parent; right-click for more |
-| Scene view (middle) | see and move things. 2D / 3D switch at the top left; W / E / R pick move / rotate / scale |
-| Inspector (right) | the selected node's position and properties |
-| Events (right, second tab) | the scripts on the selected node and the events they handle |
-| Console / Assets (bottom) | messages and errors; your project's files |
+| Workspace | a canvas of windows. Right-click a scene in Assets → **Open as a window** (or drag it onto the canvas) to see its nodes and properties, like an object. **⚡ Events** opens its events beside it; click an event to open the script beside that. Drag the background to look around; **+** adds another workspace |
+| A scene (`main`) | the scene itself, like a room: **Instances** (the node tree; drag to re-parent, right-click for more) and the selected **Instance**'s properties on the left, the view in the middle (2D / 3D at the top left; W / E / R pick move / rotate / scale). Drag a scene from Assets into the view to place an instance of it |
 
-Every panel can be dragged somewhere else. **View → Reset layout** puts them back.
+Assets (your project's files) are on the right and the Console (messages and errors) along the
+bottom; **View** hides either. Prefer panels docked around one view? **View → Classic docked
+layout** switches (and back).
 
 ## 2. Nodes: make a player
 

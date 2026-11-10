@@ -1,6 +1,6 @@
 # GEX
 
-A 2D and 3D game engine with a docked editor, Godot-style scenes, and game logic written in
+A 2D and 3D game engine with a GameMaker-style editor (workspaces and scene tabs), Godot-style scenes, and game logic written in
 [.jlb](https://github.com/ASDFboy/jlb-rust), using GameMaker-style events.
 
 By ASDFboy and Claude.
@@ -51,7 +51,9 @@ and start it again.
   `on_pressed_<button>`, custom `on_<event>` via `SEND`/`EMIT`, and condition events:
   `when_x()` turning TRUE runs `on_x()`). Save data between runs with `SAVE_DATA`.
   See [docs/SCRIPTING.md](docs/SCRIPTING.md).
-- **The editor:** dockable panels (hierarchy, inspector, events, assets, console), scene tabs,
+- **The editor:** GameMaker-style workspaces (a scene's window linked to its events, linked to its
+  scripts, on a canvas you drag around) and a tab per scene for placing and editing instances, or
+  the classic docked panels (View → Classic docked layout); a Monokai Black look,
   2D/3D view with move / rotate / scale tools and box select, undo/redo, copy/paste, a Neovim-style
   `:` command line, optional Vim keys in the script editor, completion, go to definition,
   find/replace, find in files, breakpoints (with conditions and watches) and a debugger, a

@@ -119,6 +119,8 @@ pub struct EditorState {
     pub scripts: HashMap<String, Script>,
     /// Scripts the dock should open as tabs.
     pub open_requests: Vec<String>,
+    /// Scenes to open as windows in the workspace.
+    pub open_windows: Vec<String>,
     pub playing: Option<Playing>,
     pub renderer: Option<Renderer>,
     pub mode_3d: bool,
@@ -188,6 +190,7 @@ impl EditorState {
             logs: Vec::new(),
             scripts: HashMap::new(),
             open_requests: Vec::new(),
+            open_windows: Vec::new(),
             playing: None,
             renderer: None,
             mode_3d: false,
@@ -309,6 +312,73 @@ impl EditorState {
         let cur = self.take_doc();
         self.docs.insert(i, cur);
         self.put_doc(d);
+    }
+
+    /// Runs `f` with another open scene as the one being edited, then puts things back (the
+    /// workspace's windows edit scenes this way). Loads the scene if it isn't open. Not while
+    /// playing.
+    pub fn with_scene<R>(&mut self, res: &str, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+        if self.scene_res.as_deref() == Some(res) {
+            return Some(f(self));
+        }
+        if self.playing.is_some() {
+            return None;
+        }
+        let i = match self.docs.iter().position(|d| d.scene_res.as_deref() == Some(res)) {
+            Some(i) => i,
+            None => {
+                let text = self.project.read_text(res).ok()?;
+                let tree = scene::load(&text, &self.reader()).ok()?;
+                let saved = scene::save(&tree, &self.reader()).unwrap_or_default();
+                let mode_3d = tree.walk().iter().any(|id| tree.nodes[*id].kind.is_3d());
+                let selected = tree.root;
+                self.docs.push(SceneDoc { tree, scene_res: Some(res.to_string()), scene_saved: saved, selected, undo: Vec::new(), redo: Vec::new(), mode_3d, cam2: Default::default(), cam3: Default::default() });
+                self.docs.len() - 1
+            }
+        };
+        let other = self.docs.remove(i);
+        let (sel, cam_fitted) = (self.selection.clone(), self.cam_fitted);
+        let cur = self.swap_out();
+        self.put_doc(other);
+        let r = f(self);
+        let back = self.swap_out();
+        self.put_doc(cur);
+        self.selection = sel;
+        self.cam_fitted = cam_fitted;
+        self.docs.insert(i, back);
+        Some(r)
+    }
+
+    /// The scene being edited, taken out (without the side effects of switching tabs).
+    fn swap_out(&mut self) -> SceneDoc {
+        SceneDoc {
+            tree: std::mem::take(&mut self.tree),
+            scene_res: self.scene_res.take(),
+            scene_saved: std::mem::take(&mut self.scene_saved),
+            selected: self.selected.take(),
+            undo: std::mem::take(&mut self.undo),
+            redo: std::mem::take(&mut self.redo),
+            mode_3d: self.mode_3d,
+            cam2: self.cam2,
+            cam3: self.cam3,
+        }
+    }
+
+    /// Whether an open scene has unsaved changes.
+    pub fn is_dirty(&self, res: &str) -> bool {
+        if self.scene_res.as_deref() == Some(res) {
+            return self.scene_dirty();
+        }
+        self.docs.iter().find(|d| d.scene_res.as_deref() == Some(res)).is_some_and(|d| scene::save(&d.tree, &self.reader()).map(|t| t != d.scene_saved).unwrap_or(false))
+    }
+
+    /// Closes one open scene by path (unsaved changes are lost).
+    pub fn close_scene_res(&mut self, res: &str) {
+        if self.scene_res.as_deref() == Some(res) {
+            self.close_scene();
+        } else {
+            self.docs.retain(|d| d.scene_res.as_deref() != Some(res));
+        }
     }
 
     /// Closes the scene being edited (unsaved changes are lost), switching to another.

@@ -193,6 +193,15 @@ pub struct EditorApp {
     pads: crate::gamepad::Pads,
     /// The window holds and hides the mouse for the game right now.
     cursor_locked: bool,
+    /// The GameMaker-style layout (workspaces and scene tabs) of the open project.
+    ws: crate::workspace::Layout,
+    /// Use the older docked layout instead.
+    classic: bool,
+    ws_saved_at: std::time::Instant,
+}
+
+fn classic_file() -> PathBuf {
+    state::config_dir().join("classic_layout")
 }
 
 /// Hides the mouse and holds it in the window (or gives it back).
@@ -257,6 +266,9 @@ impl EditorApp {
             settings: SettingsForm::default(),
             pads: crate::gamepad::Pads::new(),
             cursor_locked: false,
+            ws: Default::default(),
+            classic: classic_file().exists(),
+            ws_saved_at: std::time::Instant::now(),
         };
         if let Some(p) = project {
             app.open_project(&p);
@@ -268,7 +280,16 @@ impl EditorApp {
         match Project::open(dir) {
             Ok(p) => {
                 state::remember_project(&p.dir);
-                self.st = Some(EditorState::new(p));
+                self.ws = crate::workspace::Layout::load(&p.dir);
+                let st = EditorState::new(p);
+                // The scene opened at start doesn't take over the tab that was showing.
+                if !self.ws.tabs.iter().any(|t| matches!(t, crate::workspace::TopTab::Scene(r) if Some(r) == st.scene_res.as_ref())) {
+                    if let Some(r) = &st.scene_res {
+                        self.ws.tabs.push(crate::workspace::TopTab::Scene(r.clone()));
+                    }
+                }
+                self.ws.last_scene = st.scene_res.clone();
+                self.st = Some(st);
                 self.dock = saved_dock().unwrap_or_else(default_dock);
                 self.viewport_tex = None;
                 self.previews.clear();
@@ -450,14 +471,40 @@ impl EditorApp {
             });
             ui.menu_button("Node", |ui| panels::add_node_menu(ui, st));
             ui.menu_button("View", |ui| {
-                for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler, Tab::Search] {
-                    if ui.button(format!("{:?}", t)).clicked() {
-                        show_tab(&mut self.dock, t);
+                if self.classic {
+                    for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler, Tab::Search] {
+                        if ui.button(format!("{:?}", t)).clicked() {
+                            show_tab(&mut self.dock, t);
+                            ui.close();
+                        }
+                    }
+                    if ui.button("Reset layout").clicked() {
+                        self.dock = default_dock();
                         ui.close();
                     }
+                } else {
+                    ui.checkbox(&mut self.ws.show_assets, "Assets panel");
+                    ui.checkbox(&mut self.ws.show_console, "Console panel");
+                    for t in ["Timeline", "Profiler", "Find in files"] {
+                        if ui.button(t).clicked() {
+                            self.ws.open_tool(t);
+                            ui.close();
+                        }
+                    }
                 }
-                if ui.button("Reset layout").clicked() {
-                    self.dock = default_dock();
+                ui.separator();
+                let mut classic = self.classic;
+                if ui.checkbox(&mut classic, "Classic docked layout").on_hover_text("panels docked around one scene view, instead of workspaces and scene tabs").changed() {
+                    self.classic = classic;
+                    if classic {
+                        let _ = std::fs::create_dir_all(state::config_dir());
+                        let _ = std::fs::write(classic_file(), "on");
+                    } else {
+                        let _ = std::fs::remove_file(classic_file());
+                    }
+                    // Scripts already open show in the layout switched to.
+                    let open: Vec<String> = st.scripts.keys().cloned().collect();
+                    st.open_requests.extend(open);
                     ui.close();
                 }
             });
@@ -542,11 +589,19 @@ impl EditorApp {
             st.save_all();
         }
         if find_in_files {
-            show_tab(&mut self.dock, Tab::Search);
+            if self.classic {
+                show_tab(&mut self.dock, Tab::Search);
+            } else {
+                self.ws.open_tool("Find in files");
+            }
             st.search.focus = true;
         }
         if std::mem::take(&mut st.open_timeline) {
-            show_tab(&mut self.dock, Tab::Timeline);
+            if self.classic {
+                show_tab(&mut self.dock, Tab::Timeline);
+            } else {
+                self.ws.open_tool("Timeline");
+            }
         }
         if typing {
             return;
@@ -1083,8 +1138,9 @@ impl eframe::App for EditorApp {
                     }
                 }
             }
-            // Script tabs to open / close.
-            for r in std::mem::take(&mut st.open_requests) {
+            // Script tabs to open / close (the workspace layout opens its own windows).
+            let requests = if self.classic { std::mem::take(&mut st.open_requests) } else { Vec::new() };
+            for r in requests {
                 let t = Tab::Script(r);
                 match self.dock.find_tab(&t) {
                     Some(p) => {
@@ -1111,6 +1167,17 @@ impl eframe::App for EditorApp {
         self.settings_window(&ctx);
         self.export_window(&ctx);
         let rs = frame.wgpu_render_state();
+        if !self.classic {
+            let st = self.st.as_mut().unwrap();
+            egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(4.0)).show(ui, |ui| {
+                crate::workspace::show(ui, &mut self.ws, st, rs, &mut self.viewport_tex, &mut self.previews);
+            });
+            if self.ws_saved_at.elapsed().as_secs_f32() > 2.0 {
+                self.ws.save(&st.project.dir);
+                self.ws_saved_at = std::time::Instant::now();
+            }
+            return;
+        }
         let st = self.st.as_mut().unwrap();
         let mut viewer = Viewer { st, rs, viewport_tex: &mut self.viewport_tex, previews: &mut self.previews, closed: Vec::new() };
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
@@ -1150,6 +1217,7 @@ impl eframe::App for EditorApp {
     fn on_exit(&mut self) {
         save_dock(&self.dock);
         if let Some(st) = &mut self.st {
+            self.ws.save(&st.project.dir);
             st.stop();
         }
     }

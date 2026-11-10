@@ -744,6 +744,10 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
     }
     if in_project {
         r.context_menu(|ui| {
+            if e.name.ends_with(".jscene") && ui.button("Open as a window").on_hover_text("in the workspace: its nodes, properties and events (like an object)").clicked() {
+                st.open_windows.push(e.path.clone());
+                ui.close();
+            }
             if ui.button("Rename…").clicked() {
                 set_dialog(ui.ctx(), AssetDialog::Rename(e.path.clone(), e.name.clone()));
                 ui.close();
