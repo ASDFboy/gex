@@ -66,6 +66,10 @@ impl TabViewer for Viewer<'_> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        // A faint sheen at the top of each panel, like light on glass.
+        let r = ui.max_rect();
+        let sheen = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), r.height().min(140.0)));
+        ui.painter().add(theme::vgradient(sheen, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 7), egui::Color32::TRANSPARENT));
         match tab {
             Tab::Scene => {
                 scene_tabs(ui, self.st);
@@ -275,7 +279,7 @@ impl EditorApp {
     }
 
     fn launcher(&mut self, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG).inner_margin(32.0)).show(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(32.0)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("GEX").size(30.0).strong().color(theme::ACCENT));
                 ui.label(RichText::new("2D & 3D · scenes all the way down · scripted in .jlb").color(theme::TEXT_DIM));
@@ -292,7 +296,7 @@ impl EditorApp {
                 let mut open = None;
                 for p in recent {
                     let name = Project::open(&p).map(|x| x.config.name).unwrap_or_default();
-                    egui::Frame::new().fill(theme::PANEL).corner_radius(4.0).inner_margin(10.0).show(ui, |ui| {
+                    egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).corner_radius(4.0).inner_margin(10.0).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -328,7 +332,7 @@ impl EditorApp {
                     ui.end_row();
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Create empty project").clicked() {
+                    if theme::gradient_button(ui, "Create empty project", egui::Color32::from_rgb(0x47, 0xbf, 0xff), egui::Color32::from_rgb(0x1a, 0x44, 0xc2)).clicked() {
                         let dir = PathBuf::from(&self.new_path);
                         match templates::create_project(&dir, &self.new_name) {
                             Ok(p) => self.open_project(&p.dir),
@@ -365,7 +369,8 @@ impl EditorApp {
     fn menu(&mut self, ui: &mut egui::Ui) {
         let Some(st) = &mut self.st else { return };
         let mut close = false;
-        egui::MenuBar::new().ui(ui, |ui| {
+        let bar_bg = ui.painter().add(egui::Shape::Noop);
+        let bar = egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button("Save  (Ctrl+S)").clicked() {
                     st.save_all();
@@ -460,16 +465,18 @@ impl EditorApp {
             ui.add_space(24.0);
             let playing = st.playing.is_some();
             if !playing {
-                if ui.add(egui::Button::new(RichText::new("▶ Play").strong().color(theme::GOOD))).on_hover_text("F5: run this scene").clicked() {
+                if theme::gradient_button(ui, "▶  PLAY", egui::Color32::from_rgb(0x75, 0xb0, 0x22), egui::Color32::from_rgb(0x4e, 0x84, 0x14)).on_hover_text("F5: run this scene").clicked() {
                     st.play();
                 }
-            } else if ui.add(egui::Button::new(RichText::new("■ Stop").strong().color(theme::BAD))).on_hover_text("Shift+F5").clicked() {
+            } else if theme::gradient_button(ui, "■  STOP", egui::Color32::from_rgb(0xd0, 0x55, 0x48), egui::Color32::from_rgb(0x96, 0x2e, 0x26)).on_hover_text("Shift+F5").clicked() {
                 st.stop();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
             });
         });
+        let full = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), bar.response.rect.y_range()).expand2(egui::vec2(8.0, 2.0));
+        ui.painter().set(bar_bg, theme::header(full, false));
         if close {
             self.st = None;
         }
@@ -583,7 +590,8 @@ impl EditorApp {
     /// The Neovim-style command line (press `:`).
     fn command_line(&mut self, ui: &mut egui::Ui) {
         let Some(st) = &mut self.st else { return };
-        egui::Panel::bottom("status").show(ui, |ui| {
+        let status_bg = ui.painter().add(egui::Shape::Noop);
+        let status = egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if let Some(cmd) = &mut self.cmd {
                     ui.label(RichText::new(":").monospace().color(theme::ACCENT));
@@ -619,6 +627,7 @@ impl EditorApp {
                 }
             });
         });
+        ui.painter().set(status_bg, theme::header(status.response.rect, true));
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -982,6 +991,7 @@ impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         crate::startup::mark_running();
         let ctx = ui.ctx().clone();
+        theme::backdrop(&ctx);
         if self.st.is_none() {
             self.launcher(ui);
             return;
@@ -1055,9 +1065,31 @@ impl eframe::App for EditorApp {
         let rs = frame.wgpu_render_state();
         let st = self.st.as_mut().unwrap();
         let mut viewer = Viewer { st, rs, viewport_tex: &mut self.viewport_tex, previews: &mut self.previews, closed: Vec::new() };
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG)).show(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let mut style = Style::from_egui(ui.style().as_ref());
-            style.tab_bar.bg_fill = theme::BG_DEEP;
+            // Glass panels: see-through bodies with a faint light edge; tab strips a shade darker.
+            style.tab_bar.bg_fill = theme::alpha(egui::Color32::from_rgb(0x0e, 0x13, 0x1a), 170);
+            style.tab_bar.hline_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 16);
+            style.tab.tab_body.bg_fill = theme::glass_fill();
+            style.tab.tab_body.stroke = theme::glass_edge();
+            style.tab.tab_body.corner_radius = egui::CornerRadius::same(4);
+            for t in [&mut style.tab.active, &mut style.tab.focused, &mut style.tab.active_with_kb_focus, &mut style.tab.focused_with_kb_focus] {
+                t.bg_fill = theme::glass_fill();
+                t.outline_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22);
+                t.text_color = theme::TEXT;
+            }
+            style.tab.focused.text_color = theme::ACCENT;
+            for t in [&mut style.tab.inactive, &mut style.tab.inactive_with_kb_focus] {
+                t.bg_fill = egui::Color32::TRANSPARENT;
+                t.outline_color = egui::Color32::TRANSPARENT;
+                t.text_color = theme::TEXT_DIM;
+            }
+            style.tab.hovered.bg_fill = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10);
+            style.tab.hovered.text_color = theme::TEXT;
+            style.separator.color_idle = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 0);
+            style.separator.color_hovered = theme::alpha(theme::ACCENT, 140);
+            style.separator.color_dragged = theme::ACCENT;
+            style.main_surface_border_stroke = egui::Stroke::NONE;
             DockArea::new(&mut self.dock).style(style).show_inside(ui, &mut viewer);
         });
         for r in viewer.closed {
