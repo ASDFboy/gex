@@ -126,10 +126,14 @@ pub fn draw(tree: &SceneTree, emitters: &HashMap<NodeId, Emitter>, list: &mut Re
         let (s0, s1) = (n.num("size", 8.0) as f32, n.num("size_end", 2.0) as f32);
         let (c0, c1) = (n.color("color"), n.color("color_end"));
         let layer = n.num("layer", 1.0) as f32;
+        let tint = gex_core::render::tinted(tree, *id, [1.0; 4]);
+        let blend = gex_core::render::Blend::from_name(n.text("blend"));
+        let pixel = gex_core::render::filter_of(n);
+        let lit = n.prop("lit").is_none_or(|v| v.as_bool());
         for p in &e.parts {
             let t = (p.age / p.life).clamp(0.0, 1.0);
             let size = s0 + (s1 - s0) * t;
-            let color = [0, 1, 2, 3].map(|i| c0[i] + (c1[i] - c0[i]) * t);
+            let color = [0, 1, 2, 3].map(|i| (c0[i] + (c1[i] - c0[i]) * t) * tint[i]);
             list.sprites.push(Sprite {
                 node: *id,
                 model: Mat4::from_rotation_translation(Quat::from_rotation_z(p.rot.to_radians()), Vec3::new(p.pos.x, p.pos.y, 0.0)),
@@ -142,6 +146,9 @@ pub fn draw(tree: &SceneTree, emitters: &HashMap<NodeId, Emitter>, list: &mut Re
                 flip: [false, false],
                 parallax: Vec2::ONE,
                 repeat: [false; 2],
+                blend,
+                pixel,
+                lit,
             });
         }
     }
@@ -235,10 +242,13 @@ pub fn draw_3d(tree: &SceneTree, emitters: &HashMap<NodeId, Emitter3>, list: &mu
         let (s0, s1) = (n.num("size", 0.3) as f32, n.num("size_end", 0.05) as f32);
         let (c0, c1) = (n.color("color"), n.color("color_end"));
         let glow = n.prop("glow").is_none_or(|v| v.as_bool());
+        let tint = gex_core::render::tinted(tree, *id, [1.0; 4]);
+        let pixel = gex_core::render::filter_of(n);
+        let fog = n.prop("fog").is_none_or(|v| v.as_bool());
         for p in &e.parts {
             let t = (p.age / p.life).clamp(0.0, 1.0);
             let size = s0 + (s1 - s0) * t;
-            let mut color = [0, 1, 2, 3].map(|i| c0[i] + (c1[i] - c0[i]) * t);
+            let mut color = [0, 1, 2, 3].map(|i| (c0[i] + (c1[i] - c0[i]) * t) * tint[i]);
             // Glowing particles never quite reach full alpha, so they draw blended.
             color[3] = color[3].min(0.998);
             list.meshes.push(gex_core::render::MeshDraw {
@@ -248,6 +258,8 @@ pub fn draw_3d(tree: &SceneTree, emitters: &HashMap<NodeId, Emitter3>, list: &mu
                 unlit: true,
                 billboard: true,
                 emissive: if glow { 1.0 } else { 0.0 },
+                pixel,
+                fog,
                 ..gex_core::render::MeshDraw::new(*id, Mat4::from_scale_rotation_translation(Vec3::splat(size), Quat::IDENTITY, p.pos), "quad")
             });
         }

@@ -1,25 +1,37 @@
-//! The editor's look: a dark, Steam-like slate palette with a blue accent, a soft gradient
-//! backdrop behind everything, and panels of very slightly see-through "glass" over it.
+//! The editor's look: Monokai Black colors (black, warm grays, Monokai's pink, green,
+//! orange, yellow, purple and cyan), a soft gradient backdrop behind everything, and panels
+//! of very slightly see-through "glass" over it.
 
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, Visuals};
 
-pub const BG_DEEP: Color32 = Color32::from_rgb(0x12, 0x15, 0x1b);
-pub const ACCENT: Color32 = Color32::from_rgb(0x66, 0xc0, 0xf4);
-pub const ACCENT_DIM: Color32 = Color32::from_rgb(0x1a, 0x9f, 0xff);
-pub const TEXT: Color32 = Color32::from_rgb(0xc7, 0xd5, 0xe0);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8f, 0x98, 0xa0);
-pub const GOOD: Color32 = Color32::from_rgb(0xa4, 0xd0, 0x07);
-pub const WARN: Color32 = Color32::from_rgb(0xe5, 0xb1, 0x3a);
-pub const BAD: Color32 = Color32::from_rgb(0xe0, 0x5a, 0x4f);
+// Monokai's colors.
+pub const MK_PINK: Color32 = Color32::from_rgb(0xf9, 0x26, 0x72);
+pub const MK_GREEN: Color32 = Color32::from_rgb(0xa6, 0xe2, 0x2e);
+pub const MK_ORANGE: Color32 = Color32::from_rgb(0xfd, 0x97, 0x1f);
+pub const MK_YELLOW: Color32 = Color32::from_rgb(0xe6, 0xdb, 0x74);
+pub const MK_PURPLE: Color32 = Color32::from_rgb(0xae, 0x81, 0xff);
+pub const MK_CYAN: Color32 = Color32::from_rgb(0x66, 0xd9, 0xef);
+/// Selection, and the current line.
+pub const MK_SELECTION: Color32 = Color32::from_rgb(0x49, 0x48, 0x3e);
+pub const MK_LINE: Color32 = Color32::from_rgb(0x3e, 0x3d, 0x32);
 
-// Code colors.
-pub const C_KEYWORD: Color32 = Color32::from_rgb(0x66, 0xc0, 0xf4);
-pub const C_BUILTIN: Color32 = Color32::from_rgb(0xe5, 0xc0, 0x7b);
-pub const C_ENGINE: Color32 = Color32::from_rgb(0xa4, 0xd0, 0x07);
-pub const C_EVENT: Color32 = Color32::from_rgb(0xff, 0x9e, 0x64);
-pub const C_STRING: Color32 = Color32::from_rgb(0x98, 0xc3, 0x79);
-pub const C_NUMBER: Color32 = Color32::from_rgb(0xd1, 0x9a, 0x66);
-pub const C_COMMENT: Color32 = Color32::from_rgb(0x5c, 0x6a, 0x7a);
+pub const BG_DEEP: Color32 = Color32::from_rgb(0x00, 0x00, 0x00);
+pub const ACCENT: Color32 = MK_CYAN;
+pub const ACCENT_DIM: Color32 = Color32::from_rgb(0x2b, 0x8a, 0x9c);
+pub const TEXT: Color32 = Color32::from_rgb(0xf8, 0xf8, 0xf2);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0x90, 0x90, 0x84);
+pub const GOOD: Color32 = MK_GREEN;
+pub const WARN: Color32 = MK_ORANGE;
+pub const BAD: Color32 = MK_PINK;
+
+// Code colors (as Monokai uses them).
+pub const C_KEYWORD: Color32 = MK_PINK;
+pub const C_BUILTIN: Color32 = MK_CYAN;
+pub const C_ENGINE: Color32 = MK_GREEN;
+pub const C_EVENT: Color32 = MK_ORANGE;
+pub const C_STRING: Color32 = MK_YELLOW;
+pub const C_NUMBER: Color32 = MK_PURPLE;
+pub const C_COMMENT: Color32 = Color32::from_rgb(0x75, 0x71, 0x5e);
 
 /// A color with a new alpha (0-255).
 pub fn alpha(c: Color32, a: u8) -> Color32 {
@@ -34,7 +46,7 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 
 /// The see-through fill of panels.
 pub fn glass_fill() -> Color32 {
-    alpha(Color32::from_rgb(0x16, 0x1d, 0x27), 188)
+    alpha(Color32::from_rgb(0x14, 0x14, 0x11), 196)
 }
 
 /// The faint light edge glass has.
@@ -70,19 +82,19 @@ pub fn glow(center: Pos2, radius: egui::Vec2, color: Color32) -> Shape {
     Shape::mesh(m)
 }
 
-/// The backdrop behind the whole window: a deep blue gradient with a couple of faint glows,
-/// like Steam's library. Call first each frame; panels drawn after it let it show through.
+/// The backdrop behind the whole window: black with a faint warm-gray gradient and a couple
+/// of very faint glows. Call first each frame; panels drawn after it let it show through.
 pub fn backdrop(ctx: &egui::Context) {
     let r = ctx.content_rect();
     let p = ctx.layer_painter(egui::LayerId::background());
-    p.add(vgradient(r, Color32::from_rgb(0x1d, 0x2a, 0x3b), Color32::from_rgb(0x0d, 0x11, 0x17)));
-    p.add(glow(r.left_top() + egui::vec2(r.width() * 0.18, r.height() * 0.05), egui::vec2(r.width() * 0.6, r.height() * 0.55), alpha(Color32::from_rgb(0x2f, 0x62, 0x8c), 150)));
-    p.add(glow(r.right_bottom() - egui::vec2(r.width() * 0.1, r.height() * 0.05), egui::vec2(r.width() * 0.5, r.height() * 0.45), alpha(Color32::from_rgb(0x1a, 0x5f, 0x9f), 80)));
+    p.add(vgradient(r, Color32::from_rgb(0x1b, 0x1b, 0x17), Color32::from_rgb(0x00, 0x00, 0x00)));
+    p.add(glow(r.left_top() + egui::vec2(r.width() * 0.18, r.height() * 0.05), egui::vec2(r.width() * 0.6, r.height() * 0.55), alpha(Color32::from_rgb(0x3e, 0x3d, 0x32), 150)));
+    p.add(glow(r.right_bottom() - egui::vec2(r.width() * 0.1, r.height() * 0.05), egui::vec2(r.width() * 0.5, r.height() * 0.45), alpha(MK_PURPLE, 18)));
 }
 
 /// A glass header strip (menu bar, status bar): a slight top-lit gradient and a hairline.
 pub fn header(rect: Rect, top_edge: bool) -> Shape {
-    let g = vgradient(rect, alpha(Color32::from_rgb(0x24, 0x31, 0x42), 235), alpha(Color32::from_rgb(0x15, 0x1b, 0x24), 235));
+    let g = vgradient(rect, alpha(Color32::from_rgb(0x22, 0x22, 0x1e), 240), alpha(Color32::from_rgb(0x0e, 0x0e, 0x0c), 240));
     let y = if top_edge { rect.top() + 0.5 } else { rect.bottom() - 0.5 };
     Shape::Vec(vec![g, Shape::line_segment([Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)], Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, if top_edge { 18 } else { 10 })))])
 }
@@ -103,7 +115,9 @@ pub fn gradient_button(ui: &mut egui::Ui, text: &str, top: Color32, bottom: Colo
         p.add(vgradient(rect, t, b));
         // Glass: a light line along the top edge.
         p.line_segment([rect.left_top() + egui::vec2(1.0, 0.5), rect.right_top() + egui::vec2(-1.0, 0.5)], Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 60)));
-        p.galley(rect.center() - galley.size() / 2.0, galley, Color32::WHITE);
+        // Dark text on light buttons, light text on dark ones.
+        let lum = 0.299 * top.r() as f32 + 0.587 * top.g() as f32 + 0.114 * top.b() as f32;
+        p.galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, if lum > 150.0 { Color32::from_rgb(0x10, 0x10, 0x0d) } else { Color32::WHITE });
     }
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -115,12 +129,12 @@ pub fn apply(ctx: &egui::Context) {
     let mut v = Visuals::dark();
     // See-through panels over the gradient backdrop.
     v.panel_fill = Color32::TRANSPARENT;
-    v.window_fill = alpha(Color32::from_rgb(0x1c, 0x26, 0x33), 242);
-    v.extreme_bg_color = alpha(Color32::from_rgb(0x0b, 0x0f, 0x14), 190);
+    v.window_fill = alpha(Color32::from_rgb(0x1a, 0x1a, 0x17), 245);
+    v.extreme_bg_color = alpha(Color32::from_rgb(0x00, 0x00, 0x00), 200);
     v.faint_bg_color = Color32::from_rgba_unmultiplied(255, 255, 255, 6);
     v.code_bg_color = alpha(BG_DEEP, 200);
     v.hyperlink_color = ACCENT;
-    v.selection.bg_fill = alpha(Color32::from_rgb(0x3d, 0x8b, 0xc7), 110);
+    v.selection.bg_fill = alpha(MK_SELECTION, 230);
     v.selection.stroke = Stroke::new(1.0, ACCENT);
     v.override_text_color = Some(TEXT);
     v.window_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 22));
@@ -132,16 +146,16 @@ pub fn apply(ctx: &egui::Context) {
     w.noninteractive.bg_fill = Color32::TRANSPARENT;
     w.noninteractive.weak_bg_fill = Color32::TRANSPARENT;
     w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 14));
-    // Buttons and fields: a hint of frosted white, brighter and bluer when hovered.
-    w.inactive.bg_fill = Color32::from_rgba_unmultiplied(0x3d, 0x55, 0x70, 150);
-    w.inactive.weak_bg_fill = Color32::from_rgba_unmultiplied(0x3d, 0x55, 0x70, 110);
+    // Buttons and fields: warm gray glass, lighter when hovered, with a cyan edge.
+    w.inactive.bg_fill = alpha(MK_LINE, 170);
+    w.inactive.weak_bg_fill = alpha(MK_LINE, 130);
     w.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 12));
-    w.hovered.bg_fill = Color32::from_rgba_unmultiplied(0x4b, 0x83, 0xb0, 170);
-    w.hovered.weak_bg_fill = Color32::from_rgba_unmultiplied(0x4b, 0x83, 0xb0, 150);
-    w.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(0x66, 0xc0, 0xf4, 90));
+    w.hovered.bg_fill = alpha(MK_SELECTION, 220);
+    w.hovered.weak_bg_fill = alpha(MK_SELECTION, 190);
+    w.hovered.bg_stroke = Stroke::new(1.0, alpha(MK_CYAN, 110));
     w.active.bg_fill = ACCENT_DIM;
     w.active.weak_bg_fill = ACCENT_DIM;
-    w.open.weak_bg_fill = Color32::from_rgba_unmultiplied(0x4b, 0x83, 0xb0, 150);
+    w.open.weak_bg_fill = alpha(MK_SELECTION, 190);
     for s in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
         s.corner_radius = CornerRadius::same(3);
     }

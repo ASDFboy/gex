@@ -332,7 +332,7 @@ impl EditorApp {
                     ui.end_row();
                 });
                 ui.horizontal(|ui| {
-                    if theme::gradient_button(ui, "Create empty project", egui::Color32::from_rgb(0x47, 0xbf, 0xff), egui::Color32::from_rgb(0x1a, 0x44, 0xc2)).clicked() {
+                    if theme::gradient_button(ui, "Create empty project", egui::Color32::from_rgb(0x7f, 0xe4, 0xf7), egui::Color32::from_rgb(0x2b, 0x8a, 0x9c)).clicked() {
                         let dir = PathBuf::from(&self.new_path);
                         match templates::create_project(&dir, &self.new_name) {
                             Ok(p) => self.open_project(&p.dir),
@@ -465,10 +465,10 @@ impl EditorApp {
             ui.add_space(24.0);
             let playing = st.playing.is_some();
             if !playing {
-                if theme::gradient_button(ui, "▶  PLAY", egui::Color32::from_rgb(0x75, 0xb0, 0x22), egui::Color32::from_rgb(0x4e, 0x84, 0x14)).on_hover_text("F5: run this scene").clicked() {
+                if theme::gradient_button(ui, "▶  PLAY", egui::Color32::from_rgb(0xa6, 0xe2, 0x2e), egui::Color32::from_rgb(0x5f, 0x8f, 0x12)).on_hover_text("F5: run this scene").clicked() {
                     st.play();
                 }
-            } else if theme::gradient_button(ui, "■  STOP", egui::Color32::from_rgb(0xd0, 0x55, 0x48), egui::Color32::from_rgb(0x96, 0x2e, 0x26)).on_hover_text("Shift+F5").clicked() {
+            } else if theme::gradient_button(ui, "■  STOP", egui::Color32::from_rgb(0xf9, 0x26, 0x72), egui::Color32::from_rgb(0x9e, 0x12, 0x45)).on_hover_text("Shift+F5").clicked() {
                 st.stop();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -643,8 +643,8 @@ impl EditorApp {
             f.main_scene = st.project.config.main_scene.clone();
             f.message.clear();
             f.window = st.project.config.window_size;
-            f.gravity_2d = st.project.config.gravity_2d[1];
-            f.gravity_3d = -st.project.config.gravity_3d[1];
+            f.gravity_2d = st.project.config.physics.gravity_2d[1];
+            f.gravity_3d = -st.project.config.physics.gravity_3d[1];
             f.actions = st.project.config.actions.iter().map(|(k, v)| (k.clone(), v.join(", "))).collect();
             f.fullscreen = st.project.config.fullscreen;
             f.resizable = st.project.config.resizable;
@@ -771,8 +771,8 @@ impl EditorApp {
                 st.project.config.resizable = f.resizable;
                 st.project.config.vsync = f.vsync;
                 st.project.config.icon = f.icon.trim().to_string();
-                st.project.config.gravity_2d = [0.0, f.gravity_2d];
-                st.project.config.gravity_3d = [0.0, -f.gravity_3d, 0.0];
+                st.project.config.physics.gravity_2d = [0.0, f.gravity_2d];
+                st.project.config.physics.gravity_3d = [0.0, -f.gravity_3d, 0.0];
                 st.project.config.actions = f
                     .actions
                     .iter()
@@ -1068,7 +1068,7 @@ impl eframe::App for EditorApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let mut style = Style::from_egui(ui.style().as_ref());
             // Glass panels: see-through bodies with a faint light edge; tab strips a shade darker.
-            style.tab_bar.bg_fill = theme::alpha(egui::Color32::from_rgb(0x0e, 0x13, 0x1a), 170);
+            style.tab_bar.bg_fill = theme::alpha(egui::Color32::BLACK, 170);
             style.tab_bar.hline_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 16);
             style.tab.tab_body.bg_fill = theme::glass_fill();
             style.tab.tab_body.stroke = theme::glass_edge();

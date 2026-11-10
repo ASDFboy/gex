@@ -103,7 +103,7 @@ impl Previews {
         let guard = slot.lock().unwrap();
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, width), egui::Sense::drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, Color32::from_rgb(0x10, 0x14, 0x1a));
+        painter.rect_filled(rect, 4.0, Color32::from_rgb(0x0c, 0x0c, 0x0a));
         match &*guard {
             None => {
                 painter.text(rect.center(), egui::Align2::CENTER_CENTER, "loading…", egui::FontId::proportional(12.0), theme::TEXT_DIM);

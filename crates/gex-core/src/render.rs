@@ -8,13 +8,76 @@ use crate::node::{NodeId, NodeKind};
 use crate::tree::SceneTree;
 
 /// Which part of a sprite's texture to show.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum Region {
+    #[default]
     Whole,
     /// A sprite sheet of `h` × `v` frames, showing one.
     Frame { h: u32, v: u32, frame: u32 },
     /// A tile of a tileset (tile sizes in texture pixels; ids count left to right, top down).
     Tile { w: f32, h: f32, id: u32 },
+}
+
+/// How a picture mixes with what's behind it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Blend {
+    /// Covers what's behind, by its opacity.
+    #[default]
+    Normal,
+    /// Adds light: glows, fire, lasers.
+    Add,
+    /// Darkens what's behind: shadows, stains, tinted glass.
+    Multiply,
+}
+
+impl Blend {
+    pub fn from_name(s: &str) -> Blend {
+        match s {
+            "add" | "additive" => Blend::Add,
+            "multiply" => Blend::Multiply,
+            _ => Blend::Normal,
+        }
+    }
+}
+
+/// A node's own texture filtering: None follows the project's setting.
+pub fn filter_of(n: &crate::Node) -> Option<bool> {
+    match n.text("filter") {
+        "pixel" => Some(true),
+        "smooth" => Some(false),
+        _ => None,
+    }
+}
+
+/// The color every node passes down to its children (`modulate`), multiplied up the tree.
+pub fn inherited_modulate(tree: &SceneTree, id: NodeId) -> [f32; 4] {
+    let mut c = [1.0f32; 4];
+    let mut cur = tree.nodes[id].parent;
+    while let Some(p) = cur {
+        let n = &tree.nodes[p];
+        if let Some(v) = n.props.get("modulate") {
+            let m = v.as_color();
+            for k in 0..4 {
+                c[k] *= m[k];
+            }
+        }
+        cur = n.parent;
+    }
+    c
+}
+
+/// A node's own color: its color times its opacity, its own modulate and its parents'.
+pub fn tinted(tree: &SceneTree, id: NodeId, color: [f32; 4]) -> [f32; 4] {
+    let n = &tree.nodes[id];
+    let mut m = inherited_modulate(tree, id);
+    if let Some(v) = n.props.get("modulate") {
+        let own = v.as_color();
+        for k in 0..4 {
+            m[k] *= own[k];
+        }
+    }
+    let o = n.num("opacity", 1.0).clamp(0.0, 1.0) as f32;
+    [color[0] * m[0], color[1] * m[1], color[2] * m[2], color[3] * m[3] * o]
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +96,32 @@ pub struct Sprite {
     pub parallax: Vec2,
     /// Repeats sideways / up and down to fill the view (for backgrounds).
     pub repeat: [bool; 2],
+    pub blend: Blend,
+    /// Pixel (true) or smooth (false) filtering; None = the project's sprite filter.
+    pub pixel: Option<bool>,
+    /// Darkened by 2D lighting (false: drawn after it, at full brightness).
+    pub lit: bool,
+}
+
+impl Default for Sprite {
+    fn default() -> Self {
+        Sprite {
+            node: NodeId::default(),
+            model: Mat4::IDENTITY,
+            size: Vec2::ONE,
+            centered: false,
+            color: [1.0; 4],
+            texture: String::new(),
+            layer: 0.0,
+            region: Region::Whole,
+            flip: [false; 2],
+            parallax: Vec2::ONE,
+            repeat: [false; 2],
+            blend: Blend::Normal,
+            pixel: None,
+            lit: true,
+        }
+    }
 }
 
 /// A Light2D: brightens the dark set by a Camera2D's `ambient`.
@@ -116,6 +205,27 @@ pub struct MeshDraw {
     pub shader: String,
     /// Joint matrices set from outside (a ragdoll), instead of an animation.
     pub pose: Option<std::sync::Arc<Vec<Mat4>>>,
+    pub blend_mode: Blend,
+    /// Pixel (true) or smooth (false) texture filtering; None = the project's.
+    pub pixel: Option<bool>,
+    pub receive_shadows: bool,
+    /// Fog from the Environment applies to it.
+    pub fog: bool,
+    /// Which sides draw: None = automatic, Some(true) = both, Some(false) = front only.
+    pub two_sided: Option<bool>,
+    /// Drawn over everything else (ignores depth).
+    pub on_top: bool,
+    /// Texels less opaque than this are holes (solid surfaces only).
+    pub alpha_cut: f32,
+    pub emissive_color: [f32; 3],
+    /// Light around the edges as seen from the camera, and its color.
+    pub rim: f32,
+    pub rim_color: [f32; 3],
+    /// Texture scrolling, in repeats per second.
+    pub uv_offset: [f32; 2],
+    pub uv_scroll: [f32; 2],
+    /// Not drawn further than this from the camera (0 = always drawn).
+    pub draw_distance: f32,
 }
 
 impl MeshDraw {
@@ -140,6 +250,19 @@ impl MeshDraw {
             billboard: false,
             shader: String::new(),
             pose: None,
+            blend_mode: Blend::Normal,
+            pixel: None,
+            receive_shadows: true,
+            fog: true,
+            two_sided: None,
+            on_top: false,
+            alpha_cut: 0.5,
+            emissive_color: [1.0; 3],
+            rim: 0.0,
+            rim_color: [1.0; 3],
+            uv_offset: [0.0; 2],
+            uv_scroll: [0.0; 2],
+            draw_distance: 0.0,
         }
     }
 }
@@ -173,6 +296,16 @@ pub struct LightDraw {
     /// Spot lights: half the cone, in degrees.
     pub angle: f32,
     pub shadows: bool,
+    /// Spot lights: how soft the cone's edge is (0 hard, 1 very soft).
+    pub softness: f32,
+    /// How quickly point and spot lights fade with distance (2 = natural).
+    pub falloff: f32,
+    /// Strength of the shiny highlights it makes.
+    pub specular: f32,
+    /// How dark its shadows are (0 none, 1 full).
+    pub shadow_strength: f32,
+    /// Its own shadow bias, or below 0 for the project's.
+    pub shadow_bias: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -190,6 +323,19 @@ pub struct Environment3D {
     /// Glow around bright things: strength (0 = off), and how bright counts.
     pub bloom: f32,
     pub bloom_threshold: f32,
+    /// Sky brightness.
+    pub sky_energy: f32,
+    /// Fog: "linear" (start to end) or "exp" (thickening by density).
+    pub fog_exp: bool,
+    pub fog_density: f32,
+    /// Part of the shadow distance the sharp near cascade covers.
+    pub shadow_split: f32,
+    /// Color settings on top of the project's (multiplied, tint multiplied, vignette added).
+    pub exposure: f32,
+    pub contrast: f32,
+    pub saturation: f32,
+    pub tint: [f32; 4],
+    pub vignette: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -206,6 +352,8 @@ pub struct Camera3D {
     pub fov_deg: f32,
     pub near: f32,
     pub far: f32,
+    /// Orthographic (no perspective): the view's height in metres.
+    pub ortho: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -241,11 +389,34 @@ pub struct RenderList {
     /// What the game wants the window to be (FULLSCREEN, WINDOW_TITLE); None = as it is.
     pub fullscreen: Option<bool>,
     pub window_title: Option<String>,
+    /// The project's graphics settings (scripts can change them while playing).
+    pub graphics: crate::settings::Graphics,
 }
 
 impl RenderList {
     pub fn has_3d(&self) -> bool {
         !self.meshes.is_empty() || self.camera3d.is_some()
+    }
+}
+
+fn rgb(c: [f32; 4]) -> [f32; 3] {
+    [c[0], c[1], c[2]]
+}
+
+/// The look settings every 3D drawable shares.
+fn mesh_look(n: &crate::Node, base: MeshDraw) -> MeshDraw {
+    let b = |k: &str, d: bool| n.prop(k).map_or(d, |v| v.as_bool());
+    MeshDraw {
+        blend_mode: Blend::from_name(n.text("blend")),
+        pixel: filter_of(n),
+        receive_shadows: b("receive_shadows", true),
+        fog: b("fog", true),
+        on_top: b("on_top", false),
+        alpha_cut: n.num("alpha_cut", 0.5).clamp(0.0, 1.0) as f32,
+        uv_offset: [n.num("uv_offset_x", 0.0) as f32, n.num("uv_offset_y", 0.0) as f32],
+        uv_scroll: [n.num("uv_scroll_x", 0.0) as f32, n.num("uv_scroll_y", 0.0) as f32],
+        draw_distance: n.num("draw_distance", 0.0).max(0.0) as f32,
+        ..base
     }
 }
 
@@ -257,13 +428,19 @@ pub fn extract(tree: &SceneTree) -> RenderList {
         }
         let n = &tree.nodes[id];
         let model = tree.global_matrix(id);
+        let blend = Blend::from_name(n.text("blend"));
+        let pixel = filter_of(n);
+        let lit = n.prop("lit").is_none_or(|v| v.as_bool());
         match n.kind {
             NodeKind::Sprite2D => out.sprites.push(Sprite {
                 node: id,
                 model,
                 size: Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32),
                 centered: n.prop("centered").is_none_or(|v| v.as_bool()),
-                color: n.color("color"),
+                color: tinted(tree, id, n.color("color")),
+                blend,
+                pixel,
+                lit,
                 texture: n.text("texture").to_string(),
                 layer: n.num("layer", 0.0) as f32,
                 region: {
@@ -278,7 +455,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 let grid = crate::tiles::parse(n.text("tiles"));
                 let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
                 let tex = n.text("tileset").to_string();
-                let color = n.color("color");
+                let color = tinted(tree, id, n.color("color"));
                 let layer = n.num("layer", -5.0) as f32;
                 let parallax = Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32);
                 for (r, row) in grid.iter().enumerate() {
@@ -299,26 +476,27 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                             flip: [false; 2],
                             parallax,
                             repeat: [false; 2],
+                            blend,
+                            pixel,
+                            lit,
                         });
                     }
                 }
             }
             k if k.is_ui() => {
                 let p = model.w_axis.truncate().truncate();
-                out.ui.push(UiItem {
-                    node: id,
-                    kind: k,
-                    pos: p,
-                    size: Vec2::new(n.num("width", 100.0) as f32, n.num("height", 30.0) as f32),
-                    props: n.props.clone(),
-                });
+                let mut props = n.props.clone();
+                // The UI layer reads one opacity: this node's, times its parents' modulate alpha.
+                let t = tinted(tree, id, [1.0; 4]);
+                props.insert("opacity".into(), crate::Variant::Num(t[3] as f64));
+                out.ui.push(UiItem { node: id, kind: k, pos: p, size: Vec2::new(n.num("width", 100.0) as f32, n.num("height", 30.0) as f32), props });
             }
             NodeKind::Label2D => out.labels.push(Label {
                 node: id,
                 pos: model.w_axis.truncate().truncate(),
                 text: n.text("text").to_string(),
                 size: n.num("size", 16.0) as f32,
-                color: n.color("color"),
+                color: tinted(tree, id, n.color("color")),
                 layer: n.num("layer", 10.0) as f32,
                 font: n.text("font").to_string(),
             }),
@@ -341,7 +519,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 pos: model.w_axis.truncate().truncate(),
                 radius: n.num("radius", 200.0) as f32 * model.x_axis.truncate().length(),
                 color: {
-                    let c = n.color("color");
+                    let c = tinted(tree, id, n.color("color"));
                     let e = n.num("energy", 1.0) as f32;
                     [c[0] * e, c[1] * e, c[2] * e, c[3]]
                 },
@@ -359,9 +537,17 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 }
             }
             NodeKind::Mesh3D => out.meshes.push(MeshDraw {
-                color: n.color("color"),
+                color: tinted(tree, id, n.color("color")),
                 texture: n.text("texture").to_string(),
                 uv_scale: [n.num("uv_scale_x", 1.0) as f32, n.num("uv_scale_y", 1.0) as f32],
+                rim: n.num("rim", 0.0) as f32,
+                rim_color: rgb(n.color("rim_color")),
+                emissive_color: rgb(n.color("emissive_color")),
+                two_sided: match n.text("sides") {
+                    "both" => Some(true),
+                    "front" => Some(false),
+                    _ => None,
+                },
                 cast_shadows: n.prop("cast_shadows").is_none_or(|v| v.as_bool()),
                 animation: n.text("animation").to_string(),
                 anim_time: n.num("anim_time", 0.0) as f32,
@@ -370,17 +556,18 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 emissive: n.num("emissive", 0.0) as f32,
                 unlit: n.prop("unlit").is_some_and(|v| v.as_bool()),
                 shader: n.text("shader").to_string(),
-                ..MeshDraw::new(id, model, n.text("mesh"))
+                ..mesh_look(n, MeshDraw::new(id, model, n.text("mesh")))
             }),
             NodeKind::Sprite3D => {
                 let (w, h) = (n.num("width", 1.0) as f32, n.num("height", 1.0) as f32);
                 out.meshes.push(MeshDraw {
-                    color: n.color("color"),
+                    color: tinted(tree, id, n.color("color")),
                     texture: n.text("texture").to_string(),
                     cast_shadows: n.prop("cast_shadows").is_some_and(|v| v.as_bool()),
                     unlit: n.prop("unlit").is_none_or(|v| v.as_bool()),
                     billboard: n.prop("billboard").is_none_or(|v| v.as_bool()),
-                    ..MeshDraw::new(id, model * Mat4::from_scale(Vec3::new(w, h, 1.0)), "quad")
+                    emissive: n.num("emissive", 0.0) as f32,
+                    ..mesh_look(n, MeshDraw::new(id, model * Mat4::from_scale(Vec3::new(w, h, 1.0)), "quad"))
                 });
             }
             NodeKind::Label3D => out.labels_3d.push(Label3D {
@@ -388,7 +575,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 pos: model.w_axis.truncate(),
                 text: n.text("text").to_string(),
                 size: n.num("size", 24.0) as f32,
-                color: n.color("color"),
+                color: tinted(tree, id, n.color("color")),
                 font: n.text("font").to_string(),
             }),
             NodeKind::Environment => {
@@ -407,6 +594,15 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                         shadow_distance: n.num("shadow_distance", 40.0) as f32,
                         bloom: n.num("bloom", 0.0) as f32,
                         bloom_threshold: n.num("bloom_threshold", 0.9) as f32,
+                        sky_energy: n.num("sky_energy", 1.0).max(0.0) as f32,
+                        fog_exp: n.text("fog_mode") == "exp",
+                        fog_density: n.num("fog_density", 0.02).max(0.0) as f32,
+                        shadow_split: n.num("shadow_split", 0.25).clamp(0.02, 0.95) as f32,
+                        exposure: n.num("exposure", 1.0).max(0.0) as f32,
+                        contrast: n.num("contrast", 1.0).max(0.0) as f32,
+                        saturation: n.num("saturation", 1.0).max(0.0) as f32,
+                        tint: n.prop("tint").map(crate::Variant::as_color).unwrap_or([1.0; 4]),
+                        vignette: n.num("vignette", 0.0).clamp(0.0, 1.0) as f32,
                     });
                 }
             }
@@ -417,11 +613,12 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                         fov_deg: n.num("fov", 70.0) as f32,
                         near: n.num("near", 0.05) as f32,
                         far: n.num("far", 500.0) as f32,
+                        ortho: if n.prop("ortho").is_some_and(|v| v.as_bool()) { Some(n.num("ortho_size", 10.0).max(0.01) as f32) } else { None },
                     });
                 }
             }
             NodeKind::Light3D => {
-                let c = n.color("color");
+                let c = tinted(tree, id, n.color("color"));
                 let e = n.num("energy", 1.0) as f32;
                 out.lights.push(LightDraw {
                     kind: match n.text("type") {
@@ -435,6 +632,11 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     range: n.num("range", 10.0).max(0.01) as f32,
                     angle: n.num("angle", 45.0) as f32,
                     shadows: n.prop("shadows").is_none_or(|v| v.as_bool()),
+                    softness: n.num("softness", 0.1).clamp(0.0, 1.0) as f32,
+                    falloff: n.num("falloff", 2.0).clamp(0.1, 16.0) as f32,
+                    specular: n.num("specular", 1.0).max(0.0) as f32,
+                    shadow_strength: n.num("shadow_strength", 1.0).clamp(0.0, 1.0) as f32,
+                    shadow_bias: n.num("shadow_bias", -1.0) as f32,
                 });
             }
             _ => {}

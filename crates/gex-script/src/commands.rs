@@ -208,6 +208,7 @@ pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
         flip: [false; 2],
         parallax: glam::Vec2::ONE,
         repeat: [false; 2],
+        ..Default::default()
     };
     for d in draws {
         match d {

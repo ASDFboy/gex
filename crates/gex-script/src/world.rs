@@ -278,7 +278,7 @@ impl Game {
             touching: HashSet::new(),
             queue: VecDeque::new(),
             timers: Vec::new(),
-            physics: crate::physics::Physics::new(project.config.gravity_2d, project.config.gravity_3d),
+            physics: crate::physics::Physics::new(project.config.physics.gravity_2d, project.config.physics.gravity_3d),
             audio: Default::default(),
             vfs: gex_assets::Vfs::new(&project.dir, &project.config),
             axes: HashMap::new(),
