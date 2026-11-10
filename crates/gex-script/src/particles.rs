@@ -82,7 +82,8 @@ impl Emitter {
 
 /// Moves every particle on, spawns new ones from emitting nodes, and forgets emitters whose
 /// node is gone.
-pub fn update(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter>, dt: f32, frozen: &[NodeId]) {
+/// `amount` (0 to 1, the particles graphics setting) scales every emitter's rate.
+pub fn update(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter>, dt: f32, frozen: &[NodeId], amount: f64) {
     emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.nodes[*id].kind == NodeKind::Particles2D));
     for id in tree.walk() {
         let n = &tree.nodes[id];
@@ -100,7 +101,7 @@ pub fn update(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter>, dt: f32
         e.parts.retain(|p| p.age < p.life);
         let on = n.prop("emitting").is_none_or(|v| v.as_bool()) && tree.visible_in_tree(id);
         if on {
-            e.owed += n.num("rate", 30.0).max(0.0) * dt as f64;
+            e.owed += n.num("rate", 30.0).max(0.0) * amount * dt as f64;
             let k = e.owed.floor();
             e.owed -= k;
             e.spawn(tree, id, k as usize);
@@ -205,7 +206,7 @@ impl Emitter3 {
     }
 }
 
-pub fn update_3d(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter3>, dt: f32, frozen: &[NodeId]) {
+pub fn update_3d(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter3>, dt: f32, frozen: &[NodeId], amount: f64) {
     emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.nodes[*id].kind == NodeKind::Particles3D));
     for id in tree.walk() {
         let n = &tree.nodes[id];
@@ -221,7 +222,7 @@ pub fn update_3d(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter3>, dt:
         }
         e.parts.retain(|p| p.age < p.life);
         if n.prop("emitting").is_none_or(|v| v.as_bool()) && tree.visible_in_tree(id) {
-            e.owed += n.num("rate", 30.0).max(0.0) * dt as f64;
+            e.owed += n.num("rate", 30.0).max(0.0) * amount * dt as f64;
             let k = e.owed.floor();
             e.owed -= k;
             e.spawn(tree, id, k as usize);

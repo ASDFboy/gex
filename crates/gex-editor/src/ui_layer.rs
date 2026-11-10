@@ -26,8 +26,12 @@ pub fn paint_ui(
     vfs: &gex_assets::Vfs,
 ) -> Vec<UiEvent> {
     let mut events = Vec::new();
-    let painter = ui.painter().clone();
+    let base = ui.painter().clone();
     for it in items {
+        // Each item's opacity (its own, times its parents' modulate alpha).
+        let mut painter = base.clone();
+        painter.multiply_opacity(it.num("opacity", 1.0).clamp(0.0, 1.0) as f32);
+        let painter = painter;
         let tl = it.top_left(design);
         let rect = Rect::from_min_max(to_screen(tl), to_screen(tl + it.size));
         let fam = crate::text::family(ui.ctx(), vfs, it.text("font"));
@@ -124,7 +128,7 @@ pub fn paint_ui(
                     }
                     ui.data_mut(|d| d.insert_temp(id, text));
                 } else {
-                    painter.rect_filled(rect, CornerRadius::same(3), Color32::from_rgb(0x12, 0x15, 0x1b));
+                    painter.rect_filled(rect, CornerRadius::same(3), Color32::from_rgb(0x10, 0x10, 0x0e));
                     painter.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Inside);
                     let (t, c) = if it.text("text").is_empty() { (it.text("placeholder"), Color32::GRAY) } else { (it.text("text"), Color32::WHITE) };
                     painter.text(rect.left_center() + egui::vec2(6.0 * scale, 0.0), egui::Align2::LEFT_CENTER, t, font(size), c);

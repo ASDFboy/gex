@@ -88,6 +88,10 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("FULLSCREEN", "(on)", "switches the game window to full screen (TRUE) or back (FALSE); with no input, gives whether it is"),
     ("WINDOW_TITLE", "(text)", "changes the game window's title"),
     ("QUIT", "()", "stops the game"),
+    ("SET_GRAPHICS", "(setting, value)", "changes a project graphics setting while the game runs (render_scale, shadows, bloom, tonemap, exposure, saturation, vignette...; see Project settings)"),
+    ("GRAPHICS", "(setting)", "a graphics setting's value; with no input, a table of all of them"),
+    ("SET_PHYSICS", "(setting, value)", "changes a project physics setting while the game runs (gravity_2d, gravity_3d, tick_rate, solver_iterations, max_slope...)"),
+    ("PHYSICS", "(setting)", "a physics setting's value; with no input, a table of all of them"),
 ];
 
 pub fn register() {
@@ -806,6 +810,37 @@ impl Host for EngineHost {
                 Ok(Value::Null)
             }
             "PAUSED" => Ok(Value::Bool(st.paused)),
+            "SET_GRAPHICS" | "SET_PHYSICS" => {
+                let key = text_arg(name, &a, 0)?;
+                let v = a.get(1).cloned().unwrap_or(Value::Null);
+                let graphics = name == "SET_GRAPHICS";
+                let like = if graphics { st.project.config.graphics.get(&key) } else { st.physics.settings.get(&key) };
+                let like = match like {
+                    Some(l) => l,
+                    None => return err(format!("there's no {} setting called {}", if graphics { "graphics" } else { "physics" }, key)),
+                };
+                let Some(var) = to_variant(&v, Some(&like)) else { return err(format!("{} can't take a {}", key, v.type_name())) };
+                let r = if graphics { st.project.config.graphics.set(&key, &var) } else { st.physics.settings.set(&key, &var) };
+                r.or_else(err)?;
+                Ok(Value::Null)
+            }
+            "GRAPHICS" | "PHYSICS" => {
+                let all: Vec<(&str, gex_core::Variant)> = if name == "GRAPHICS" {
+                    gex_core::settings::Graphics::FIELDS.iter().filter_map(|f| st.project.config.graphics.get(f.name).map(|v| (f.name, v))).collect()
+                } else {
+                    gex_core::settings::PhysicsSettings::FIELDS.iter().filter_map(|f| st.physics.settings.get(f.name).map(|v| (f.name, v))).collect()
+                };
+                match a.first() {
+                    None | Some(Value::Null) => Ok(jlb::embed::named_table(all.iter().map(|(k, v)| (*k, to_value(v))).collect())),
+                    Some(_) => {
+                        let key = text_arg(name, &a, 0)?;
+                        match all.iter().find(|(k, _)| *k == key) {
+                            Some((_, v)) => Ok(to_value(v)),
+                            None => err(format!("there's no setting called {}", key)),
+                        }
+                    }
+                }
+            }
             "TIME_SCALE" => {
                 if let Some(v) = a.first().and_then(as_f64) {
                     st.time_scale = v.clamp(0.0, 100.0);

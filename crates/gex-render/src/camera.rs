@@ -97,7 +97,15 @@ impl Cameras {
         let fit = (size[0] as f32 / design[0].max(1) as f32).min(size[1] as f32 / design[1].max(1) as f32).max(0.01);
         let (vp3, eye, focus) = match list.camera3d {
             Some(c) => {
-                let proj = Mat4::perspective_rh(c.fov_deg.to_radians(), aspect(size), c.near.max(0.001), c.far.max(c.near + 0.01));
+                let (near, far) = (c.near.max(0.001), c.far.max(c.near + 0.01));
+                let proj = match c.ortho {
+                    // No perspective: `h` metres tall, as wide as the window's shape makes it.
+                    Some(h) => {
+                        let (hh, hw) = (h / 2.0, h / 2.0 * aspect(size));
+                        Mat4::orthographic_rh(-hw, hw, -hh, hh, near, far)
+                    }
+                    None => Mat4::perspective_rh(c.fov_deg.to_radians(), aspect(size), near, far),
+                };
                 let eye = c.world.w_axis.truncate();
                 (proj * c.world.inverse(), eye, eye + c.world.transform_vector3(Vec3::NEG_Z).normalize_or(Vec3::NEG_Z) * 12.0)
             }

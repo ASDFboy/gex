@@ -202,6 +202,21 @@ The script editor completes these as you type and shows each one's inputs.
 | `TIME_SCALE(scale)` | how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale |
 | `SHAKE(strength, seconds)` | shakes the camera: strength in pixels (2D), dying away over seconds |
 
+### Settings while playing
+
+Every project graphics and physics setting (listed in [SETTINGS.md](SETTINGS.md)) can change
+while the game runs: an options menu, a low-detail mode, moon gravity.
+
+| Command | What it does |
+|---|---|
+| `SET_GRAPHICS(setting, value)` | changes a graphics setting: `SET_GRAPHICS("shadows", FALSE)`, `SET_GRAPHICS("tonemap", "aces")`, `SET_GRAPHICS("tint", "#ffd0a0")` |
+| `GRAPHICS(setting)` | a graphics setting's value; `GRAPHICS()` gives a table of all of them |
+| `SET_PHYSICS(setting, value)` | changes a physics setting: `SET_PHYSICS("gravity_2d", [0, 400])`, `SET_PHYSICS("tick_rate", 120)` |
+| `PHYSICS(setting)` | a physics setting's value; `PHYSICS()` gives a table of all of them |
+
+Each node's own look and physics properties change like any other: `self.opacity = 0.4`,
+`SET("Crate", "linear_damping", 3)`.
+
 ## Waiting: tasks
 
 An event has to finish within its frame, so it can't `WAIT`. For anything that happens over

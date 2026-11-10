@@ -4,6 +4,7 @@
 //!
 //! 2D works in pixels (y down) in the tree and in metres inside rapier (50 px = 1 m).
 
+use gex_core::settings::PhysicsSettings;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -103,13 +104,67 @@ fn num(tree: &SceneTree, id: NodeId, k: &str, d: f64) -> f32 {
 }
 
 /// Everything about a body that, when changed, means building it again.
-fn shape_key(tree: &SceneTree, id: NodeId, scale: Vec3) -> String {
+fn shape_key(tree: &SceneTree, id: NodeId, scale: Vec3, settings: &PhysicsSettings) -> String {
     let n = &tree.nodes[id];
-    let mut s = format!("{:?}", scale);
-    for k in ["body", "shape", "width", "height", "depth", "radius", "gravity_scale", "friction", "bounce", "density", "fixed_rotation", "layer", "mask"] {
+    let mut s = format!("{:?}|{}", scale, settings.sleeping);
+    for k in ["body", "shape", "width", "height", "depth", "radius", "density", "mass", "can_sleep", "layer", "mask"] {
         s.push_str(&format!("|{:?}", n.props.get(k)));
     }
     s
+}
+
+/// The body settings that change in place (no rebuild), as one comparable text.
+fn params_key(tree: &SceneTree, id: NodeId, settings: &PhysicsSettings) -> String {
+    let n = &tree.nodes[id];
+    let mut s = format!("{}|{}|{}", settings.linear_damping, settings.angular_damping, settings.ccd);
+    for k in ["gravity_scale", "friction", "bounce", "linear_damping", "angular_damping", "ccd", "enabled", "fixed_rotation", "lock_x", "lock_y", "lock_z"] {
+        s.push_str(&format!("|{:?}", n.props.get(k)));
+    }
+    s
+}
+
+/// A body's own settings, worked out with the project's.
+struct BodyParams {
+    gravity_scale: f32,
+    friction: f32,
+    bounce: f32,
+    linear_damping: f32,
+    angular_damping: f32,
+    ccd: bool,
+    enabled: bool,
+    fixed_rotation: bool,
+    lock: [bool; 3],
+}
+
+impl BodyParams {
+    fn of(tree: &SceneTree, id: NodeId, s: &PhysicsSettings) -> BodyParams {
+        let n = &tree.nodes[id];
+        let b = |k: &str| n.prop(k).is_some_and(|v| v.as_bool());
+        BodyParams {
+            gravity_scale: num(tree, id, "gravity_scale", 1.0),
+            friction: num(tree, id, "friction", 0.5).max(0.0),
+            bounce: num(tree, id, "bounce", 0.0).max(0.0),
+            linear_damping: num(tree, id, "linear_damping", 0.0).max(0.0) + s.linear_damping,
+            angular_damping: num(tree, id, "angular_damping", 0.0).max(0.0) + s.angular_damping,
+            ccd: match n.text("ccd") {
+                "on" => true,
+                "off" => false,
+                _ => s.ccd,
+            },
+            enabled: n.prop("enabled").is_none_or(|v| v.as_bool()),
+            fixed_rotation: b("fixed_rotation"),
+            lock: [b("lock_x"), b("lock_y"), b("lock_z")],
+        }
+    }
+}
+
+fn can_sleep(tree: &SceneTree, id: NodeId, s: &PhysicsSettings) -> bool {
+    s.sleeping && tree.nodes[id].prop("can_sleep").is_none_or(|v| v.as_bool())
+}
+
+/// A 3D body's spin settings (degrees per second) as an angular velocity (radians).
+fn spin3(tree: &SceneTree, id: NodeId) -> Vec3 {
+    Vec3::new(num(tree, id, "spin_x", 0.0), num(tree, id, "spin_y", 0.0), num(tree, id, "spin_z", 0.0)) * (std::f32::consts::PI / 180.0)
 }
 
 fn parent_matrix(tree: &SceneTree, id: NodeId) -> Mat4 {
@@ -119,7 +174,7 @@ fn parent_matrix(tree: &SceneTree, id: NodeId) -> Mat4 {
 // ---------------------------------------------------------------- 2D
 
 mod d2 {
-    pub use rapier2d::control::{CharacterLength, KinematicCharacterController};
+    pub use rapier2d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
     pub use rapier2d::prelude::*;
 }
 
@@ -127,6 +182,8 @@ struct Entry2 {
     body: d2::RigidBodyHandle,
     collider: d2::ColliderHandle,
     key: String,
+    params: String,
+    spin: f32,
     pos: Vec2,
     angle: f32,
     vel: Vec2,
@@ -148,18 +205,52 @@ fn pose2(tree: &SceneTree, id: NodeId) -> (Vec2, f32, Vec3) {
 }
 
 impl World2 {
-    fn new(gravity: [f32; 2]) -> World2 {
-        let mut world = d2::PhysicsWorld::new();
-        world.gravity = d2::Vector::new(gravity[0], gravity[1]) / PIXELS_PER_METRE;
-        world.integration_parameters.dt = 1.0 / 60.0;
+    fn new(settings: &PhysicsSettings) -> World2 {
+        let world = d2::PhysicsWorld::new();
         let mut controller = d2::KinematicCharacterController::default();
         controller.up = d2::Vector::new(0.0, -1.0);
         controller.offset = d2::CharacterLength::Absolute(0.01);
-        controller.snap_to_ground = Some(d2::CharacterLength::Absolute(0.1));
-        World2 { world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
+        let mut w = World2 { world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller };
+        w.configure(settings);
+        w
     }
 
-    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers) {
+    /// Applies the project's physics settings (cheap; done every step so scripts can change them).
+    fn configure(&mut self, s: &PhysicsSettings) {
+        self.world.gravity = d2::Vector::new(s.gravity_2d[0], s.gravity_2d[1]) / PIXELS_PER_METRE;
+        let ip = &mut self.world.integration_parameters;
+        ip.dt = 1.0 / s.tick_rate.clamp(10.0, 480.0);
+        ip.num_solver_iterations = s.solver_iterations.max(1) as usize;
+        ip.max_ccd_substeps = s.ccd_substeps.max(1) as usize;
+        ip.contact_softness.natural_frequency = s.contact_stiffness.max(1.0);
+        let c = &mut self.controller;
+        c.max_slope_climb_angle = s.max_slope.to_radians();
+        c.min_slope_slide_angle = s.max_slope.to_radians();
+        c.snap_to_ground = if s.snap_to_ground > 0.0 { Some(d2::CharacterLength::Absolute(s.snap_to_ground)) } else { None };
+        c.autostep = if s.step_height > 0.0 {
+            Some(d2::CharacterAutostep { max_height: d2::CharacterLength::Absolute(s.step_height), min_width: d2::CharacterLength::Absolute(0.05), include_dynamic_bodies: false })
+        } else {
+            None
+        };
+    }
+
+    fn apply_params(&mut self, id: NodeId, p: &BodyParams) {
+        let Some(e) = self.bodies.get(&id) else { return };
+        let b = &mut self.world.bodies[e.body];
+        b.set_gravity_scale(p.gravity_scale, true);
+        b.set_linear_damping(p.linear_damping);
+        b.set_angular_damping(p.angular_damping);
+        b.enable_ccd(p.ccd);
+        b.set_enabled(p.enabled);
+        b.lock_rotations(p.fixed_rotation, true);
+        b.set_enabled_translations(!p.lock[0], !p.lock[1], true);
+        if let Some(c) = self.world.colliders.get_mut(e.collider) {
+            c.set_friction(p.friction);
+            c.set_restitution(p.bounce);
+        }
+    }
+
+    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers, settings: &PhysicsSettings) {
         let n = &tree.nodes[id];
         let (pos, angle, scale) = pose2(tree, id);
         let p = pos / PIXELS_PER_METRE;
@@ -173,8 +264,8 @@ impl World2 {
             .translation(d2::Vector::new(p.x, p.y))
             .rotation(angle)
             .linvel(d2::Vector::new(vel.x, vel.y) / PIXELS_PER_METRE)
-            .gravity_scale(num(tree, id, "gravity_scale", 1.0))
-            .ccd_enabled(true);
+            .angvel(num(tree, id, "spin", 0.0).to_radians())
+            .can_sleep(can_sleep(tree, id, settings));
         if n.prop("fixed_rotation").is_some_and(|v| v.as_bool()) {
             builder = builder.lock_rotations();
         }
@@ -185,13 +276,14 @@ impl World2 {
             "capsule" => d2::ColliderBuilder::capsule_y((h / 2.0 - r).max(0.001), r),
             _ => d2::ColliderBuilder::cuboid(w / 2.0, h / 2.0),
         }
-        .collision_groups(groups2(layers.of(tree, id)))
-        .friction(num(tree, id, "friction", 0.5))
-        .restitution(num(tree, id, "bounce", 0.0))
-        .density(num(tree, id, "density", 1.0).max(0.001));
+        .collision_groups(groups2(layers.of(tree, id)));
+        let mass = num(tree, id, "mass", 0.0);
+        let col = if mass > 0.0 { col.mass(mass) } else { col.density(num(tree, id, "density", 1.0).max(0.001)) };
         let (body, collider) = self.world.insert(builder, col);
         self.owners.insert(collider, id);
-        self.bodies.insert(id, Entry2 { body, collider, key, pos, angle, vel });
+        let spin = num(tree, id, "spin", 0.0);
+        self.bodies.insert(id, Entry2 { body, collider, key, params: params_key(tree, id, settings), pos, angle, vel, spin });
+        self.apply_params(id, &BodyParams::of(tree, id, settings));
     }
 
     fn remove(&mut self, id: NodeId) {
@@ -223,7 +315,8 @@ impl World2 {
     }
 
     /// Makes the physics match the tree.
-    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers) {
+    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers, settings: &PhysicsSettings) {
+        self.configure(settings);
         let alive: HashSet<NodeId> = ids.iter().copied().collect();
         let gone: Vec<NodeId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
         for g in gone {
@@ -231,14 +324,20 @@ impl World2 {
         }
         for &id in ids {
             let (pos, angle, scale) = pose2(tree, id);
-            let key = shape_key(tree, id, scale);
+            let key = shape_key(tree, id, scale, settings);
             if self.bodies.get(&id).is_some_and(|e| e.key != key) {
                 self.remove(id);
             }
-            let Some(e) = self.bodies.get_mut(&id) else {
-                self.build(tree, id, key, layers);
+            if !self.bodies.contains_key(&id) {
+                self.build(tree, id, key, layers, settings);
                 continue;
-            };
+            }
+            let params = params_key(tree, id, settings);
+            if self.bodies[&id].params != params {
+                self.apply_params(id, &BodyParams::of(tree, id, settings));
+                self.bodies.get_mut(&id).unwrap().params = params;
+            }
+            let Some(e) = self.bodies.get_mut(&id) else { continue };
             let b = &mut self.world.bodies[e.body];
             if pos.distance(e.pos) > 0.01 || (angle - e.angle).abs() > 1e-4 {
                 // Moved by a script or the editor: teleport.
@@ -255,6 +354,11 @@ impl World2 {
             if vel.distance(e.vel) > 1e-3 && b.is_dynamic() {
                 b.set_linvel(d2::Vector::new(vel.x, vel.y) / PIXELS_PER_METRE, true);
                 e.vel = vel;
+            }
+            let spin = num(tree, id, "spin", 0.0);
+            if (spin - e.spin).abs() > 1e-3 && b.is_dynamic() {
+                b.set_angvel(spin.to_radians(), true);
+                e.spin = spin;
             }
         }
     }
@@ -280,10 +384,13 @@ impl World2 {
             n.transform.rotation.z = (angle - parent_angle).to_degrees();
             n.props.insert("vx".into(), Variant::Num(v.x as f64));
             n.props.insert("vy".into(), Variant::Num(v.y as f64));
+            let spin = b.angvel().to_degrees();
+            n.props.insert("spin".into(), Variant::Num(spin as f64));
             n.props.insert("on_floor".into(), Variant::Bool(floor.contains(id)));
             e.pos = pos;
             e.angle = angle;
             e.vel = Vec2::new(v.x, v.y);
+            e.spin = spin;
         }
     }
 
@@ -336,7 +443,7 @@ impl World2 {
         let qp = self.world.query_pipeline_with_filter(filter);
         let pose = *self.world.bodies[e.body].position();
         let d = d2::Vector::new(delta.x, delta.y) / PIXELS_PER_METRE;
-        let m = self.controller.move_shape(1.0 / 60.0, &qp, col.shape(), &pose, d, |_| {});
+        let m = self.controller.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &pose, d, |_| {});
         let new_t = pose.translation + m.translation;
         let new_pose = d2::Pose::new(new_t, pose.rotation.angle());
         let b = &mut self.world.bodies[e.body];
@@ -382,7 +489,7 @@ impl World2 {
 // ---------------------------------------------------------------- 3D
 
 mod d3 {
-    pub use rapier3d::control::{CharacterLength, KinematicCharacterController};
+    pub use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
     pub use rapier3d::prelude::*;
 }
 
@@ -390,6 +497,8 @@ struct Entry3 {
     body: d3::RigidBodyHandle,
     collider: d3::ColliderHandle,
     key: String,
+    params: String,
+    spin: Vec3,
     pos: Vec3,
     rot: Quat,
     vel: Vec3,
@@ -429,17 +538,50 @@ pub struct StaticBox3 {
 }
 
 impl World3 {
-    fn new(gravity: [f32; 3]) -> World3 {
-        let mut world = d3::PhysicsWorld::new();
-        world.gravity = d3::Vector::new(gravity[0], gravity[1], gravity[2]);
-        world.integration_parameters.dt = 1.0 / 60.0;
+    fn new(settings: &PhysicsSettings) -> World3 {
+        let world = d3::PhysicsWorld::new();
         let mut controller = d3::KinematicCharacterController::default();
         controller.offset = d3::CharacterLength::Absolute(0.01);
-        controller.snap_to_ground = Some(d3::CharacterLength::Absolute(0.1));
-        World3 { ragdolls: HashMap::new(), static_meshes: HashMap::new(), world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller }
+        let mut w = World3 { ragdolls: HashMap::new(), static_meshes: HashMap::new(), world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller };
+        w.configure(settings);
+        w
     }
 
-    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>) {
+    fn configure(&mut self, s: &PhysicsSettings) {
+        self.world.gravity = d3::Vector::new(s.gravity_3d[0], s.gravity_3d[1], s.gravity_3d[2]);
+        let ip = &mut self.world.integration_parameters;
+        ip.dt = 1.0 / s.tick_rate.clamp(10.0, 480.0);
+        ip.num_solver_iterations = s.solver_iterations.max(1) as usize;
+        ip.max_ccd_substeps = s.ccd_substeps.max(1) as usize;
+        ip.contact_softness.natural_frequency = s.contact_stiffness.max(1.0);
+        let c = &mut self.controller;
+        c.max_slope_climb_angle = s.max_slope.to_radians();
+        c.min_slope_slide_angle = s.max_slope.to_radians();
+        c.snap_to_ground = if s.snap_to_ground > 0.0 { Some(d3::CharacterLength::Absolute(s.snap_to_ground)) } else { None };
+        c.autostep = if s.step_height > 0.0 {
+            Some(d3::CharacterAutostep { max_height: d3::CharacterLength::Absolute(s.step_height), min_width: d3::CharacterLength::Absolute(0.05), include_dynamic_bodies: false })
+        } else {
+            None
+        };
+    }
+
+    fn apply_params(&mut self, id: NodeId, p: &BodyParams) {
+        let Some(e) = self.bodies.get(&id) else { return };
+        let b = &mut self.world.bodies[e.body];
+        b.set_gravity_scale(p.gravity_scale, true);
+        b.set_linear_damping(p.linear_damping);
+        b.set_angular_damping(p.angular_damping);
+        b.enable_ccd(p.ccd);
+        b.set_enabled(p.enabled);
+        b.lock_rotations(p.fixed_rotation, true);
+        b.set_enabled_translations(!p.lock[0], !p.lock[1], !p.lock[2], true);
+        if let Some(c) = self.world.colliders.get_mut(e.collider) {
+            c.set_friction(p.friction);
+            c.set_restitution(p.bounce);
+        }
+    }
+
+    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>, settings: &PhysicsSettings) {
         let n = &tree.nodes[id];
         let (pos, rot, scale) = pose3(tree, id);
         let builder = match n.text("body") {
@@ -451,8 +593,8 @@ impl World3 {
         let mut builder = builder
             .pose(d3::Pose::from_parts(pos, rot))
             .linvel(vel)
-            .gravity_scale(num(tree, id, "gravity_scale", 1.0))
-            .ccd_enabled(true);
+            .angvel(spin3(tree, id))
+            .can_sleep(can_sleep(tree, id, settings));
         if n.prop("fixed_rotation").is_some_and(|v| v.as_bool()) {
             builder = builder.lock_rotations();
         }
@@ -467,13 +609,13 @@ impl World3 {
             }
             _ => d3::ColliderBuilder::cuboid(half.x, half.y, half.z),
         }
-        .collision_groups(groups3(layers.of(tree, id)))
-        .friction(num(tree, id, "friction", 0.5))
-        .restitution(num(tree, id, "bounce", 0.0))
-        .density(num(tree, id, "density", 1.0).max(0.001));
+        .collision_groups(groups3(layers.of(tree, id)));
+        let mass = num(tree, id, "mass", 0.0);
+        let col = if mass > 0.0 { col.mass(mass) } else { col.density(num(tree, id, "density", 1.0).max(0.001)) };
         let (body, collider) = self.world.insert(builder, col);
         self.owners.insert(collider, id);
-        self.bodies.insert(id, Entry3 { body, collider, key, pos, rot, vel });
+        self.bodies.insert(id, Entry3 { body, collider, key, params: params_key(tree, id, settings), pos, rot, vel, spin: spin3(tree, id) });
+        self.apply_params(id, &BodyParams::of(tree, id, settings));
     }
 
     fn remove(&mut self, id: NodeId) {
@@ -524,7 +666,8 @@ impl World3 {
         }
     }
 
-    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>) {
+    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>, settings: &PhysicsSettings) {
+        self.configure(settings);
         let alive: HashSet<NodeId> = ids.iter().copied().collect();
         let gone: Vec<NodeId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
         for g in gone {
@@ -532,17 +675,23 @@ impl World3 {
         }
         for &id in ids {
             let (pos, rot, scale) = pose3(tree, id);
-            let mut key = shape_key(tree, id, scale);
+            let mut key = shape_key(tree, id, scale, settings);
             if let Some(h) = hulls.get(&id) {
                 key.push_str(&h.0);
             }
             if self.bodies.get(&id).is_some_and(|e| e.key != key) {
                 self.remove(id);
             }
-            let Some(e) = self.bodies.get_mut(&id) else {
-                self.build(tree, id, key, layers, hulls);
+            if !self.bodies.contains_key(&id) {
+                self.build(tree, id, key, layers, hulls, settings);
                 continue;
-            };
+            }
+            let params = params_key(tree, id, settings);
+            if self.bodies[&id].params != params {
+                self.apply_params(id, &BodyParams::of(tree, id, settings));
+                self.bodies.get_mut(&id).unwrap().params = params;
+            }
+            let Some(e) = self.bodies.get_mut(&id) else { continue };
             let b = &mut self.world.bodies[e.body];
             if pos.distance(e.pos) > 1e-4 || rot.angle_between(e.rot) > 1e-4 {
                 let p = d3::Pose::from_parts(pos, rot);
@@ -558,6 +707,11 @@ impl World3 {
             if vel.distance(e.vel) > 1e-4 && b.is_dynamic() {
                 b.set_linvel(vel, true);
                 e.vel = vel;
+            }
+            let spin = spin3(tree, id);
+            if spin.distance(e.spin) > 1e-4 && b.is_dynamic() {
+                b.set_angvel(spin, true);
+                e.spin = spin;
             }
         }
     }
@@ -585,10 +739,15 @@ impl World3 {
             n.props.insert("vx".into(), Variant::Num(v.x as f64));
             n.props.insert("vy".into(), Variant::Num(v.y as f64));
             n.props.insert("vz".into(), Variant::Num(v.z as f64));
+            let w = b.angvel();
+            for (k, a) in [("spin_x", w.x), ("spin_y", w.y), ("spin_z", w.z)] {
+                n.props.insert(k.into(), Variant::Num(a.to_degrees() as f64));
+            }
             n.props.insert("on_floor".into(), Variant::Bool(floor.contains(id)));
             e.pos = pos;
             e.rot = rot;
             e.vel = v;
+            e.spin = w;
         }
     }
 
@@ -740,7 +899,7 @@ impl World3 {
         let filter = d3::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors().groups(col.collision_groups());
         let qp = self.world.query_pipeline_with_filter(filter);
         let pose = *self.world.bodies[e.body].position();
-        let m = self.controller.move_shape(1.0 / 60.0, &qp, col.shape(), &pose, delta, |_| {});
+        let m = self.controller.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &pose, delta, |_| {});
         let new_t = pose.translation + m.translation;
         let new_pose = d3::Pose::from_parts(new_t, pose.rotation);
         let b = &mut self.world.bodies[e.body];
@@ -789,8 +948,8 @@ impl World3 {
 pub struct Physics {
     w2: Option<World2>,
     w3: Option<World3>,
-    pub gravity_2d: [f32; 2],
-    pub gravity_3d: [f32; 3],
+    /// The project's physics settings (scripts change them with SET_PHYSICS).
+    pub settings: PhysicsSettings,
     /// Extra static shapes from tilemaps and maps (set before each step).
     pub statics_2d: Vec<StaticBox2>,
     pub statics_3d: Vec<StaticBox3>,
@@ -801,8 +960,8 @@ pub struct Physics {
 }
 
 impl Physics {
-    pub fn new(gravity_2d: [f32; 2], gravity_3d: [f32; 3]) -> Physics {
-        Physics { gravity_2d, gravity_3d, ..Default::default() }
+    pub fn new(settings: PhysicsSettings) -> Physics {
+        Physics { settings, ..Default::default() }
     }
 
     /// Matches bodies to the tree (making them the first time they're seen).
@@ -817,16 +976,16 @@ impl Physics {
             }
         }
         if !b2.is_empty() || !self.statics_2d.is_empty() || self.w2.is_some() {
-            let g = self.gravity_2d;
-            let w = self.w2.get_or_insert_with(|| World2::new(g));
+            let s = &self.settings;
+            let w = self.w2.get_or_insert_with(|| World2::new(s));
             w.set_statics(&self.statics_2d);
-            w.sync(tree, &b2, &self.layers);
+            w.sync(tree, &b2, &self.layers, s);
         }
         if !b3.is_empty() || !self.statics_3d.is_empty() || !self.meshes_3d.is_empty() || self.w3.is_some() {
-            let g = self.gravity_3d;
-            let w = self.w3.get_or_insert_with(|| World3::new(g));
+            let s = &self.settings;
+            let w = self.w3.get_or_insert_with(|| World3::new(s));
             w.set_statics(&self.statics_3d, &self.meshes_3d);
-            w.sync(tree, &b3, &self.layers, &self.hulls);
+            w.sync(tree, &b3, &self.layers, &self.hulls, s);
             let gone: Vec<NodeId> = w.ragdolls.keys().filter(|id| !tree.contains(**id)).copied().collect();
             for g in gone {
                 w.remove_ragdoll(g);
@@ -908,8 +1067,8 @@ impl Physics {
     #[allow(clippy::too_many_arguments)]
     pub fn ragdoll(&mut self, tree: &SceneTree, id: NodeId, joints: &[Mat4], parents: &[Option<usize>], inverse_bind: &[Mat4], velocity: Vec3) {
         let groups = self.layers.of(tree, id);
-        let g = self.gravity_3d;
-        let w = self.w3.get_or_insert_with(|| World3::new(g));
+        let s = &self.settings;
+        let w = self.w3.get_or_insert_with(|| World3::new(s));
         w.make_ragdoll(id, joints, parents, inverse_bind, groups, velocity);
     }
 

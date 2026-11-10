@@ -55,6 +55,15 @@ pub fn to_variant(v: &Value, like: Option<&Variant>) -> Option<Variant> {
             field(v, "b", c[2] as f64) as f32,
             field(v, "a", c[3] as f64) as f32,
         ]),
+        // [x, y] / [x, y, z] (no names) into a vector.
+        (Value::Table(rc, _), Some(Variant::Vec2(_) | Variant::Vec3(_))) if rc.named.len() == 0 => {
+            let n: Vec<f64> = rc.items.iter().map(|s| as_f64(&s.borrow()).unwrap_or(0.0)).collect();
+            match like {
+                Some(Variant::Vec2(p)) => Variant::Vec2([n.first().copied().unwrap_or(p[0]), n.get(1).copied().unwrap_or(p[1])]),
+                Some(Variant::Vec3(p)) => Variant::Vec3([n.first().copied().unwrap_or(p[0]), n.get(1).copied().unwrap_or(p[1]), n.get(2).copied().unwrap_or(p[2])]),
+                _ => unreachable!(),
+            }
+        }
         (Value::Table(..), Some(Variant::Vec2(p))) => Variant::Vec2([field(v, "x", p[0]), field(v, "y", p[1])]),
         (Value::Table(..), Some(Variant::Vec3(p))) => Variant::Vec3([field(v, "x", p[0]), field(v, "y", p[1]), field(v, "z", p[2])]),
         (Value::Table(rc, _), _) => {

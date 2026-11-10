@@ -365,6 +365,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         Some(p) => p.list.clone(),
         None => {
             let mut l = extract(&st.tree);
+            l.graphics = st.project.config.graphics.clone();
             preview_particles(ui.ctx(), st, &mut l);
             l
         }
@@ -729,9 +730,9 @@ fn preview_particles(ctx: &egui::Context, st: &mut EditorState, list: &mut gex_c
     if !any && st.preview_particles.is_empty() && st.preview_particles_3d.is_empty() {
         return;
     }
-    gex_script::particles::update(&st.tree, &mut st.preview_particles, dt, &[]);
+    gex_script::particles::update(&st.tree, &mut st.preview_particles, dt, &[], st.project.config.graphics.particles as f64);
     gex_script::particles::draw(&st.tree, &st.preview_particles, list);
-    gex_script::particles::update_3d(&st.tree, &mut st.preview_particles_3d, dt, &[]);
+    gex_script::particles::update_3d(&st.tree, &mut st.preview_particles_3d, dt, &[], st.project.config.graphics.particles as f64);
     gex_script::particles::draw_3d(&st.tree, &st.preview_particles_3d, list);
     if st.preview_particles.values().any(|e| e.count() > 0) || st.preview_particles_3d.values().any(|e| e.count() > 0) {
         ctx.request_repaint();

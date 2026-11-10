@@ -294,6 +294,11 @@ mod tests {
         p.set("gravity_2d", &Variant::List(vec![Variant::Num(0.0), Variant::Num(100.0)])).unwrap();
         assert_eq!(p.gravity_2d, [0.0, 100.0]);
         assert_eq!(PhysicsSettings::info("gravity_3d").unwrap().kind, "vec3");
+        // docs/SETTINGS.md lists them all.
+        let doc = include_str!("../../../docs/SETTINGS.md");
+        for f in Graphics::FIELDS.iter().chain(PhysicsSettings::FIELDS) {
+            assert!(doc.contains(&format!("| `{}` |", f.name)), "add {} to docs/SETTINGS.md", f.name);
+        }
         // Every field has help and a section.
         for f in Graphics::FIELDS.iter().chain(PhysicsSettings::FIELDS) {
             assert!(!f.doc.is_empty() && !f.section.is_empty(), "{}", f.name);

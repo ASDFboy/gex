@@ -360,6 +360,29 @@ fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: NodeId) {
 }
 
 /// Edits a property value; true when it changed.
+/// A built-in property's editor: a list for choices, a slider for numbers with a range,
+/// otherwise the plain editor for its type.
+fn prop_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str, info: &gex_core::props::PropInfo) -> bool {
+    if !info.choices.is_empty() {
+        if let Variant::Text(cur) = v {
+            let mut changed = false;
+            egui::ComboBox::from_id_salt(("choice", key)).selected_text(cur.as_str()).show_ui(ui, |ui| {
+                for c in info.choices {
+                    if ui.selectable_label(cur == c, *c).clicked() && cur != c {
+                        *cur = c.to_string();
+                        changed = true;
+                    }
+                }
+            });
+            return changed;
+        }
+    }
+    if let (Some((lo, hi)), Variant::Num(n)) = (info.range, &mut *v) {
+        return ui.add(egui::Slider::new(n, lo..=hi).clamping(egui::SliderClamping::Never).max_decimals(3)).changed();
+    }
+    variant_ui(ui, v, key)
+}
+
 fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
     match v {
         Variant::Null => {
@@ -490,23 +513,47 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     if kind != NodeKind::Node && kind != NodeKind::Animator {
         egui::CollapsingHeader::new("Transform").default_open(true).show(ui, |ui| transform_ui(ui, st, id));
     }
-    egui::CollapsingHeader::new("Properties").default_open(true).show(ui, |ui| {
-        let defaults: Vec<&str> = kind.default_props().iter().map(|p| p.0).collect();
-        let keys: Vec<String> = st.tree.nodes[id].props.keys().cloned().collect();
+    // Built-in properties in their sections (Main open, the rest folded), then custom ones.
+    let defaults: Vec<&str> = kind.default_props().iter().map(|p| p.0).collect();
+    let keys: Vec<String> = st.tree.nodes[id].props.keys().cloned().collect();
+    let order: Vec<String> = defaults.iter().map(|d| d.to_string()).filter(|d| keys.contains(d)).collect();
+    for group in gex_core::props::groups(kind) {
+        let in_group: Vec<&String> = order.iter().filter(|k| gex_core::props::info(kind, k).group == group).collect();
+        if in_group.is_empty() {
+            continue;
+        }
+        let title = if group == "Main" { "Properties".to_string() } else { group.to_string() };
+        egui::CollapsingHeader::new(title).id_salt(("props", group)).default_open(group == "Main").show(ui, |ui| {
+            egui::Grid::new(("props grid", group)).num_columns(2).spacing([8.0, 4.0]).striped(true).show(ui, |ui| {
+                for k in in_group {
+                    let info = gex_core::props::info(kind, k);
+                    let label = ui.label(k.as_str());
+                    if !info.doc.is_empty() {
+                        label.on_hover_text(info.doc);
+                    }
+                    let mut v = st.tree.nodes[id].props[k].clone();
+                    if prop_ui(ui, &mut v, k, &info) {
+                        st.will_change(&format!("prop {:?} {}", id, k));
+                        st.tree.nodes[id].props.insert(k.clone(), v);
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    }
+    egui::CollapsingHeader::new("Custom properties").default_open(true).show(ui, |ui| {
+        let keys: Vec<String> = st.tree.nodes[id].props.keys().filter(|k| !defaults.contains(&k.as_str())).cloned().collect();
         let mut remove = None;
-        egui::Grid::new("props").num_columns(3).spacing([8.0, 4.0]).striped(true).show(ui, |ui| {
+        egui::Grid::new("custom props").num_columns(3).spacing([8.0, 4.0]).striped(true).show(ui, |ui| {
             for k in keys {
-                let custom = !defaults.contains(&k.as_str());
-                ui.label(if custom { RichText::new(&k).color(theme::C_EVENT) } else { RichText::new(&k) });
+                ui.label(RichText::new(&k).color(theme::C_EVENT));
                 let mut v = st.tree.nodes[id].props[&k].clone();
                 if variant_ui(ui, &mut v, &k) {
                     st.will_change(&format!("prop {:?} {}", id, k));
                     st.tree.nodes[id].props.insert(k.clone(), v);
                 }
-                if custom && ui.small_button("✖").on_hover_text("remove this property").clicked() {
+                if ui.small_button("✖").on_hover_text("remove this property").clicked() {
                     remove = Some(k.clone());
-                } else if !custom {
-                    ui.label("");
                 }
                 ui.end_row();
             }

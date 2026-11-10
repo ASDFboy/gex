@@ -87,14 +87,55 @@ one small frame image makes boxes of any size.
 | `Sprite3D` | a picture in 3D: faces the camera (`billboard`) or stands like a sign | `texture`, `width`, `height`, `color`, `billboard`, `unlit` |
 | `Label3D` | text over a point in 3D (names over heads, signs) | `text`, `size` (screen pixels), `color`, `font` |
 | `Particles3D` | fire, smoke, sparks, dust in 3D (plays in the editor too) | like Particles2D, with `direction_x/y/z`, metres and metres per second, and `glow` |
-| `Camera3D` | what the game shows | `fov`, `near`, `far`, `current` |
-| `Light3D` | a light | `type` (directional / point / spot), `color`, `energy`, `range`, `angle`, `shadows` (the first directional light with shadows on casts them, sharp near the camera and softer out to the Environment's `shadow_distance`) |
+| `Camera3D` | what the game shows | `fov`, `near`, `far`, `current`; `ortho` (no perspective, `ortho_size` metres tall: strategy and puzzle views) |
+| `Light3D` | a light | `type` (directional / point / spot), `color`, `energy`, `range`, `angle`, `shadows` (the first directional light with shadows on casts them, sharp near the camera and softer out to the Environment's `shadow_distance`); `softness` (a spot's edge), `falloff` (how light fades toward `range`: 2 natural), `specular` (highlight strength), `shadow_strength` (how dark), `shadow_bias` (below 0 = the project's) |
 | `Body3D` | a physics object | like Body2D, plus `depth`, `vz`; `shape` box / sphere / capsule / hull (the outline of its first Mesh3D child's model: a barrel, a chair) |
 | `Collider3D` | a 3D area that reports what enters it (triggers, pickups, damage zones) | `shape` (box / sphere), `width`, `height`, `depth`, `radius`, `layer`, `mask` |
-| `Environment` | the sky, ambient light, fog, shadows and glow | `sky_top`, `sky_horizon`, `ground`, `sky_texture` (a panorama), `ambient`, `ambient_energy`, `fog_color`, `fog_start`, `fog_end`, `shadow_distance` (how far shadows reach, in metres), `bloom` (glow around bright things, 0 = off), `bloom_threshold` |
+| `Environment` | the sky, ambient light, fog, shadows and glow | `sky_top`, `sky_horizon`, `ground`, `sky_texture` (a panorama), `ambient`, `ambient_energy`, `fog_color`, `fog_start`, `fog_end`, `shadow_distance` (how far shadows reach, in metres), `bloom` (glow around bright things, 0 = off), `bloom_threshold`; `sky_energy`, `fog_mode` (linear: `fog_start` to `fog_end`; exp: thickens by `fog_density`), `shadow_split` (how much of the shadow distance gets the sharp shadows); color, on top of the project's: `exposure`, `contrast`, `saturation`, `tint`, `vignette` |
 
 Drag a model, picture or sound from the Assets panel into the scene view to make the right node
 for it.
+
+## Each node's own look
+
+Every node that draws has look settings of its own (the **Look** section of the Inspector),
+working on top of the project's graphics settings ([SETTINGS.md](SETTINGS.md)). Scripts change
+them like any property: `self.opacity = 0.5`, `SET("Ghost", "blend", "add")`.
+
+| Property | On | What it does |
+|---|---|---|
+| `opacity` | everything that draws, and UI | 1 solid, 0 invisible (it still runs and collides) |
+| `modulate` | Node2D, Node3D, bodies | a color multiplied into the node and everything under it; its alpha fades the whole group |
+| `blend` | sprites, tilemaps, 2D particles, meshes, Sprite3D | `normal`; `add` glows (fire, lasers, magic); `multiply` darkens (shadows, stains, tinted glass) |
+| `filter` | sprites, tilemaps, particles, meshes, Sprite3D | `pixel` (blocky texels), `smooth`, or `project` (the project's setting) |
+| `lit` | sprites, tilemaps, 2D particles | darkened by 2D lighting; off keeps full brightness (drawn above lit sprites) |
+| `receive_shadows`, `cast_shadows` | meshes, Sprite3D | shadows fall on it / it casts them |
+| `fog` | meshes, Sprite3D, 3D particles | the Environment's fog covers it |
+| `on_top` | meshes, Sprite3D | drawn over everything, ignoring what's in front (markers, x-ray) |
+| `sides` | Mesh3D | `front`, `both` (leaves, paper) or `auto` |
+| `alpha_cut` | meshes, Sprite3D | texels less opaque than this are holes (fences, leaves) |
+| `emissive`, `emissive_color` | Mesh3D, Sprite3D | glow on its own, in a color (bright with bloom) |
+| `rim`, `rim_color` | Mesh3D | light around its edges as the camera sees it: an outline or backlight |
+| `uv_offset_x/y`, `uv_scroll_x/y` | meshes, Sprite3D | shift the texture, or slide it every second (water, conveyor belts) |
+| `draw_distance` | meshes, Sprite3D | not drawn beyond this many metres from the camera (0 = always) |
+
+## Each body's own physics
+
+On top of the project's physics settings, Body2D and Body3D have (the **Physics** section of the
+Inspector), all changeable while the game runs:
+
+| Property | What it does |
+|---|---|
+| `mass` | its mass (0 = from its size and `density`) |
+| `friction`, `bounce` | grip, and bounciness (0 thud, 1 bounces back as high) |
+| `gravity_scale` | multiplies gravity for it (0 floats, negative rises) |
+| `linear_damping`, `angular_damping` | slows its movement / spinning over time, like air or water |
+| `ccd` | `on`, `off` or `project`: continuous collision, so fast bodies can't pass through thin walls |
+| `can_sleep` | may rest when still (cheaper); off keeps it always awake |
+| `enabled` | off takes it out of physics until turned back on |
+| `fixed_rotation` | never rotates from collisions |
+| `lock_x`, `lock_y`, `lock_z` | never moves along that axis (rails, 2.5D games) |
+| `spin` (2D), `spin_x/y/z` (3D) | how fast it spins, degrees per second: read it, or set it to spin the body |
 
 ## Collision layers
 

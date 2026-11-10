@@ -842,3 +842,53 @@ fn colors_from_text_and_lists() {
     assert_eq!(c("B"), [0.0, 1.0, 0.0, 0.5]);
     assert!(c("C")[2] > 0.9 && c("C")[0] < 0.3);
 }
+
+#[test]
+fn settings_change_live_from_scripts() {
+    // Five crates side by side, each with a different body setting; gravity turned up from a script.
+    let scene = r#"(root: (name: "R", kind: Some(Node2D), scripts: ["res://main.jlb"], children: [
+        (name: "Plain", kind: Some(Body2D), transform: Some((position: (0.0, 0.0, 0.0)))),
+        (name: "Off", kind: Some(Body2D), transform: Some((position: (100.0, 0.0, 0.0))), props: {"enabled": Bool(false)}),
+        (name: "Rail", kind: Some(Body2D), transform: Some((position: (200.0, 0.0, 0.0))), props: {"lock_y": Bool(true), "vx": Num(60.0)}),
+        (name: "Thick", kind: Some(Body2D), transform: Some((position: (300.0, 0.0, 0.0))), props: {"linear_damping": Num(8.0)}),
+        (name: "Spinner", kind: Some(Body2D), transform: Some((position: (400.0, 0.0, 0.0))), props: {"gravity_scale": Num(0.0), "spin": Num(90.0)}),
+    ]))"#;
+    let main = r#"
+DEF on_create() {
+    SET_PHYSICS("gravity_2d", [0, 2000])
+    SET_PHYSICS("tick_rate", 120)
+    SET_GRAPHICS("bloom", FALSE)
+    SET_GRAPHICS("tonemap", "aces")
+    self.gy = PHYSICS("gravity_2d").y
+    self.shadows = GRAPHICS().shadows
+}
+DEF on_step(dt) {
+    self.tm = GRAPHICS("tonemap")
+}
+"#;
+    let p = project("settings", &[("main.jscene", scene), ("main.jlb", main)]);
+    let mut g = Game::from_scene(p, "res://main.jscene", None).unwrap();
+    for _ in 0..60 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let logs = g.take_logs();
+    let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.clone()).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let list = g.render_list();
+    assert!(!list.graphics.bloom);
+    assert_eq!(list.graphics.tonemap, "aces");
+    let t = g.tree();
+    let y = |n: &str| t.nodes[t.find_path(None, n).unwrap()].transform.position.y;
+    let x = |n: &str| t.nodes[t.find_path(None, n).unwrap()].transform.position.x;
+    // One second at 2000 px/s²: about 1000 px down (much more than the default 980 gives).
+    assert!(y("R/Plain") > 900.0, "plain fell {}", y("R/Plain"));
+    assert_eq!(y("R/Off"), 0.0, "disabled bodies stay put");
+    assert!(y("R/Rail").abs() < 0.5 && x("R/Rail") > 230.0, "rail body slides but doesn't fall: {}, {}", x("R/Rail"), y("R/Rail"));
+    assert!(y("R/Thick") > 10.0 && y("R/Thick") < y("R/Plain") * 0.5, "damping slows the fall: {}", y("R/Thick"));
+    let spun = t.nodes[t.find_path(None, "R/Spinner").unwrap()].transform.rotation.z;
+    assert!((spun - 90.0).abs() < 5.0, "spinner turned {}", spun);
+    let root = t.find_path(None, "R").unwrap();
+    assert_eq!(t.nodes[root].props.get("tm"), Some(&Variant::Text("aces".into())));
+    assert_eq!(t.nodes[root].props.get("gy"), Some(&Variant::Num(2000.0)));
+    assert_eq!(t.nodes[root].props.get("shadows"), Some(&Variant::Bool(true)));
+}

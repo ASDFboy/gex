@@ -229,8 +229,8 @@ struct SettingsForm {
     hl2_on: bool,
     message: String,
     window: [u32; 2],
-    gravity_2d: f32,
-    gravity_3d: f32,
+    /// Which page: General, Graphics, Physics, Input, Half-Life 2.
+    tab: usize,
     /// (action name, keys as "space, w, pad_a").
     actions: Vec<(String, String)>,
     fullscreen: bool,
@@ -414,7 +414,7 @@ impl EditorApp {
                     st.show_export = true;
                     ui.close();
                 }
-                if ui.button("Project settings & mounts…").clicked() {
+                if ui.button("Project settings…").clicked() {
                     st.show_settings = true;
                     ui.close();
                 }
@@ -643,8 +643,6 @@ impl EditorApp {
             f.main_scene = st.project.config.main_scene.clone();
             f.message.clear();
             f.window = st.project.config.window_size;
-            f.gravity_2d = st.project.config.physics.gravity_2d[1];
-            f.gravity_3d = -st.project.config.physics.gravity_3d[1];
             f.actions = st.project.config.actions.iter().map(|(k, v)| (k.clone(), v.join(", "))).collect();
             f.fullscreen = st.project.config.fullscreen;
             f.resizable = st.project.config.resizable;
@@ -664,7 +662,61 @@ impl EditorApp {
             }
         }
         let mut open = true;
-        egui::Window::new("Project settings").open(&mut open).default_width(520.0).show(ctx, |ui| {
+        egui::Window::new("Project settings").open(&mut open).default_width(560.0).default_height(560.0).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                for (i, t) in ["General", "Graphics", "Physics", "Input", "Half-Life 2"].iter().enumerate() {
+                    ui.selectable_value(&mut f.tab, i, *t);
+                }
+            });
+            ui.separator();
+            if f.tab == 1 || f.tab == 2 {
+                let graphics = f.tab == 1;
+                ui.label(
+                    RichText::new(if graphics {
+                        "How the game looks. Changes show in the view at once; Save keeps them. Scripts change them while playing with SET_GRAPHICS(\"name\", value)."
+                    } else {
+                        "How physics works. Save keeps changes. Scripts change them while playing with SET_PHYSICS(\"name\", value)."
+                    })
+                    .small()
+                    .color(theme::TEXT_DIM),
+                );
+                egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
+                    if graphics {
+                        let cfg = &mut st.project.config.graphics;
+                        let changes = settings_rows(ui, gex_core::settings::Graphics::FIELDS, &|k| cfg.get(k));
+                        for (k, v) in changes {
+                            let _ = cfg.set(&k, &v);
+                        }
+                    } else {
+                        let cfg = &mut st.project.config.physics;
+                        let changes = settings_rows(ui, gex_core::settings::PhysicsSettings::FIELDS, &|k| cfg.get(k));
+                        for (k, v) in changes {
+                            let _ = cfg.set(&k, &v);
+                        }
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        f.message = match st.project.save() {
+                            Ok(()) => "Saved.".into(),
+                            Err(e) => e,
+                        };
+                    }
+                    if ui.button("Back to defaults").on_hover_text("every setting on this page").clicked() {
+                        if graphics {
+                            st.project.config.graphics = Default::default();
+                        } else {
+                            st.project.config.physics = Default::default();
+                        }
+                    }
+                    if !f.message.is_empty() {
+                        ui.colored_label(theme::GOOD, &f.message);
+                    }
+                });
+                return;
+            }
+            if f.tab == 0 {
             egui::Grid::new("proj").num_columns(2).show(ui, |ui| {
                 ui.label("Name");
                 ui.text_edit_singleline(&mut f.name);
@@ -702,14 +754,9 @@ impl EditorApp {
                     f.icon = p.0.clone();
                 }
                 ui.end_row();
-                ui.label("Gravity 2D");
-                ui.add(egui::DragValue::new(&mut f.gravity_2d).speed(10.0).suffix(" px/s² down"));
-                ui.end_row();
-                ui.label("Gravity 3D");
-                ui.add(egui::DragValue::new(&mut f.gravity_3d).speed(0.1).suffix(" m/s² down"));
-                ui.end_row();
             });
-            ui.separator();
+            }
+            if f.tab == 3 {
             ui.label(RichText::new("Input actions").strong());
             ui.label(
                 RichText::new("Name an action once and give it any keys: then KEY_DOWN(\"jump\") and on_press_jump() work with all of them. Keys: a–z, 0–9, space, enter, escape, shift, left, right, up, down, mouse_left, mouse_right, pad_a, pad_b, pad_x, pad_y, pad_left, pad_start…")
@@ -732,7 +779,8 @@ impl EditorApp {
             if ui.small_button("+ Action").clicked() {
                 f.actions.push((String::new(), String::new()));
             }
-            ui.separator();
+            }
+            if f.tab == 4 {
             ui.label(RichText::new("Half-Life 2 assets").strong());
             ui.label(
                 RichText::new("Reads textures, materials and other files straight from your own Steam install (hl2://…). Nothing is copied into the project, and exported games never include these files.")
@@ -759,6 +807,7 @@ impl EditorApp {
                     ui.text_edit_singleline(&mut f.hl2_games);
                 });
             });
+            }
             if !f.message.is_empty() {
                 ui.colored_label(theme::WARN, &f.message);
             }
@@ -771,8 +820,6 @@ impl EditorApp {
                 st.project.config.resizable = f.resizable;
                 st.project.config.vsync = f.vsync;
                 st.project.config.icon = f.icon.trim().to_string();
-                st.project.config.physics.gravity_2d = [0.0, f.gravity_2d];
-                st.project.config.physics.gravity_3d = [0.0, -f.gravity_3d, 0.0];
                 st.project.config.actions = f
                     .actions
                     .iter()
@@ -989,6 +1036,7 @@ fn browse_button(ui: &mut egui::Ui) -> Option<String> {
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let frame_start = std::time::Instant::now();
         crate::startup::mark_running();
         let ctx = ui.ctx().clone();
         theme::backdrop(&ctx);
@@ -1004,8 +1052,8 @@ impl eframe::App for EditorApp {
                 p.axes = axes;
             }
             st.pump_game();
-            if st.playing.is_some() {
-                ctx.request_repaint();
+            if let Some(p) = &st.playing {
+                repaint_capped(&ctx, p.list.graphics.fps_cap, frame_start);
             }
             // MOUSE_LOCK: hold the mouse while the game wants it; Escape lets go until the
             // game view is clicked again.
@@ -1139,13 +1187,15 @@ impl PlayerApp {
         let text = project.read_text(&project.config.main_scene)?;
         let tree = gex_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
-        let list = gex_core::render::extract(&tree);
+        let mut list = gex_core::render::extract(&tree);
+        list.graphics = project.config.graphics.clone();
         Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied_full: None, applied_title: None })
     }
 }
 
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let frame_start = std::time::Instant::now();
         crate::startup::mark_running();
         let ctx = ui.ctx().clone();
         for m in self.handle.poll() {
@@ -1248,6 +1298,93 @@ impl eframe::App for PlayerApp {
             self.ui_events.extend(ev);
             viewport::paint_fade(ui, rect, self.list.fade);
         });
-        ctx.request_repaint();
+        repaint_capped(&ctx, self.list.graphics.fps_cap, frame_start);
     }
+}
+
+/// Asks for the next frame: at once, or (with a frame-rate cap) when the frame's time is up.
+fn repaint_capped(ctx: &egui::Context, cap: u32, frame_start: std::time::Instant) {
+    if cap == 0 {
+        ctx.request_repaint();
+    } else {
+        let budget = std::time::Duration::from_secs_f64(1.0 / cap as f64);
+        ctx.request_repaint_after(budget.saturating_sub(frame_start.elapsed()));
+    }
+}
+
+/// Editors for a list of settings, in their sections. Gives back the ones changed.
+fn settings_rows(ui: &mut egui::Ui, fields: &[gex_core::settings::FieldInfo], get: &dyn Fn(&str) -> Option<gex_core::Variant>) -> Vec<(String, gex_core::Variant)> {
+    use gex_core::Variant;
+    let mut changes = Vec::new();
+    let mut sections: Vec<&str> = Vec::new();
+    for f in fields {
+        if !sections.contains(&f.section) {
+            sections.push(f.section);
+        }
+    }
+    for sec in sections {
+        egui::CollapsingHeader::new(RichText::new(sec).strong()).id_salt(("settings", sec, fields.len())).default_open(true).show(ui, |ui| {
+            egui::Grid::new(("settings grid", sec, fields.len())).num_columns(2).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
+                for f in fields.iter().filter(|f| f.section == sec) {
+                    let Some(mut v) = get(f.name) else { continue };
+                    ui.label(f.name.replace('_', " ")).on_hover_text(f.doc);
+                    let changed = match (&mut v, f.kind) {
+                        (Variant::Text(cur), "choice") => {
+                            let mut ch = false;
+                            egui::ComboBox::from_id_salt(("setting", f.name)).selected_text(cur.as_str()).show_ui(ui, |ui| {
+                                for c in f.choices {
+                                    if ui.selectable_label(cur == c, *c).clicked() && cur != c {
+                                        *cur = c.to_string();
+                                        ch = true;
+                                    }
+                                }
+                            });
+                            ch
+                        }
+                        (Variant::Num(n), "whole") => {
+                            let mut k = *n as i64;
+                            let r = ui.add(egui::Slider::new(&mut k, f.min as i64..=f.max as i64));
+                            *n = k as f64;
+                            r.changed()
+                        }
+                        (Variant::Num(n), _) if f.max > f.min => ui.add(egui::Slider::new(n, f.min..=f.max).max_decimals(3)).changed(),
+                        (Variant::Num(n), _) => ui.add(egui::DragValue::new(n).speed(0.05)).changed(),
+                        (Variant::Bool(b), _) => ui.checkbox(b, "").changed(),
+                        (Variant::Color(c), _) => {
+                            let mut c32 = egui::Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8);
+                            let r = egui::color_picker::color_edit_button_srgba(ui, &mut c32, egui::color_picker::Alpha::OnlyBlend);
+                            if r.changed() {
+                                let [rr, g, b, a] = c32.to_srgba_unmultiplied();
+                                *c = [rr as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0];
+                            }
+                            r.changed()
+                        }
+                        (Variant::Vec2(p), _) => {
+                            let mut ch = false;
+                            ui.horizontal(|ui| {
+                                ch |= ui.add(egui::DragValue::new(&mut p[0]).prefix("x ").speed(1.0)).changed();
+                                ch |= ui.add(egui::DragValue::new(&mut p[1]).prefix("y ").speed(1.0)).changed();
+                            });
+                            ch
+                        }
+                        (Variant::Vec3(p), _) => {
+                            let mut ch = false;
+                            ui.horizontal(|ui| {
+                                for (k, l) in ["x ", "y ", "z "].iter().enumerate() {
+                                    ch |= ui.add(egui::DragValue::new(&mut p[k]).prefix(*l).speed(0.05)).changed();
+                                }
+                            });
+                            ch
+                        }
+                        _ => false,
+                    };
+                    if changed {
+                        changes.push((f.name.to_string(), v));
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    }
+    changes
 }

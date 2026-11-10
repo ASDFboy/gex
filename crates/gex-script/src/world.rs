@@ -278,7 +278,7 @@ impl Game {
             touching: HashSet::new(),
             queue: VecDeque::new(),
             timers: Vec::new(),
-            physics: crate::physics::Physics::new(project.config.physics.gravity_2d, project.config.physics.gravity_3d),
+            physics: crate::physics::Physics::new(project.config.physics.clone()),
             audio: Default::default(),
             vfs: gex_assets::Vfs::new(&project.dir, &project.config),
             axes: HashMap::new(),
@@ -793,9 +793,13 @@ impl Game {
         if !paused {
             self.physics_acc += dt;
         }
-        let step = 1.0 / PHYSICS_HZ;
+        let (step, max_steps) = {
+            let st = self.st.borrow();
+            let s = &st.physics.settings;
+            (1.0 / s.tick_rate.clamp(10.0, 480.0) as f64, s.max_steps.max(1))
+        };
         let mut steps = 0;
-        while self.physics_acc >= step && steps < 5 {
+        while self.physics_acc >= step && steps < max_steps {
             self.physics_acc -= step;
             steps += 1;
             self.broadcast("on_physics", vec![num(step)]);
@@ -815,9 +819,10 @@ impl Game {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
             let frozen: Vec<NodeId> = if st.paused { st.particles.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
-            crate::particles::update(&st.tree, &mut st.particles, dt as f32, &frozen);
+            let amount = st.project.config.graphics.particles.clamp(0.0, 1.0) as f64;
+            crate::particles::update(&st.tree, &mut st.particles, dt as f32, &frozen, amount);
             let frozen3: Vec<NodeId> = if st.paused { st.particles_3d.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
-            crate::particles::update_3d(&st.tree, &mut st.particles_3d, dt as f32, &frozen3);
+            crate::particles::update_3d(&st.tree, &mut st.particles_3d, dt as f32, &frozen3, amount);
         }
         self.timers(dt);
         let finished = {
@@ -1232,6 +1237,7 @@ impl Game {
     pub fn render_list(&self) -> gex_core::render::RenderList {
         let st = self.st.borrow();
         let mut list = gex_core::render::extract(&st.tree);
+        list.graphics = st.project.config.graphics.clone();
         crate::particles::draw(&st.tree, &st.particles, &mut list);
         crate::particles::draw_3d(&st.tree, &st.particles_3d, &mut list);
         let ragdolls: HashMap<NodeId, std::sync::Arc<Vec<glam::Mat4>>> = st.physics.ragdoll_poses(&st.tree).into_iter().map(|(id, p)| (id, std::sync::Arc::new(p))).collect();

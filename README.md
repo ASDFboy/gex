@@ -93,6 +93,7 @@ and start it again.
    animation, cameras, tweens and particles, UI, input actions, saving, 3D, first person,
    Half-Life 2 assets, debugging.
 3. Reference: [every node](docs/NODES.md), [every script event and command](docs/SCRIPTING.md),
+   [graphics and physics settings](docs/SETTINGS.md) (all changeable from scripts while playing),
    [the built-in placeholder art](docs/PLACEHOLDERS.md) (`gex://`: 700 shapes, patterns, icons
    and more, ready to drag into a scene).
 
