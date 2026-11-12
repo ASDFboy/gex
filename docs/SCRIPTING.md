@@ -34,6 +34,26 @@ DEF on_collide_start(other) {
 All scripts on one object share the object, so they can talk through `self`; each keeps its own
 outside variables.
 
+### Without `self.`
+
+A property can be named by itself: `x += speed * dt` is `self.x += self.speed * dt`. The bare
+name means the property only when nothing else has that name. The script's own variables, a
+function's inputs and its `LOCAL`s come first:
+
+```
+count = 0                 >> the script's own variable (a first value given outside functions)
+DEF on_step(dt) {
+	x += 200 * dt         >> the object's x
+	visible = FALSE       >> the object's visible
+	LOCAL y = 10          >> a variable of this function, not the object's y
+	GLOBAL count += 1     >> the script's count
+}
+```
+
+So inside a function, giving a value to a name the object has changes the object; write
+`LOCAL` for a throwaway variable that happens to share a property's name. Only properties the
+object actually has are found this way (`self.anything` still reads NULL for one it hasn't).
+
 ## Variables set per instance: `$name`
 
 A line with just `$name` at the top of a script declares a variable whose value isn't in the

@@ -292,7 +292,7 @@ fn model_animation_and_mesh_collision() {
 fn breakpoints_pause_and_scripts_reload() {
     use crate::thread::{FromGame, GameHandle};
     let blueprint = r#"(root: (name: "R", kind: Some(Object2D), scripts: ["res://s.jlb"]))"#;
-    let p = project("debug", &[("main.jblueprint", blueprint), ("s.jlb", "count = 0\nDEF on_step(dt) {\n    x = 41\n    GLOBAL count += 1\n}\n")]);
+    let p = project("debug", &[("main.jblueprint", blueprint), ("s.jlb", "count = 0\nDEF on_step(dt) {\n    LOCAL x = 41\n    GLOBAL count += 1\n}\n")]);
     let text = p.read_text("res://main.jblueprint").unwrap();
     let tree = gex_core::blueprint::load(&text, &|q: &str| p.read_text(q)).unwrap();
     let mut h = GameHandle::start(p.clone(), tree.clone());
@@ -913,6 +913,30 @@ fn dollar_variables_are_set_per_instance() {
     assert!((t.objects[a].transform.position.x - 60.0).abs() < 0.01, "A uses its own speed");
     assert_eq!(t.objects[b].transform.position.x, 0.0, "B was given none: 0");
     assert_eq!(t.objects[a].props.get("label"), Some(&Variant::Text("moved".into())));
+}
+
+#[test]
+fn properties_can_be_named_without_self() {
+    let blueprint = r#"(root: (name: "Root", kind: Some(Object2D), children: [
+        (name: "A", kind: Some(Sprite2D), scripts: ["res://mover.jlb"], props: {"speed": Num(60.0), "hits": Num(0.0)}),
+    ]))"#;
+    // x, speed and hits are the object's; count is the script's own and stays so; a LOCAL or
+    // an input with a property's name is the function's own.
+    let script = "count = 0\nDEF on_step(dt) {\n    x += speed * dt\n    hits = hits + 1\n    GLOBAL count += 1\n    LOCAL y = 500\n    nudge(3)\n}\nDEF nudge(rotation) {\n    rotation = 9\n}\n";
+    let p = project("bare", &[("blueprints/main.jblueprint", blueprint), ("mover.jlb", script)]);
+    let mut g = Game::from_blueprint(p, "res://blueprints/main.jblueprint", None).unwrap();
+    for _ in 0..60 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    }
+    let errors: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errors.is_empty(), "{:#?}", errors);
+    let t = g.tree();
+    let a = t.find_path(None, "Root/A").unwrap();
+    assert!((t.objects[a].transform.position.x - 60.0).abs() < 0.01);
+    assert_eq!(t.objects[a].transform.position.y, 0.0, "LOCAL y is the function's own");
+    assert_eq!(t.objects[a].transform.rotation.z, 0.0, "an input is the function's own");
+    assert_eq!(t.objects[a].props.get("hits"), Some(&Variant::Num(60.0)));
+    assert_eq!(t.objects[a].props.get("count"), None);
 }
 
 /// Runs a blueprint for some frames at a frame rate and gives the game back.

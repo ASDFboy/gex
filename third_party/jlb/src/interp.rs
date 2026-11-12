@@ -653,7 +653,37 @@ impl Interp {
 
     // ---------- variables ----------
 
+    /// What a name means when read: a variable, or else (for a file a host loaded with a
+    /// `self` table, like a game object's script) the entry of `self` with that name, so
+    /// `speed` reads `self.speed` when nothing else is called speed.
     pub fn lookup(&self, name: &str) -> Option<Slot> {
+        self.lookup_var(name).or_else(|| self.self_entry(name))
+    }
+
+    /// The entry `name` of the file's `self` table, if it has both.
+    fn self_entry(&self, name: &str) -> Option<Slot> {
+        if name == "self" {
+            return None;
+        }
+        let s = self.frame().env.borrow().get("self").cloned()?;
+        let v = s.borrow();
+        match &*v {
+            Value::Table(t, _) => t.named.get(name).cloned(),
+            _ => None,
+        }
+    }
+
+    /// `self`'s entry for a name a function gives a value to, when the name is nobody
+    /// else's: not the function's own, not one of the file's.
+    fn self_entry_for_write(&self, name: &str) -> Option<Slot> {
+        let f = self.frame();
+        if f.func.is_none() || f.env.borrow().get(name).is_some() {
+            return None;
+        }
+        self.self_entry(name)
+    }
+
+    fn lookup_var(&self, name: &str) -> Option<Slot> {
         let f = self.frame();
         for s in f.scopes.iter().rev() {
             if let Some(x) = s.get(name) {
@@ -686,7 +716,7 @@ impl Interp {
     fn lookup_own(&self, name: &str) -> Option<Slot> {
         let f = self.frame();
         if f.func.is_none() {
-            return self.lookup(name);
+            return self.lookup_var(name);
         }
         f.scopes.iter().rev().find_map(|s| s.get(name).cloned())
     }
@@ -700,7 +730,10 @@ impl Interp {
                 type_ok(&s, &v, name)?;
                 *s.borrow_mut() = v;
             }
-            None => self.create_var(name.clone(), new_slot(v)),
+            None => match self.self_entry_for_write(name) {
+                Some(s) => *s.borrow_mut() = v,
+                None => self.create_var(name.clone(), new_slot(v)),
+            },
         }
         Ok(())
     }
@@ -1357,7 +1390,7 @@ impl Interp {
                     let v = copy_val(self.eval(rhs)?);
                     return self.set_var(n, v);
                 }
-                let slot = match self.lookup_own(n) {
+                let slot = match self.lookup_own(n).or_else(|| self.self_entry_for_write(n)) {
                     Some(s) => s,
                     None if self.lookup(n).is_some() => {
                         return err(format!(
