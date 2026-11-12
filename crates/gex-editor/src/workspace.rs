@@ -407,7 +407,14 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
     }
     let focus = l.script_focus.take();
     let list = l.scripts.entry(tab.to_string()).or_default();
-    list.retain(|r| st.scripts.contains_key(r));
+    // Scripts remembered from last time are loaded again; those whose file is gone close.
+    list.retain(|r| st.scripts.contains_key(r) || st.project.res_to_path(r).is_some_and(|p| p.is_file()));
+    for r in list.iter() {
+        if !st.scripts.contains_key(r) {
+            st.open_script(r, None);
+            st.open_requests.pop();
+        }
+    }
     let ctx = ui.ctx().clone();
     let wires = ui.painter().with_clip_rect(view);
     // One window per object: its scripts are tabs in it. (A script no object here has gets

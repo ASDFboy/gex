@@ -276,11 +276,13 @@ impl EditorApp {
                 let mut st = EditorState::new(p);
                 st.load_asset_colors();
                 // The blueprint opened at start doesn't take over the tab that was showing.
-                if let Some(r) = &st.blueprint_res {
-                    if !self.ws.tabs.contains(r) {
-                        self.ws.tabs.push(r.clone());
-                    }
-                    self.ws.active = self.ws.tabs.iter().position(|t| t == r).unwrap_or(0);
+                // The tabs (and the one showing) are as they were left; a project opened for
+                // the first time shows its first blueprint.
+                self.ws.tabs.retain(|t| st.project.res_to_path(t).is_some_and(|p| p.is_file()));
+                self.ws.active = self.ws.active.min(self.ws.tabs.len().saturating_sub(1));
+                match self.ws.tabs.get(self.ws.active).cloned() {
+                    Some(t) => st.open_blueprint(&t),
+                    None => self.ws.tabs.extend(st.blueprint_res.clone()),
                 }
                 self.ws.last_blueprint = st.blueprint_res.clone();
                 self.st = Some(st);

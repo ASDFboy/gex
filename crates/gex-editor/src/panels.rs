@@ -1058,6 +1058,34 @@ fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<(String,
             out.push((e.path, e.is_dir));
         }
     }
+    // A script that belongs to just one object isn't listed: it's opened from that object
+    // (Events). Counted over every blueprint file, with the open one as it is right now.
+    {
+        type Uses = (u64, std::sync::Arc<Vec<String>>);
+        let uid = egui::Id::new("blueprint texts");
+        let blueprints: Vec<&String> = out.iter().filter(|(p, d)| !d && p.ends_with(".jblueprint") && Some(p) != st.blueprint_res.as_ref()).map(|(p, _)| p).collect();
+        let stamp = blueprints.iter().fold(blueprints.len() as u64, |h, p| {
+            let m = st.project.res_to_path(p).and_then(|f| std::fs::metadata(f).ok());
+            let t = m.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64);
+            h.wrapping_mul(31).wrapping_add(t ^ m.map_or(0, |m| m.len()))
+        });
+        let texts = match ui.data(|d| d.get_temp::<Uses>(uid)).filter(|u| u.0 == stamp) {
+            Some(u) => u.1,
+            None => {
+                let t = std::sync::Arc::new(blueprints.iter().filter_map(|p| st.project.read_text(p).ok()).collect::<Vec<_>>());
+                ui.data_mut(|d| d.insert_temp::<Uses>(uid, (stamp, t.clone())));
+                t
+            }
+        };
+        let here = |script: &str| st.tree.objects.iter().filter(|(_, n)| !n.from_instance && n.scripts.iter().any(|x| x == script)).count();
+        out.retain(|(p, d)| {
+            if *d || !p.ends_with(".jlb") {
+                return true;
+            }
+            let quoted = format!("\"{}\"", p);
+            texts.iter().map(|t| t.matches(quoted.as_str()).count()).sum::<usize>() + here(p) != 1
+        });
+    }
     out.sort_by_key(|p| p.0.to_lowercase());
     let files = std::sync::Arc::new(out);
     let settled = old.is_some_and(|o| *o.2 == *files);
