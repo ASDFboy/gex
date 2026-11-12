@@ -51,11 +51,13 @@ pub struct Rex {
     /// It wasn't found: the panel asks where it is.
     ask_path: bool,
     path_input: String,
+    /// What Claude Code printed besides its answer, this run.
+    stderr: Vec<String>,
 }
 
 impl Default for Rex {
     fn default() -> Self {
-        Rex { open: false, lines: Vec::new(), input: String::new(), can_edit: false, session: None, running: None, project: Default::default(), reload: false, program: None, ask_path: false, path_input: String::new() }
+        Rex { open: false, lines: Vec::new(), input: String::new(), can_edit: false, session: None, running: None, project: Default::default(), reload: false, program: None, ask_path: false, path_input: String::new(), stderr: Vec::new() }
     }
 }
 
@@ -159,21 +161,42 @@ fn claude(at: &std::path::Path) -> Command {
     Command::new(at)
 }
 
-/// What REX is told about where it is, ahead of the first question.
+/// What REX knows before it reads the question: what GEX is, the whole JLB language, every
+/// engine command, event, kind of object and property, and a small game as an example. It
+/// goes in as part of its instructions, so it doesn't have to go looking for any of it.
 fn briefing() -> String {
-    let docs = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("docs"))).filter(|d| d.is_dir());
     let mut s = String::from(
-        "You are REX, the assistant built into the GEX game engine's editor. The folder you are in is a GEX project. \
-         Blueprints (.jblueprint, RON text) are saved trees of objects; an object can be an instance of another blueprint. \
-         Scripts (.jlb) are written in JLB: ALL-CAPS words are commands, functions named on_... are events the engine calls, \
-         `self` is the object the script is on, `$name` is a variable set per instance. project.jproj holds the project's settings. \
-         Answer briefly and plainly. Don't guess at commands or properties: ",
+        "You are REX, the assistant built into the editor of GEX, a 2D and 3D game engine. The folder you are in is a GEX project.\n\n\
+         How GEX works:\n\
+         - A blueprint (.jblueprint, RON text) is a saved tree of objects. An object has a kind (Sprite2D, Body3D, Label...), a transform, properties, scripts and children. An object can be an instance of another blueprint file (`instance: Some(\"res://...\")`), which is how reusable things (a coin, an enemy, a tower) are made.\n\
+         - Scripts (.jlb) are written in JLB, the language documented below. A script is attached to an object by listing its res:// path in that object's `scripts`. The engine calls its functions named on_... (events). `self` is the object. `$name` on a line of its own declares a variable set per instance in the editor.\n\
+         - project.jproj holds the project's settings, including `main_blueprint`, where the game starts. Paths inside a project are written res://folder/file.\n\
+         - Only what differs from a kind's defaults is written in a blueprint file. 2D positions are pixels with y down; 3D is metres with y up.\n\n\
+         Rules:\n\
+         - Everything you need about JLB and GEX is below: use it instead of searching for documentation, and never guess a command, event or property that isn't in it.\n\
+         - Read the project's existing blueprints and scripts before changing them, and match how they do things.\n\
+         - Keep scripts small and commented the way the example is. Comments in JLB start with >>.\n\
+         - You can't run the game. Say what you made and what the user should check by pressing Play.\n\
+         - Never touch the .gex or .trash folders. Answer briefly and plainly.\n\n",
     );
-    match docs {
-        Some(d) => s.push_str(&format!("the engine's documentation is in {} (SCRIPTING.md lists every command and event, OBJECTS.md every kind of object and its properties); read what you need there.", d.display())),
-        None => s.push_str("look at how the project's own scripts and blueprints do things."),
+    for (title, text) in [
+        ("JLB: syntax", include_str!("../../../third_party/jlb/docs/02-syntax.md")),
+        ("JLB: values and types", include_str!("../../../third_party/jlb/docs/03-values-and-types.md")),
+        ("JLB: operators", include_str!("../../../third_party/jlb/docs/04-operators.md")),
+        ("JLB: control flow", include_str!("../../../third_party/jlb/docs/05-control-flow.md")),
+        ("JLB: functions", include_str!("../../../third_party/jlb/docs/06-functions.md")),
+        ("JLB: tables and text", include_str!("../../../third_party/jlb/docs/07-tables-and-text.md")),
+        ("JLB: errors", include_str!("../../../third_party/jlb/docs/08-errors.md")),
+        ("JLB: built-in commands", include_str!("../../../third_party/jlb/docs/10-built-ins.md")),
+        ("JLB: tasks", include_str!("../../../third_party/jlb/docs/11-tasks.md")),
+        ("GEX: scripting (every engine command and event)", include_str!("../../../docs/SCRIPTING.md")),
+        ("GEX: kinds of object and their properties", include_str!("../../../docs/OBJECTS.md")),
+        ("Example: a blueprint (Breakout)", include_str!("../../../samples/blueprints/breakout.jblueprint")),
+        ("Example: its main script", include_str!("../../../samples/scripts/breakout.jlb")),
+        ("Example: a reusable blueprint it spawns (a brick)", include_str!("../../../samples/blueprints/brick.jblueprint")),
+    ] {
+        s.push_str(&format!("\n\n===== {} =====\n\n{}", title, text));
     }
-    s.push_str(" Never touch the .gex or .trash folders.\n\n");
     s
 }
 
@@ -191,7 +214,7 @@ impl Rex {
         }
         // What it reads should be what you see.
         st.save_all();
-        let mut prompt = if self.session.is_none() { briefing() } else { String::new() };
+        let mut prompt = String::new();
         if let Some(b) = &st.blueprint_res {
             prompt.push_str(&format!("(Open in the editor: {}", b.trim_start_matches("res://")));
             if let Some(id) = st.selected.filter(|i| st.tree.contains(*i)) {
@@ -215,8 +238,11 @@ impl Rex {
         if let Some(s) = &self.session {
             cmd.args(["--resume", s]);
         }
-        if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("docs"))).filter(|d| d.is_dir()) {
-            cmd.arg("--add-dir").arg(d);
+        // Its instructions go in a file (no quoting to get wrong, and no length limit).
+        let brief = crate::state::config_dir().join("rex_context.md");
+        let _ = std::fs::create_dir_all(crate::state::config_dir());
+        if std::fs::write(&brief, briefing()).is_ok() {
+            cmd.arg("--append-system-prompt-file").arg(&brief);
         }
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = match cmd.spawn() {
@@ -255,6 +281,7 @@ impl Rex {
             let _ = tx.send(FromClaude::Done);
             ctx.request_repaint();
         });
+        self.stderr.clear();
         self.running = Some((child, rx));
     }
 
@@ -271,24 +298,30 @@ impl Rex {
     fn pump(&mut self) {
         let Some((_, rx)) = &self.running else { return };
         let got: Vec<FromClaude> = rx.try_iter().collect();
-        let mut stderr = Vec::new();
         for m in got {
             match m {
                 FromClaude::Json(l) => self.take(&l),
-                FromClaude::Stderr(l) => stderr.push(l),
+                // Claude Code prints notes and warnings of its own there; they only matter
+                // if the run fails.
+                FromClaude::Stderr(l) => {
+                    if !l.trim().is_empty() && self.stderr.len() < 40 {
+                        self.stderr.push(l);
+                    }
+                }
                 FromClaude::Done => {
-                    if let Some((mut child, _)) = self.running.take() {
-                        let _ = child.wait();
+                    let failed = match self.running.take() {
+                        Some((mut child, _)) => !child.wait().map(|s| s.success()).unwrap_or(false),
+                        None => false,
+                    };
+                    let said = std::mem::take(&mut self.stderr).join("\n");
+                    let answered = self.lines.iter().rev().take_while(|l| !matches!(l, Line::You(_))).any(|l| matches!(l, Line::Rex(_) | Line::Problem(_)));
+                    if failed && !answered {
+                        let hint = if said.contains("not recognized") || said.contains("not found") { "\n\nClaude Code doesn't seem to be installed. Install it, run `claude` once in a terminal to sign in, then ask again." } else { "" };
+                        self.lines.push(Line::Problem(format!("{}{}", if said.is_empty() { "Claude Code stopped without an answer." } else { &said }, hint)));
                     }
                     self.reload = true;
                 }
             }
-        }
-        let said: Vec<String> = stderr.into_iter().filter(|l| !l.trim().is_empty()).collect();
-        if !said.is_empty() {
-            let text = said.join("\n");
-            let hint = if text.contains("not recognized") || text.contains("not found") { "\n\nClaude Code doesn't seem to be installed. Install it, run `claude` once in a terminal to sign in, then ask again." } else { "" };
-            self.lines.push(Line::Problem(format!("{}{}", text, hint)));
         }
     }
 
@@ -310,18 +343,28 @@ impl Rex {
                         }
                         Some("tool_use") => {
                             let input = &part["input"];
-                            let what = ["file_path", "path", "pattern", "command", "description"].iter().find_map(|k| input[*k].as_str()).unwrap_or("");
-                            let short = what.replace('\\', "/");
-                            let short = short.rsplit('/').next().unwrap_or(&short);
-                            let verb = match part["name"].as_str().unwrap_or("") {
-                                "Read" => "read",
-                                "Edit" | "MultiEdit" => "changed",
-                                "Write" => "wrote",
-                                "Glob" | "Grep" => "searched for",
-                                "Bash" => "ran",
-                                other => other,
+                            let get = |k: &str| input[k].as_str().unwrap_or("").to_string();
+                            let file = |k: &str| {
+                                let p = get(k).replace('\\', "/");
+                                p.rsplit('/').next().unwrap_or("").to_string()
                             };
-                            self.lines.push(Line::Did(format!("{} {}", verb, short).trim().to_string()));
+                            let clip = |t: String| if t.chars().count() > 60 { format!("{}…", t.chars().take(60).collect::<String>()) } else { t };
+                            let line = match part["name"].as_str().unwrap_or("") {
+                                "Read" => format!("read {}", file("file_path")),
+                                "Edit" | "MultiEdit" => format!("changed {}", file("file_path")),
+                                "Write" => format!("wrote {}", file("file_path")),
+                                "Glob" | "Grep" => format!("searched for {}", clip(get("pattern"))),
+                                // What it says the command is for, or the command itself.
+                                "Bash" => {
+                                    let why = get("description");
+                                    if why.is_empty() { format!("ran {}", clip(get("command"))) } else { clip(why) }
+                                }
+                                "TodoWrite" | "TaskCreate" | "TaskUpdate" => String::new(),
+                                other => other.to_string(),
+                            };
+                            if !line.trim().is_empty() {
+                                self.lines.push(Line::Did(line));
+                            }
                         }
                         _ => {}
                     }
@@ -329,6 +372,11 @@ impl Rex {
             }
             Some("result") => {
                 if v["is_error"].as_bool() == Some(true) {
+                    // The same words may have just come as its answer: say them once.
+                    let text = v["result"].as_str().unwrap_or("");
+                    if matches!(self.lines.last(), Some(Line::Rex(t)) if t == text.trim()) {
+                        self.lines.pop();
+                    }
                     self.lines.push(Line::Problem(v["result"].as_str().unwrap_or("something went wrong").to_string()));
                 }
             }
