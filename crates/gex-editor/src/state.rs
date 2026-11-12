@@ -126,6 +126,8 @@ pub struct EditorState {
     /// Blueprints to open as windows in the workspace.
     pub open_windows: Vec<String>,
     pub playing: Option<Playing>,
+    /// The game built and running in a window of its own (the Build button).
+    pub build: Option<Build>,
     pub renderer: Option<Renderer>,
     pub mode_3d: bool,
     pub cam2: EditorCamera2D,
@@ -204,6 +206,7 @@ impl EditorState {
             open_requests: Vec::new(),
             open_windows: Vec::new(),
             playing: None,
+            build: None,
             renderer: None,
             mode_3d: false,
             cam2: EditorCamera2D::default(),
@@ -1509,6 +1512,87 @@ impl EditorState {
         self.export_game_for(dest, p, &player, &self.project.config.name.clone())
     }
 
+    /// Build: saves everything, copies the game as it is now to a temporary folder and runs
+    /// that in a window of its own, with the project's own window and graphics settings. The
+    /// copy is deleted when the game closes; nothing is kept (unlike Export).
+    pub fn build_and_run(&mut self) {
+        self.build = None; // closes a build that's still running
+        self.save_all();
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("gex-build-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let _ = std::fs::remove_dir_all(&dir);
+        let run = || -> Result<Build, String> {
+            let mut stack = vec![self.project.dir.clone()];
+            while let Some(d) = stack.pop() {
+                let out = dir.join(d.strip_prefix(&self.project.dir).unwrap());
+                std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+                for e in std::fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+                    let name = e.file_name();
+                    if name.to_string_lossy().starts_with('.') {
+                        continue;
+                    }
+                    if e.path().is_dir() {
+                        stack.push(e.path());
+                    } else {
+                        std::fs::copy(e.path(), out.join(&name)).map_err(|x| format!("{}: {}", e.path().display(), x))?;
+                    }
+                }
+            }
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let mut child = std::process::Command::new(exe)
+                .arg("--play")
+                .arg(&dir)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("couldn't start the game: {}", e))?;
+            // What the game prints comes back to the console.
+            let (tx, lines) = std::sync::mpsc::channel();
+            if let Some(err) = child.stderr.take() {
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    for l in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+                        if tx.send(l).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            Ok(Build { child, dir: dir.clone(), lines })
+        };
+        match run() {
+            Ok(b) => {
+                self.build = Some(b);
+                self.status = "Built. The game is running in its own window.".into();
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                self.log(LogKind::Error, format!("Build: {}", e));
+            }
+        }
+    }
+
+    /// Looks after the built game: passes on what it prints, and cleans up once it's closed.
+    /// True while it's running.
+    pub fn poll_build(&mut self) -> bool {
+        let Some(b) = self.build.as_mut() else { return false };
+        let lines: Vec<String> = b.lines.try_iter().collect();
+        let done = b.child.try_wait().map(|s| s.is_some()).unwrap_or(true);
+        for l in lines {
+            // The player's own notes (graphics driver and such) aren't the game's.
+            if l.starts_with('[') || l.starts_with("ALSA") || l.starts_with("libEGL") || l.trim().is_empty() {
+                continue;
+            }
+            self.log(LogKind::Print, l);
+        }
+        if done {
+            self.build = None;
+            self.status = "The built game was closed.".into();
+        }
+        !done
+    }
+
     /// Exports for one system, with the given player program, as `name`.
     pub fn export_game_for(&mut self, dest: &Path, platform: crate::export::Platform, player: &Path, name: &str) -> Result<Vec<String>, String> {
         use crate::export::Platform;
@@ -1645,4 +1729,19 @@ pub fn replace_project(old: &Path, new: &Path) {
         list.insert(0, new.to_path_buf());
     }
     write_recent(&list);
+}
+
+/// A built game running in its own window, and the temporary folder it runs from.
+pub struct Build {
+    child: std::process::Child,
+    dir: PathBuf,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl Drop for Build {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }

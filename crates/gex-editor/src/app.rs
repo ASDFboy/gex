@@ -443,6 +443,20 @@ impl EditorApp {
                 st.stop();
             }
             crate::docs::mark(ui, egui::Rect::from_min_max(egui::pos2(ui.min_rect().right() - 80.0, ui.min_rect().top()), ui.min_rect().max), "ui:play");
+            // Build: the game as players get it, in a window of its own.
+            let building = st.poll_build();
+            if building {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            let b = theme::primary_button(ui, if building { "■  Build" } else { "▶  Build" }, egui::Color32::from_rgb(0xe6, 0xc2, 0x1e));
+            crate::docs::mark(ui, b.rect, "ui:build");
+            if b.on_hover_text(if building { "Close the built game" } else { "Build the game and run it in its own window, with the project's window and graphics settings. Nothing is kept when it closes." }).clicked() {
+                if building {
+                    st.build = None;
+                } else {
+                    st.build_and_run();
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 theme::window_buttons(ui);
                 ui.spacing_mut().item_spacing.x = 8.0;
