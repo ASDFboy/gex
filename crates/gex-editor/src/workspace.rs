@@ -123,6 +123,8 @@ pub struct Layout {
     pub next_id: u64,
     pub show_assets: bool,
     pub show_console: bool,
+    /// The console is folded down to its title bar (double-click folds, a click unfolds).
+    pub console_min: bool,
     /// The blueprint being edited last frame (to notice it changing from elsewhere).
     #[serde(skip)]
     pub last_blueprint: Option<String>,
@@ -147,6 +149,7 @@ impl Default for Layout {
             next_id: 1,
             show_assets: true,
             show_console: true,
+            console_min: false,
             last_blueprint: None,
             tab_before_play: None,
             was_playing: false,
@@ -377,11 +380,34 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
             ui.allocate_rect(r, Sense::hover());
         });
     }
-    if l.show_console {
-        egui::Panel::bottom("ws console").resizable(true).default_size(130.0).frame(glass).show(ui, |ui| {
-            theme::title(ui, "Console");
-            panels::console(ui, st);
-        });
+    // The console shows itself when there's something in it (or the game is paused at a breakpoint).
+    let paused = st.playing.as_ref().is_some_and(|p| p.handle.paused.is_some());
+    // (Notes of the editor's own, like "stopped", don't bring it up.)
+    let printed = st.logs.iter().any(|x| x.kind != gex_script::LogKind::Info);
+    if l.show_console && (printed || paused) {
+        if l.console_min && !paused {
+            egui::Panel::bottom("ws console bar").resizable(false).exact_size(30.0).frame(glass).show(ui, |ui| {
+                let r = ui.interact(ui.max_rect(), ui.id().with("open"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                ui.horizontal(|ui| {
+                    theme::title(ui, "Console");
+                    let errors = st.logs.iter().filter(|x| x.kind == gex_script::LogKind::Error).count();
+                    if errors > 0 {
+                        ui.label(egui::RichText::new(format!("{} error(s)", errors)).small().color(theme::BAD));
+                    }
+                });
+                if r.clicked() {
+                    l.console_min = false;
+                }
+            });
+        } else {
+            let shown = egui::Panel::bottom("ws console").resizable(true).default_size(130.0).frame(glass).show(ui, |ui| {
+                theme::title(ui, "Console");
+                panels::console(ui, st);
+            });
+            if ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| shown.response.rect.contains(p)) {
+                l.console_min = true;
+            }
+        }
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         // Again: the Assets and Console panels above may have just opened a blueprint.
@@ -515,8 +541,8 @@ fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &
             }
         });
         ui.horizontal(|ui| {
-            theme::title(ui, "Instances");
-            if ui.small_button("Open as window").tip("Open this blueprint's window in the workspace (its objects, properties and events)").clicked() {
+            theme::title(ui, "Blueprint");
+            if ui.small_button("Open in workspace").tip("Open this blueprint's window in the workspace (its objects, properties and events)").clicked() {
                 l.open_blueprint_window(res);
             }
         });
@@ -599,7 +625,7 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
             ui.add_space(86.0);
             for (label, k) in [("New 2D blueprint", gex_core::ObjectKind::Object2D), ("New 3D blueprint", gex_core::ObjectKind::Object3D)] {
                 if ui.button(label).clicked() {
-                    st.new_blueprint_file("res://blueprints", k);
+                    st.new_blueprint_file("res://", k);
                 }
             }
         });

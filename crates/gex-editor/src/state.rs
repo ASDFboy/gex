@@ -143,6 +143,9 @@ pub struct EditorState {
     /// The 2D camera has been fitted to the game window once.
     pub cam_fitted: bool,
     pub asset_dir: String,
+    /// Highlight colors of files and folders in the Assets panel (path → "#rrggbb"). Only
+    /// for looks; kept in the project's .gex folder.
+    pub asset_colors: std::collections::BTreeMap<String, String>,
     pub asset_selected: Option<String>,
     pub show_settings: bool,
     pub show_export: bool,
@@ -211,6 +214,7 @@ impl EditorState {
             ui_images: Default::default(),
             cam_fitted: false,
             asset_dir: "res://".into(),
+            asset_colors: Default::default(),
             asset_selected: None,
             show_settings: false,
             show_export: false,
@@ -588,14 +592,9 @@ impl EditorState {
         let mut n = gex_core::Object::new(kind.name(), kind);
         let root = self.tree.root;
         let mut parent = parent.or(root);
+        // New objects start at 0,0 of what they're put in.
         if kind.is_ui() {
-            n.transform.position = gex_core::glam::Vec3::new(40.0, 40.0, 0.0);
             parent = parent.filter(|s| self.tree.objects[*s].kind.is_ui()).or(root);
-        } else if parent == root {
-            if kind.is_2d() && !self.mode_3d {
-                let parent_m = parent.map(|p| self.tree.global_matrix(p)).unwrap_or_default();
-                n.transform.position = parent_m.inverse().transform_point3(self.cam2.center.extend(0.0));
-            }
         } else if let (gex_core::ObjectKind::Collider2D, Some(p)) = (kind, parent) {
             // A collider starts the size of what it's on.
             let pn = &self.tree.objects[p];
@@ -623,6 +622,11 @@ impl EditorState {
         self.tree = tree;
         match r {
             Ok(id) => {
+                // Named after the blueprint it's an instance of ("enemy", "enemy2"...).
+                let stem = res.rsplit('/').next().unwrap_or(res).trim_end_matches(".jblueprint").to_string();
+                let taken: Vec<String> = self.tree.objects[id].parent.map(|p| self.tree.objects[p].children.iter().filter(|c| **c != id).map(|c| self.tree.objects[*c].name.clone()).collect()).unwrap_or_default();
+                let name = std::iter::once(stem.clone()).chain((2..).map(|i| format!("{}{}", stem, i))).find(|n| !taken.contains(n)).unwrap_or(stem);
+                self.tree.objects[id].name = name;
                 self.selected = Some(id);
                 Some(id)
             }
@@ -798,6 +802,14 @@ impl EditorState {
         if let Some(x) = self.asset_selected.as_deref().and_then(swap) {
             self.asset_selected = Some(x);
         }
+        let colored: Vec<String> = self.asset_colors.keys().filter(|k| swap(k).is_some()).cloned().collect();
+        for k in &colored {
+            let v = self.asset_colors.remove(k).unwrap();
+            self.asset_colors.insert(swap(k).unwrap(), v);
+        }
+        if !colored.is_empty() {
+            self.save_asset_colors();
+        }
         if let Some(x) = swap(&self.asset_dir) {
             self.asset_dir = x;
         }
@@ -904,6 +916,45 @@ impl EditorState {
             return Ok(to);
         }
         self.rename_asset(res, &to)
+    }
+
+    fn asset_colors_file(&self) -> PathBuf {
+        self.project.dir.join(".gex").join("colors.json")
+    }
+
+    pub fn load_asset_colors(&mut self) {
+        self.asset_colors = std::fs::read_to_string(self.asset_colors_file()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    }
+
+    fn save_asset_colors(&self) {
+        let f = self.asset_colors_file();
+        let _ = std::fs::create_dir_all(f.parent().unwrap());
+        if let Ok(t) = serde_json::to_string_pretty(&self.asset_colors) {
+            let _ = std::fs::write(f, t);
+        }
+    }
+
+    /// Gives a file or folder a highlight color in the Assets panel (None takes it away).
+    pub fn set_asset_color(&mut self, res: &str, color: Option<String>) {
+        match color {
+            Some(c) => self.asset_colors.insert(res.to_string(), c),
+            None => self.asset_colors.remove(res),
+        };
+        self.save_asset_colors();
+    }
+
+    /// The highlight of a file: its own, or the nearest folder's around it.
+    pub fn asset_color(&self, res: &str) -> Option<&str> {
+        if self.asset_colors.is_empty() {
+            return None;
+        }
+        let mut at = res;
+        loop {
+            if let Some(c) = self.asset_colors.get(at) {
+                return Some(c);
+            }
+            at = &at[..at.rfind('/').filter(|i| !at[..*i].ends_with(['/', ':']))?];
+        }
     }
 
     /// Makes a folder in a project folder.
@@ -1245,12 +1296,40 @@ impl EditorState {
 
     /// Makes a new script file for an object and attaches it.
     pub fn new_script_for(&mut self, id: ObjectId) -> Option<String> {
-        let base: String = self.tree.objects[id]
-            .name
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
-            .collect();
-        let base = if base.is_empty() { "script".to_string() } else { base };
+        self.new_script_named(id, "")
+    }
+
+    /// Adds an event to an object the way picking it from "Add event" does: in a script of
+    /// its own named after the object and the event ("bullet_step"), made and attached if it
+    /// isn't there yet, and opened at the event.
+    pub fn add_event_script(&mut self, id: ObjectId, signature: &str) {
+        let event: String = signature.chars().take_while(|c| *c != '(').collect();
+        let event = event.trim_start_matches("on_").to_string();
+        let wanted = format!("{}_{}.jlb", Self::script_base(&self.tree.objects[id].name), event);
+        // The event may be there already, in any of the object's scripts: go to it.
+        let def = format!("{}(", signature.chars().take_while(|c| *c != '(').collect::<String>());
+        let scripts = self.tree.objects[id].scripts.clone();
+        let has = |s: &&String| {
+            let text = self.scripts.get(*s).map(|o| o.text.clone()).or_else(|| self.project.read_text(s).ok()).unwrap_or_default();
+            text.lines().any(|l| l.trim_start().strip_prefix("DEF ").is_some_and(|r| r.trim_start().starts_with(&def)))
+        };
+        let have = scripts.iter().find(has).or_else(|| scripts.iter().find(|s| s.rsplit('/').next() == Some(wanted.as_str()))).cloned();
+        if let Some(res) = have.or_else(|| self.new_script_named(id, &event)) {
+            self.add_event(&res, signature);
+        }
+    }
+
+    /// A file name for an object's script: its name in lowercase with underscores.
+    fn script_base(name: &str) -> String {
+        let base: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+        if base.is_empty() { "script".to_string() } else { base }
+    }
+
+    /// Makes a script for an object, attaches and opens it. `event`: the event it's for
+    /// (part of its name), or "" for a general script.
+    fn new_script_named(&mut self, id: ObjectId, event: &str) -> Option<String> {
+        let base = Self::script_base(&self.tree.objects[id].name);
+        let base = if event.is_empty() { base } else { format!("{}_{}", base, event) };
         // Next to the blueprint it's for (no folders are made for you).
         let dir = self.blueprint_res.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d.trim_end_matches('/').to_string()).filter(|d| d.len() > "res:/".len()).unwrap_or_else(|| "res:/".into());
         let mut res = format!("{}/{}.jlb", dir, base);

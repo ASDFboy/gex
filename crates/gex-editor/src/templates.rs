@@ -220,6 +220,41 @@ mod tests {
     }
 
     #[test]
+    fn events_get_their_own_scripts_and_new_things_start_at_zero() {
+        let dir = std::env::temp_dir().join(format!("gex-events-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        super::create_demo(&dir).unwrap();
+        let mut st = crate::state::EditorState::new(gex_core::project::Project::open(&dir).unwrap());
+        st.open_blueprint("res://blueprints/main.jblueprint");
+        // A new object sits at 0,0 of its parent, wherever the view is looking.
+        st.cam2.center = gex_core::glam::Vec2::new(500.0, 300.0);
+        let id = st.add_object(gex_core::ObjectKind::Sprite2D);
+        assert_eq!(st.tree.objects[id].transform.position, gex_core::glam::Vec3::ZERO);
+        st.tree.objects[id].name = "Bullet".into();
+        // Each event picked makes a script named after the object and the event.
+        st.add_event_script(id, "on_step(dt)");
+        st.add_event_script(id, "on_create()");
+        st.add_event_script(id, "on_step(dt)");
+        let names: Vec<&str> = st.tree.objects[id].scripts.iter().map(|s| s.rsplit('/').next().unwrap()).collect();
+        assert_eq!(names, ["bullet_step.jlb", "bullet_create.jlb"]);
+        assert!(dir.join("blueprints/bullet_step.jlb").is_file());
+        assert_eq!(st.scripts["res://blueprints/bullet_step.jlb"].text.matches("DEF on_step").count(), 1);
+        // An instance is named after its blueprint.
+        st.selected = None;
+        let a = st.instance_blueprint("res://blueprints/coin.jblueprint").unwrap();
+        st.selected = None;
+        let b = st.instance_blueprint("res://blueprints/coin.jblueprint").unwrap();
+        assert_eq!((st.tree.objects[a].name.as_str(), st.tree.objects[b].name.as_str()), ("coin", "coin2"));
+        // Highlight colors follow folders, and renames.
+        st.set_asset_color("res://blueprints", Some("#a6e22e".into()));
+        assert_eq!(st.asset_color("res://blueprints/coin.jblueprint"), Some("#a6e22e"));
+        assert_eq!(st.asset_color("res://scripts/player.jlb"), None);
+        st.rename_asset("res://blueprints", "levels").unwrap();
+        assert_eq!(st.asset_color("res://levels/coin.jblueprint"), Some("#a6e22e"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn save_branch_as_blueprint_and_make_local() {
         let dir = std::env::temp_dir().join(format!("gex-branch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

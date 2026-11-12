@@ -516,7 +516,8 @@ fn fs_final(o: SkyOut) -> @location(0) vec4<f32> {
             c = c + vec3<f32>(n * g.grade2.y * 0.25);
         }
     }
-    return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    // Alpha is kept: the editor draws the view over its own backdrop.
+    return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), textureSampleLevel(tex, samp, uv, 0.0).a);
 }
 
 // Custom material shaders: a project .wgsl defines

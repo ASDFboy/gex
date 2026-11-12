@@ -54,7 +54,7 @@ and start it again.
 - **The editor:** GameMaker-style workspaces (a blueprint's window linked to its events, linked to its
   scripts, on a canvas you drag around) and a tab per blueprint for placing and editing instances, or
   the classic docked panels (View → Classic docked layout); a Monokai Black look,
-  2D/3D view with move / rotate / scale tools and box select, undo/redo, copy/paste, a Neovim-style
+  2D/3D view with move / rotate / scale tools, undo/redo, copy/paste, a Neovim-style
   `:` command line, optional Vim keys in the script editor, completion, go to definition,
   find/replace, find in files, breakpoints (with conditions and watches) and a debugger, a
   profiler, an animation Timeline, Play/Stop with live values in the inspector, and scripts that

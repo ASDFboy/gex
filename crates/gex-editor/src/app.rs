@@ -273,7 +273,8 @@ impl EditorApp {
             Ok(p) => {
                 state::remember_project(&p.dir);
                 self.ws = crate::workspace::Layout::load(&p.dir);
-                let st = EditorState::new(p);
+                let mut st = EditorState::new(p);
+                st.load_asset_colors();
                 // The blueprint opened at start doesn't take over the tab that was showing.
                 if !self.ws.tabs.iter().any(|t| matches!(t, crate::workspace::TopTab::Blueprint(r) if Some(r) == st.blueprint_res.as_ref())) {
                     if let Some(r) = &st.blueprint_res {
@@ -831,7 +832,7 @@ impl EditorApp {
                                 _ => 0,
                             })
                             .sum();
-                        f.message = if f.hl2_on { format!("Mounted: {} files in archives. Browse them in Assets → hl2://", files) } else { "Saved.".into() };
+                        f.message = if f.hl2_on && f.tab == 4 { format!("Mounted: {} files in archives. Browse them in Assets → hl2://", files) } else { "Saved.".into() };
                     }
                     Err(e) => f.message = e,
                 }

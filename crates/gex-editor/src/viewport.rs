@@ -134,7 +134,7 @@ fn grid_2d(o: &mut Overlay, cams: &Cameras) {
     let (min, max) = (a.min(b), a.max(b));
     let span = (max.x - min.x).max(1.0);
     let step = [16.0f32, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0].into_iter().find(|s| span / s < 60.0).unwrap_or(2048.0);
-    let c = [0.3, 0.4, 0.5, 0.18];
+    let c = [1.0, 1.0, 1.0, 0.07];
     let mut x = (min.x / step).floor() * step;
     while x <= max.x {
         o.line2([x, min.y], [x, max.y], if x == 0.0 { [0.9, 0.3, 0.3, 0.6] } else { c });
@@ -150,7 +150,7 @@ fn grid_2d(o: &mut Overlay, cams: &Cameras) {
 fn grid_3d(o: &mut Overlay) {
     for i in -20..=20 {
         let f = i as f32;
-        let c = if i == 0 { [0.6, 0.6, 0.6, 0.5] } else { [0.4, 0.45, 0.5, 0.25] };
+        let c = if i == 0 { [0.6, 0.6, 0.6, 0.5] } else { [1.0, 1.0, 1.0, 0.09] };
         o.line3(Vec3::new(f, 0.0, -20.0), Vec3::new(f, 0.0, 20.0), if i == 0 { [0.3, 0.3, 0.9, 0.8] } else { c });
         o.line3(Vec3::new(-20.0, 0.0, f), Vec3::new(20.0, 0.0, f), if i == 0 { [0.9, 0.3, 0.3, 0.8] } else { c });
     }
@@ -377,7 +377,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     }
     let to_px = |p: Pos2| Vec2::new((p.x - rect.min.x) * ppp, (p.y - rect.min.y) * ppp);
     let game_cam = st.playing.as_ref().is_some_and(|p| p.game_camera);
-    let list = match &st.playing {
+    let mut list = match &st.playing {
         Some(p) => p.list.clone(),
         None => {
             let mut l = extract(&st.tree);
@@ -499,7 +499,6 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         }
     }
     // Select, drag objects (move / rotate / scale), box select, drop assets (editing only).
-    let mut box_rect: Option<Rect> = None;
     let mut gizmo_draw: Option<(Gizmo, Option<Handle>)> = None;
     if !playing && !painting {
         let drag_id = egui::Id::new("viewport drag");
@@ -540,9 +539,6 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                         if let Some(g) = Gizmo::new(&cams, st.mode_3d, st.tool, pivot, hm.to_scale_rotation_translation().1, ppp) {
                             ui.data_mut(|d| d.insert_temp(drag_id, Drag { objects, pivot, screen_start: to_px(pp), handle: Handle::Free, giz: g }));
                         }
-                    }
-                    None if !st.mode_3d => {
-                        ui.data_mut(|d| d.insert_temp(drag_id.with("box"), pp));
                     }
                     None => {}
                 }
@@ -642,37 +638,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                     }
                 }
             }
-            if let (Some(b), Some(pp)) = (ui.data(|m| m.get_temp::<Pos2>(drag_id.with("box"))), pointer) {
-                box_rect = Some(Rect::from_two_pos(b, pp));
-            }
         }
         if resp.drag_stopped() {
             ui.data_mut(|d| d.remove::<Drag>(drag_id));
-            if let (Some(b), Some(pp)) = (ui.data_mut(|m| m.remove_temp::<Pos2>(drag_id.with("box"))), pointer) {
-                // Box select: objects whose position is inside the box.
-                let r = Rect::from_two_pos(b, pp);
-                let (a, z) = (cams.screen_to_2d(to_px(r.min)), cams.screen_to_2d(to_px(r.max)));
-                let (lo, hi) = (a.min(z), a.max(z));
-                let found: Vec<ObjectId> = st
-                    .tree
-                    .walk()
-                    .into_iter()
-                    .filter(|i| Some(*i) != st.tree.root && !st.tree.objects[*i].from_instance)
-                    .filter(|i| {
-                        let p = st.tree.global_matrix(*i).w_axis.truncate().truncate();
-                        p.x >= lo.x && p.y >= lo.y && p.x <= hi.x && p.y <= hi.y
-                    })
-                    .collect();
-                if !ctrl {
-                    st.selection.clear();
-                }
-                for f in found {
-                    if !st.selection.contains(&f) {
-                        st.selection.push(f);
-                    }
-                }
-                st.selected = st.selection.last().copied().or(st.tree.root);
-            }
         }
         if resp.clicked() {
             if let Some(pp) = pointer.filter(|pp| giz.is_none_or(|g| g.hit(&cams, to_px(*pp), ppp).is_none())) {
@@ -700,6 +668,25 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     } else {
         editor_overlay(st, &list, &cams)
     };
+    if !game_cam {
+        // While editing, what's behind the blueprint is the workspace's backdrop, a shade
+        // lighter: the view is drawn see-through over it.
+        list.clear = [0.0; 4];
+        let painter = ui.painter_at(rect);
+        painter.add(theme::vgradient(rect, Color32::from_rgb(0x36, 0x36, 0x36), Color32::from_rgb(0x1c, 0x1c, 0x1c)));
+        let step = 32.0;
+        let o = if st.mode_3d { Vec2::ZERO } else { cams.world_2d_to_screen(Vec2::ZERO) / ppp };
+        let dot = Color32::from_rgba_unmultiplied(255, 255, 255, 22);
+        let mut y = rect.top() + o.y.rem_euclid(step);
+        while y < rect.bottom() {
+            let mut x = rect.left() + o.x.rem_euclid(step);
+            while x < rect.right() {
+                painter.circle_filled(Pos2::new(x, y), 1.0, dot);
+                x += step;
+            }
+            y += step;
+        }
+    }
     let problems = paint_list(ui, rs, &mut st.renderer, textures, &st.vfs, rect, &list, &cams, &overlay);
     for p in problems {
         st.log(gex_script::LogKind::Error, p);
@@ -727,9 +714,6 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     }
     if let Some((g, lit)) = gizmo_draw {
         g.paint(&ui.painter_at(rect), &cams, rect.min, ppp, lit);
-    }
-    if let Some(b) = box_rect {
-        ui.painter().rect(b, 0.0, theme::ACCENT.gamma_multiply(0.12), egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
     }
     if resp.has_focus() && playing {
         ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, theme::GOOD), egui::StrokeKind::Inside);

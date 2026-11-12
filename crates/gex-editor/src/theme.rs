@@ -309,3 +309,57 @@ pub fn tab_row(ui: &mut egui::Ui, labels: &[&str], current: &mut usize) {
     ui.painter().line_segment([Pos2::new(ui.max_rect().left(), y), Pos2::new(ui.max_rect().right(), y)], Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34)));
     ui.add_space(4.0);
 }
+
+/// The colors a row can be highlighted with (right-click > Color).
+pub const HIGHLIGHTS: [(&str, &str); 12] = [
+    ("Red", "#f92672"), ("Orange", "#fd971f"), ("Yellow", "#e6db74"), ("Green", "#a6e22e"), ("Teal", "#35c9a5"), ("Blue", "#66d9ef"),
+    ("Indigo", "#5c7cfa"), ("Purple", "#ae81ff"), ("Pink", "#ff79c6"), ("Brown", "#a5714e"), ("Gray", "#8f908a"), ("White", "#f8f8f2"),
+];
+
+/// "#rrggbb" as a color.
+pub fn hex(s: &str) -> Option<Color32> {
+    let h = s.strip_prefix('#')?;
+    let v = u32::from_str_radix(h, 16).ok().filter(|_| h.len() == 6)?;
+    Some(Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
+}
+
+/// The "Color" entry of a right-click menu: a grid of swatches and "None". Gives the pick
+/// (Some(None) = take the color away).
+pub fn color_menu(ui: &mut egui::Ui) -> Option<Option<String>> {
+    let mut pick = None;
+    ui.menu_button("Color", |ui| {
+        fade_in(ui);
+        egui::Grid::new("highlights").min_col_width(20.0).spacing(egui::vec2(3.0, 3.0)).show(ui, |ui| {
+            for (i, (name, h)) in HIGHLIGHTS.iter().enumerate() {
+                let (rect, r) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+                ui.painter().rect_filled(rect, 0.0, hex(h).unwrap());
+                if r.hovered() {
+                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Inside);
+                }
+                if r.on_hover_text(*name).clicked() {
+                    pick = Some(Some(h.to_string()));
+                }
+                if i % 6 == 5 {
+                    ui.end_row();
+                }
+            }
+        });
+        if ui.button("None").clicked() {
+            pick = Some(None);
+        }
+        if pick.is_some() {
+            ui.close();
+        }
+    });
+    pick
+}
+
+/// Draws a row with a highlight color behind it, across the panel.
+pub fn tinted(ui: &mut egui::Ui, color: Option<Color32>, row: impl FnOnce(&mut egui::Ui) -> egui::Response) -> egui::Response {
+    let Some(c) = color else { return row(ui) };
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let r = row(ui);
+    let rect = Rect::from_min_max(egui::pos2(r.rect.left(), r.rect.top()), egui::pos2(ui.clip_rect().right(), r.rect.bottom()));
+    ui.painter().set(slot, egui::Shape::rect_filled(rect, 0.0, c.gamma_multiply(0.20)));
+    r
+}

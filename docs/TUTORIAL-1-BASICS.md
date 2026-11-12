@@ -12,20 +12,21 @@ menu that ties them together). Every script in it is commented.
 
 1. Start `gex`. The launcher shows your recent projects on the left.
 2. Under **NEW PROJECT**, type a name and a folder, then **Create empty project**.
-3. The project starts with nothing in it. Press **New 2D blueprint**: it makes `blueprints/main.jblueprint`
+3. The project starts with nothing in it. Press **New 2D blueprint**: it makes `main.jblueprint`
    (the first blueprint is where the game starts) and opens it. It holds one object, `Main`.
 
 The editor works like GameMaker's. Along the top are tabs:
 
 | Tab | What it's for |
 |---|---|
-| A blueprint (`main`) | the blueprint itself, like a room. On the left: **Instances** (the object tree; drag to re-parent, right-click for more) and under it the selected one's **Properties** and **Events**. In the middle: the view |
+| A blueprint (`main`) | the blueprint itself, like a room. On the left: **Blueprint** (the object tree; drag to re-parent, right-click for more) and under it the selected one's **Properties** and **Events**. In the middle: the view |
 | Workspace | a canvas of windows for editing blueprints and scripts. Double-click a blueprint in Assets and its window opens here with its events beside it; click an event and its script opens beside that. Drag the background to look around; **+** adds another workspace |
 
 **Assets** on the right lists what the project has, grouped by kind (blueprints, scripts, sprites,
-sounds...). **+** makes a blueprint or a script, double-click opens one, right-click has the rest,
-and files dropped on the window are imported. The Console (messages and errors) is along the
-bottom. Prefer panels docked around one view? **View → Classic docked layout** switches.
+sounds...). **+Blueprint**, **+Script** and **+Folder** make one, double-click opens one, right-click has
+the rest (rename, a highlight color, delete), and files dropped on the window are imported. The
+Console (messages and errors) comes up along the bottom when something is printed; double-click
+it to fold it down to a bar. Prefer panels docked around one view? **View → Classic docked layout** switches.
 
 ## 2. Objects: make a player
 
@@ -47,7 +48,7 @@ object itself to move it freely as you look at it. Hold Ctrl to snap.
 ## 3. Scripts: make it move
 
 1. With `Player` selected, switch **Properties** to **Events** and press **Add event → Step**.
-   That makes `scripts/player.jlb`, attaches it, and opens it in the workspace with the cursor
+   That makes `player_step.jlb` (object + event) next to the blueprint, attaches it, and opens it in the workspace with the cursor
    inside the new event.
 2. Make the script read:
 

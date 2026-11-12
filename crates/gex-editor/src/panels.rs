@@ -126,7 +126,7 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
     ui.horizontal(|ui| {
         ui.add_enabled_ui(!playing, |ui| {
             crate::docs::menu(ui, "+ Object", |ui| add_object_menu(ui, st));
-            crate::docs::menu(ui, "+ Blueprint", |ui| { crate::theme::fade_in(ui);
+            crate::docs::menu(ui, "+ Instance", |ui| { crate::theme::fade_in(ui);
                 let blueprints = list_files(st, "res://", "jblueprint");
                 if blueprints.is_empty() {
                     ui.label("no .jblueprint files yet");
@@ -191,6 +191,13 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
             }
             st.duplicate_selected();
         }
+        Some(Action::Color(id, c)) if !playing => {
+            st.will_change("color");
+            match c {
+                Some(c) => st.tree.objects[id].props.insert(COLOR_PROP.into(), Variant::Text(c)),
+                None => st.tree.objects[id].props.remove(COLOR_PROP),
+            };
+        }
         Some(Action::Move(id, up)) if !playing => {
             if let Some(p) = st.tree.objects[id].parent {
                 let kids = &st.tree.objects[p].children;
@@ -209,6 +216,9 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
     }
 }
 
+/// The property an object's highlight color in the Blueprint panel is kept in (only for looks).
+pub const COLOR_PROP: &str = "editor_color";
+
 enum Action {
     Select(ObjectId),
     Toggle(ObjectId),
@@ -220,6 +230,7 @@ enum Action {
     SaveBranch(ObjectId),
     MakeLocal(ObjectId),
     OpenBlueprint(String),
+    Color(ObjectId, Option<String>),
 }
 
 fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTree, id: ObjectId, action: &mut Option<Action>, playing: bool) {
@@ -229,7 +240,8 @@ fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTre
     let icon = crate::icons::object(tree, id);
     let color = if n.from_instance { theme::TEXT_DIM } else if !n.visible { Color32::from_gray(110) } else { theme::TEXT };
     let draw_label = |ui: &mut egui::Ui, action: &mut Option<Action>| {
-        let r = crate::icons::row(ui, st, &icon, RichText::new(&label).color(color), selected);
+        let tint = std::iter::successors(Some(id), |i| tree.objects[*i].parent).find_map(|i| theme::hex(tree.objects[i].text(COLOR_PROP)));
+        let r = theme::tinted(ui, tint, |ui| crate::icons::row(ui, st, &icon, RichText::new(&label).color(color), selected));
         crate::docs::mark(ui, r.rect, format!("object:{}", n.kind.name()));
         // Small marks after the name: it has scripts, it's an instance of a blueprint.
         for (on, mark, tip) in [(!n.scripts.is_empty(), "script", "Has a script"), (n.instance_of.is_some() && !n.from_instance, "link", "An instance of a blueprint")] {
@@ -284,6 +296,11 @@ fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTre
                 if !n.from_instance && ui.button("Make local").tip("stop following the blueprint file: its objects become this blueprint's own").clicked() {
                     *action = Some(Action::MakeLocal(id));
                     ui.close();
+                }
+            }
+            if !n.from_instance {
+                if let Some(c) = theme::color_menu(ui) {
+                    *action = Some(Action::Color(id, c));
                 }
             }
             ui.separator();
@@ -630,7 +647,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         crate::docs::mark(ui, h.header_response.rect.union(h.body_response.map_or(h.header_response.rect, |b| b.rect)), "ui:script_vars");
     }
     let custom = egui::CollapsingHeader::new("Custom properties").default_open(true).show(ui, |ui| {
-        let keys: Vec<String> = st.tree.objects[id].props.keys().filter(|k| !defaults.contains(&k.as_str()) && k.as_str() != crate::icons::PROP && !vars.contains(k)).cloned().collect();
+        let keys: Vec<String> = st.tree.objects[id].props.keys().filter(|k| !defaults.contains(&k.as_str()) && k.as_str() != crate::icons::PROP && k.as_str() != COLOR_PROP && !vars.contains(k)).cloned().collect();
         let mut remove = None;
         egui::Grid::new("custom props").num_columns(3).spacing([8.0, 4.0]).striped(true).show(ui, |ui| {
             for k in keys {
@@ -869,10 +886,7 @@ pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
                 let mut add = None;
                 crate::docs::menu(ui, "Add event", |ui| add = add_event_menu(ui, st));
                 if let Some(sig) = add {
-                    // The first event makes the object's script.
-                    if let Some(res) = scripts.first().cloned().or_else(|| st.new_script_for(id)) {
-                        st.add_event(&res, &sig);
-                    }
+                    st.add_event_script(id, &sig);
                 }
             });
         }
@@ -980,6 +994,9 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
             if e.is_dir {
                 new_asset_menu(ui, st, &e.path);
                 ui.separator();
+            }
+            if let Some(c) = theme::color_menu(ui) {
+                st.set_asset_color(&e.path, c);
             }
             if ui.button("Rename…").tip("Gives it a new name. Blueprints and scripts that use it are updated.").clicked() {
                 set_dialog(ui.ctx(), AssetDialog::Rename(e.path.clone(), e.name.clone()));
@@ -1097,7 +1114,8 @@ fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
         crate::icons::Icon::Silk(crate::icons::file(name).into())
     };
     let label = name.rsplit_once('.').map_or(name, |x| x.0);
-    let r = crate::icons::row(ui, st, &icon, RichText::new(label), sel).tip(name);
+    let tint = st.asset_color(path).and_then(theme::hex);
+    let r = theme::tinted(ui, tint, |ui| crate::icons::row(ui, st, &icon, RichText::new(label), sel)).tip(name);
     asset_interact(ui, st, &r, path);
 }
 
@@ -1137,6 +1155,9 @@ fn asset_tiles(ui: &mut egui::Ui, st: &mut EditorState, paths: &[&str]) {
             if ui.is_rect_visible(rect) {
                 let sel = st.asset_selected.as_deref() == Some(*path);
                 ui.painter().rect_filled(rect, 0.0, if sel { theme::GRAY_LIGHT } else if r.hovered() { theme::GRAY } else { Color32::from_rgb(0x16, 0x16, 0x16) });
+                if let Some(c) = st.asset_color(path).and_then(theme::hex) {
+                    ui.painter().rect_filled(rect, 0.0, c.gamma_multiply(0.20));
+                }
                 crate::icons::paint(ui, st, &crate::icons::Icon::Image(path.to_string()), rect.shrink(3.0));
                 if sel {
                     ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
@@ -1156,6 +1177,8 @@ fn asset_dir_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str, name: &str
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
     let in_project = path.starts_with("res://");
     let open = state.is_open();
+    let tint = st.asset_color(path).and_then(theme::hex);
+    let slot = ui.painter().add(egui::Shape::Noop);
     let r = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -1163,6 +1186,10 @@ fn asset_dir_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str, name: &str
             crate::icons::row(ui, st, &crate::icons::Icon::Silk(if open { "folder" } else { "folder" }.into()), RichText::new(name), in_project && st.asset_dir == path && st.asset_selected.is_none())
         })
         .inner;
+    if let Some(c) = tint {
+        let band = egui::Rect::from_min_max(egui::pos2(ui.max_rect().left(), r.rect.top()), egui::pos2(ui.clip_rect().right(), r.rect.bottom()));
+        ui.painter().set(slot, egui::Shape::rect_filled(band, 0.0, c.gamma_multiply(0.20)));
+    }
     crate::docs::mark(ui, r.rect, "ui:folder");
     if r.clicked() {
         state.toggle(ui);
@@ -1247,14 +1274,33 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
     if !st.asset_dir.starts_with("res://") || (st.asset_dir != "res://" && !st.project.res_to_path(&st.asset_dir).is_some_and(|p| p.is_dir())) {
         st.asset_dir = "res://".into();
     }
-    ui.horizontal(|ui| {
-        if st.playing.is_none() {
+    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(f32::INFINITY));
+    if st.playing.is_none() {
+        ui.horizontal(|ui| {
             let dir = st.asset_dir.clone();
-            crate::docs::menu(ui, "+", |ui| { crate::theme::fade_in(ui);
-                if dir != "res://" {
-                    ui.label(RichText::new(format!("in {}", dir.trim_start_matches("res://"))).small().color(theme::TEXT_DIM));
+            let place = if dir == "res://" { "the project's top folder".to_string() } else { dir.trim_start_matches("res://").to_string() };
+            let mut made = None;
+            crate::docs::menu(ui, "+Blueprint", |ui| { crate::theme::fade_in(ui);
+                for (label, k) in [("2D", ObjectKind::Object2D), ("3D", ObjectKind::Object3D), ("UI / menu", ObjectKind::Object)] {
+                    if ui.button(label).clicked() {
+                        made = st.new_blueprint_file(&dir, k);
+                        ui.close();
+                    }
                 }
-                new_asset_menu(ui, st, &dir);
+            })
+            .response
+            .tip(format!("Makes a new blueprint in {}.", place));
+            if ui.button("+Script").tip(format!("Makes a new script in {} and opens it.", place)).clicked() {
+                made = st.new_script_file(&dir);
+            }
+            if ui.button("+Folder").tip(format!("Makes a new folder in {}.", place)).clicked() {
+                made = st.new_folder(&dir);
+            }
+            if let Some(r) = made {
+                let name = r.rsplit('/').next().unwrap_or("").to_string();
+                set_dialog(ui.ctx(), AssetDialog::Rename(r, name));
+            }
+            crate::docs::menu(ui, "+", |ui| { crate::theme::fade_in(ui);
                 #[cfg(windows)]
                 if ui.button("Import files…").tip("Copies files from your computer into the selected folder.").clicked() {
                     if let Some(files) = rfd::FileDialog::new().pick_files() {
@@ -1262,7 +1308,6 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                     }
                     ui.close();
                 }
-                ui.separator();
                 if ui.button("Open project folder").tip("In the file manager. Files dropped on the GEX window are imported too").clicked() {
                     crate::files::reveal(&st.project.dir);
                     ui.close();
@@ -1276,10 +1321,9 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 }
             })
             .response
-            .tip("New folder, blueprint or script (in the selected folder), import");
-        }
-        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(f32::INFINITY));
-    });
+            .tip("Import files, open the project folder, undo the last file change");
+        });
+    }
     ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
     asset_dialogs(ui, st);
     let _ = &ctx_textures;
@@ -1300,7 +1344,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             return;
         }
         if files.is_empty() {
-            ui.label(RichText::new("Nothing here yet. The + button makes folders, blueprints and scripts; files dropped on the window are imported.").color(theme::TEXT_DIM));
+            ui.label(RichText::new("Nothing here yet. The buttons above make blueprints, scripts and folders; files dropped on the window are imported.").color(theme::TEXT_DIM));
         }
         asset_level(ui, st, &files, "res://");
         ui.add_space(6.0);
@@ -1426,7 +1470,7 @@ pub fn console(ui: &mut egui::Ui, st: &mut EditorState) {
     crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:console");
     debugger(ui, st);
     ui.horizontal(|ui| {
-        if ui.button("Clear").tip("Empties the console.").clicked() {
+        if !st.logs.is_empty() && ui.button("Clear").tip("Empties the console.").clicked() {
             st.logs.clear();
         }
         let errors = st.logs.iter().filter(|l| l.kind == LogKind::Error).count();

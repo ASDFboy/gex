@@ -1432,7 +1432,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: lc[0] as f64, g: lc[1] as f64, b: lc[2] as f64, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: lc[0] as f64, g: lc[1] as f64, b: lc[2] as f64, a: lc[3] as f64 }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
