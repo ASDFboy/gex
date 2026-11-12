@@ -8,39 +8,6 @@ use gex_script::LogKind;
 use crate::state::EditorState;
 use crate::theme;
 
-pub fn kind_icon(k: NodeKind) -> &'static str {
-    match k {
-        NodeKind::Node => "○",
-        NodeKind::Sound => "🔊",
-        NodeKind::Node2D => "⊞",
-        NodeKind::Animator => "🎞",
-        NodeKind::Sprite2D => "▣",
-        NodeKind::Label2D => "🔤",
-        NodeKind::Camera2D => "⌖",
-        NodeKind::Collider2D => "☐",
-        NodeKind::Node3D => "🌍",
-        NodeKind::Mesh3D => "■",
-        NodeKind::Camera3D => "🎥",
-        NodeKind::Light3D => "💡",
-        NodeKind::Body2D => "✚",
-        NodeKind::TileMap2D => "🗺",
-        NodeKind::Particles2D => "✨",
-        NodeKind::Light2D => "💡",
-        NodeKind::Panel => "🗖",
-        NodeKind::Button => "🔘",
-        NodeKind::Label => "🅰",
-        NodeKind::TextInput => "⌨",
-        NodeKind::ProgressBar => "📊",
-        NodeKind::Image => "🖼",
-        NodeKind::Body3D => "🔲",
-        NodeKind::Collider3D => "⬜",
-        NodeKind::Sprite3D => "🖼",
-        NodeKind::Label3D => "🔤",
-        NodeKind::Particles3D => "✨",
-        NodeKind::Environment => "⛅",
-    }
-}
-
 pub fn add_node_menu(ui: &mut egui::Ui, st: &mut EditorState) {
     let groups: [(&str, fn(NodeKind) -> bool); 4] = [
         ("General", |k| !k.is_2d() && !k.is_3d() && !k.is_ui()),
@@ -55,18 +22,47 @@ pub fn add_node_menu(ui: &mut egui::Ui, st: &mut EditorState) {
         Some(k) if k.is_3d() => "2D",
         _ => "",
     };
-    for (i, (title, f)) in groups.iter().filter(|g| g.0 != skip).enumerate() {
-        if i > 0 {
-            ui.separator();
-        }
-        ui.label(RichText::new(*title).color(theme::TEXT_DIM));
-        for k in ALL_KINDS.iter().filter(|k| f(**k)) {
-            if ui.button(format!("{} {}", kind_icon(*k), k.name())).clicked() {
-                st.add_node(*k);
-                ui.close();
+    theme::fade_in(ui);
+    // One column per kind of node.
+    ui.horizontal_top(|ui| {
+        for (i, (title, f)) in groups.iter().filter(|g| g.0 != skip).enumerate() {
+            if i > 0 {
+                ui.separator();
             }
+            ui.vertical(|ui| {
+                ui.label(RichText::new(*title).color(theme::TEXT_DIM));
+                for k in ALL_KINDS.iter().filter(|k| f(**k)) {
+                    if node_button(ui, st, *k).clicked() {
+                        st.add_node(*k);
+                        ui.close();
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// A menu row for a kind of node: its icon and name.
+fn node_button(ui: &mut egui::Ui, st: &EditorState, k: NodeKind) -> egui::Response {
+    let r = crate::icons::row(ui, st, &crate::icons::Icon::Silk(crate::icons::kind(k).into()), RichText::new(k.name()), false);
+    crate::docs::on(r, ui, format!("node:{}", k.name()))
+}
+
+/// The $variables a script declares (from the open editor, or the file read twice a second).
+fn script_vars_of(ui: &egui::Ui, st: &EditorState, res: &str) -> Vec<String> {
+    if let Some(s) = st.scripts.get(res) {
+        return gex_core::node::script_vars(&s.text);
+    }
+    let id = egui::Id::new(("script vars", res));
+    let now = ui.input(|i| i.time);
+    if let Some((t, v)) = ui.data(|d| d.get_temp::<(f64, Vec<String>)>(id)) {
+        if now - t < 0.5 {
+            return v;
         }
     }
+    let v = st.project.read_text(res).map(|t| gex_core::node::script_vars(&t)).unwrap_or_default();
+    ui.data_mut(|d| d.insert_temp(id, (now, v.clone())));
+    v
 }
 
 /// Picking a tile to paint with, from the TileMap2D's tileset image.
@@ -124,11 +120,12 @@ fn tile_palette(ui: &mut egui::Ui, st: &mut EditorState, id: NodeId) {
 // ---------------------------------------------------------------- hierarchy
 
 pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:instances");
     let playing = st.playing.is_some();
     ui.horizontal(|ui| {
         ui.add_enabled_ui(!playing, |ui| {
             ui.menu_button("+ Node", |ui| add_node_menu(ui, st));
-            ui.menu_button("+ Scene", |ui| {
+            ui.menu_button("+ Scene", |ui| { crate::theme::fade_in(ui);
                 let scenes = list_files(st, "res://", "jscene");
                 if scenes.is_empty() {
                     ui.label("no .jscene files yet");
@@ -227,16 +224,20 @@ enum Action {
 fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id: NodeId, action: &mut Option<Action>, playing: bool) {
     let n = &tree.nodes[id];
     let selected = st.is_selected(id);
-    let mut label = format!("{} {}", kind_icon(n.kind), n.name);
-    if n.instance_of.is_some() {
-        label.push_str("  🎬");
-    }
-    if !n.scripts.is_empty() {
-        label.push_str("  📜");
-    }
+    let label = n.name.clone();
+    let icon = crate::icons::node(tree, id);
     let color = if n.from_instance { theme::TEXT_DIM } else if !n.visible { Color32::from_gray(110) } else { theme::TEXT };
     let draw_label = |ui: &mut egui::Ui, action: &mut Option<Action>| {
-        let r = ui.add(egui::Button::selectable(selected, RichText::new(&label).color(color))).interact(egui::Sense::click_and_drag());
+        let r = crate::icons::row(ui, st, &icon, RichText::new(&label).color(color), selected);
+        crate::docs::mark(ui, r.rect, format!("node:{}", n.kind.name()));
+        // Small marks after the name: it has scripts, it's an instance of a scene.
+        for (on, mark, tip) in [(!n.scripts.is_empty(), "script", "Has a script"), (n.instance_of.is_some() && !n.from_instance, "link", "An instance of a scene")] {
+            if on {
+                let (mr, m) = ui.allocate_exact_size(egui::vec2(12.0, 16.0), egui::Sense::hover());
+                crate::icons::paint(ui, st, &crate::icons::Icon::Silk(mark.into()), egui::Rect::from_center_size(mr.center(), egui::vec2(12.0, 12.0)));
+                m.on_hover_text(tip);
+            }
+        }
         if r.clicked() {
             *action = Some(if ui.input(|i| i.modifiers.command) { Action::Toggle(id) } else { Action::Select(id) });
         }
@@ -256,10 +257,10 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
             None => n.kind.name().to_string(),
         };
         let r = r.on_hover_text(tip);
-        r.context_menu(|ui| {
-            ui.menu_button("Add child", |ui| {
+        r.context_menu(|ui| { crate::theme::fade_in(ui);
+            ui.menu_button("Add child", |ui| { crate::theme::fade_in(ui);
                 for k in ALL_KINDS {
-                    if ui.button(format!("{} {}", kind_icon(*k), k.name())).clicked() {
+                    if node_button(ui, st, *k).clicked() {
                         *action = Some(Action::AddChild(id, *k));
                         ui.close();
                     }
@@ -463,6 +464,7 @@ fn show_variant(v: &Variant) -> String {
 pub struct AssetPath(pub String);
 
 pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:properties");
     let Some(id) = st.selected else {
         ui.label("Select a node to see its properties.");
         return;
@@ -473,7 +475,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             ui.label("This node isn't in the running game (it was destroyed).");
             return;
         };
-        ui.label(RichText::new(format!("{} {}", kind_icon(n.kind), n.name)).strong());
+        ui.label(RichText::new(&n.name).strong());
         ui.label(RichText::new("Live values from the running game").small().color(theme::GOOD));
         ui.separator();
         let t = n.transform;
@@ -498,7 +500,27 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     }
     let kind = st.tree.nodes[id].kind;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(kind_icon(kind)).size(18.0));
+        // The node's icon; click to pick another.
+        let icon = crate::icons::node(&st.tree, id);
+        let (rect, r) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+        if r.hovered() {
+            ui.painter().rect_filled(rect, 0.0, theme::GRAY_LIGHT);
+        }
+        crate::icons::paint(ui, st, &icon, rect.shrink(3.0));
+        let r = crate::docs::on(r.on_hover_text("Icon: click to change"), ui, "ui:icon");
+        let current = st.tree.nodes[id].text(crate::icons::PROP).to_string();
+        egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            theme::fade_in(ui);
+            if let Some(pick) = crate::icons::picker(ui, st, &current) {
+                st.will_change("icon");
+                if pick.is_empty() {
+                    st.tree.nodes[id].props.remove(crate::icons::PROP);
+                } else {
+                    st.tree.nodes[id].props.insert(crate::icons::PROP.into(), Variant::Text(pick));
+                }
+                ui.close();
+            }
+        });
         let mut name = st.tree.nodes[id].name.clone();
         let renamable = !st.tree.nodes[id].from_instance;
         if ui.add_enabled(renamable, egui::TextEdit::singleline(&mut name).desired_width(160.0)).changed() && !name.is_empty() && !name.contains('/') {
@@ -540,7 +562,8 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     let order: Vec<String> = defaults.iter().map(|d| d.to_string()).filter(|d| keys.contains(d)).collect();
     for group in gex_core::props::groups(kind) {
         let in_group: Vec<&String> = order.iter().filter(|k| gex_core::props::info(kind, k).group == group).collect();
-        if in_group.is_empty() {
+        // Faces of their own are a cube's.
+        if in_group.is_empty() || (group == "Advanced texture settings" && st.tree.nodes[id].text("mesh") != "cube") {
             continue;
         }
         let title = if group == "Main" { "Properties".to_string() } else { group.to_string() };
@@ -549,6 +572,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                 for k in in_group {
                     let info = gex_core::props::info(kind, k);
                     let label = ui.label(k.as_str());
+                    let row = label.rect;
                     if !info.doc.is_empty() {
                         label.on_hover_text(info.doc);
                     }
@@ -557,13 +581,54 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                         st.will_change(&format!("prop {:?} {}", id, k));
                         st.tree.nodes[id].props.insert(k.clone(), v);
                     }
+                    crate::docs::mark(ui, row.union(ui.min_rect().intersect(egui::Rect::everything_below(row.top())).intersect(egui::Rect::everything_above(row.bottom() + 4.0))), format!("prop:{}.{}", kind.name(), k));
                     ui.end_row();
                 }
             });
         });
     }
-    egui::CollapsingHeader::new("Custom properties").default_open(true).show(ui, |ui| {
-        let keys: Vec<String> = st.tree.nodes[id].props.keys().filter(|k| !defaults.contains(&k.as_str())).cloned().collect();
+    // $variables its scripts declare: set here, for this instance.
+    let mut vars: Vec<String> = Vec::new();
+    for res in st.tree.nodes[id].scripts.clone() {
+        for v in script_vars_of(ui, st, &res) {
+            if !vars.contains(&v) && !defaults.contains(&v.as_str()) {
+                vars.push(v);
+            }
+        }
+    }
+    if !vars.is_empty() {
+        let h = egui::CollapsingHeader::new("Script variables").default_open(true).show(ui, |ui| {
+            egui::Grid::new("script vars").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
+                for k in &vars {
+                    ui.label(RichText::new(format!("${}", k)).color(theme::C_EVENT)).on_hover_text("Declared in this node's script; the value here is this instance's");
+                    let mut v = st.tree.nodes[id].props.get(k).cloned().unwrap_or(Variant::Num(0.0));
+                    let mut changed = variant_ui(ui, &mut v, k);
+                    let kind = match &v {
+                        Variant::Num(_) => "Number",
+                        Variant::Bool(_) => "Switch",
+                        Variant::Color(_) => "Color",
+                        _ => "Text",
+                    };
+                    egui::ComboBox::from_id_salt(("var type", k)).width(64.0).selected_text(kind).show_ui(ui, |ui| {
+                        for (label, nv) in [("Number", Variant::Num(0.0)), ("Text", Variant::Text(String::new())), ("Switch", Variant::Bool(false)), ("Color", Variant::Color([1.0; 4]))] {
+                            if ui.selectable_label(kind == label, label).clicked() && kind != label {
+                                v = nv;
+                                changed = true;
+                            }
+                        }
+                    });
+                    if changed {
+                        st.will_change(&format!("prop {:?} {}", id, k));
+                        st.tree.nodes[id].props.insert(k.clone(), v);
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+        crate::docs::mark(ui, h.header_response.rect.union(h.body_response.map_or(h.header_response.rect, |b| b.rect)), "ui:script_vars");
+    }
+    let custom = egui::CollapsingHeader::new("Custom properties").default_open(true).show(ui, |ui| {
+        let keys: Vec<String> = st.tree.nodes[id].props.keys().filter(|k| !defaults.contains(&k.as_str()) && k.as_str() != crate::icons::PROP && !vars.contains(k)).cloned().collect();
         let mut remove = None;
         egui::Grid::new("custom props").num_columns(3).spacing([8.0, 4.0]).striped(true).show(ui, |ui| {
             for k in keys {
@@ -599,6 +664,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         });
         ui.data_mut(|d| d.insert_temp(mem_id, name));
     });
+    crate::docs::mark(ui, custom.header_response.rect.union(custom.body_response.map_or(custom.header_response.rect, |b| b.rect)), "ui:custom_props");
     if kind == NodeKind::TileMap2D {
         egui::CollapsingHeader::new("Tiles").default_open(true).show(ui, |ui| tile_palette(ui, st, id));
     }
@@ -717,7 +783,7 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
     item(ui, "Draw", "on_draw()");
     ui.separator();
     for (title, any, prefix) in [("Key pressed", "on_key_pressed(key)", "on_press_"), ("Key released", "on_key_released(key)", "on_release_")] {
-        ui.menu_button(title, |ui| {
+        ui.menu_button(title, |ui| { crate::theme::fade_in(ui);
             item(ui, "Any key", any);
             ui.separator();
             for k in ["left", "right", "up", "down", "space", "enter", "escape", "shift", "w", "a", "s", "d"] {
@@ -736,17 +802,17 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
             ui.data_mut(|d| d.insert_temp(mem, key));
         });
     }
-    ui.menu_button("Mouse", |ui| {
+    ui.menu_button("Mouse", |ui| { crate::theme::fade_in(ui);
         item(ui, "Pressed", "on_mouse_pressed(button, x, y)");
         item(ui, "Moved", "on_mouse_moved(x, y)");
         item(ui, "Wheel", "on_mouse_wheel(amount)");
     });
-    ui.menu_button("Collision", |ui| {
+    ui.menu_button("Collision", |ui| { crate::theme::fade_in(ui);
         item(ui, "Start", "on_collide_start(other)");
         item(ui, "While colliding", "on_collide(other)");
         item(ui, "End", "on_collide_end(other)");
     });
-    ui.menu_button("Other", |ui| {
+    ui.menu_button("Other", |ui| { crate::theme::fade_in(ui);
         item(ui, "Timer", "on_timer(name)");
         item(ui, "Animation end", "on_animation_end(name)");
         item(ui, "Tween end", "on_tween_end(property)");
@@ -755,7 +821,7 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
         item(ui, "Text submitted (a TextInput)", "on_text_submitted(text)");
     });
     ui.separator();
-    ui.menu_button("Custom", |ui| {
+    ui.menu_button("Custom", |ui| { crate::theme::fade_in(ui);
         ui.label(RichText::new("Runs when any script calls BROADCAST(\"name\"),\nor SEND(node, \"name\") for one node.").small().color(theme::TEXT_DIM));
         let known = broadcast_names(st);
         if !known.is_empty() {
@@ -786,6 +852,7 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
 
 /// The selected node's events (the on_... functions of its scripts) and the scripts themselves.
 pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:events");
     let Some(id) = st.selected.filter(|i| st.tree.contains(*i)) else {
         ui.label(RichText::new("Select a node to see its events.").color(theme::TEXT_DIM));
         return;
@@ -816,7 +883,8 @@ pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
         handlers.sort();
         for (line, h) in handlers {
             any = true;
-            if ui.add(egui::Button::selectable(false, event_label(&h))).on_hover_text(format!("{} in {}", h, res.trim_start_matches("res://"))).clicked() {
+            let r = ui.add(egui::Button::selectable(false, event_label(&h))).on_hover_text(format!("{} in {}", h, res.trim_start_matches("res://")));
+            if crate::docs::on(r, ui, format!("event:{}", h)).clicked() {
                 st.open_script(res, Some(line));
             }
         }
@@ -849,7 +917,7 @@ pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
         if ui.small_button("New script").clicked() {
             st.new_script_for(id);
         }
-        ui.menu_button("Attach", |ui| {
+        ui.menu_button("Attach", |ui| { crate::theme::fade_in(ui);
             let all: Vec<String> = list_files(st, "res://", "jlb").into_iter().filter(|s| !scripts.contains(s)).collect();
             if all.is_empty() {
                 ui.label(RichText::new("No other scripts in the project.").color(theme::TEXT_DIM));
@@ -890,7 +958,7 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
         return;
     }
     if in_project {
-        r.context_menu(|ui| {
+        r.context_menu(|ui| { crate::theme::fade_in(ui);
             if e.name.ends_with(".jscene") {
                 if ui.button("Open").on_hover_text("Its nodes, properties and events, as a window in the workspace").clicked() {
                     st.open_windows.push(e.path.clone());
@@ -904,6 +972,10 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
                     st.instance_scene(&e.path);
                     ui.close();
                 }
+                ui.separator();
+            }
+            if e.is_dir {
+                new_asset_menu(ui, st, &e.path);
                 ui.separator();
             }
             if ui.button("Rename…").clicked() {
@@ -923,7 +995,7 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
             }
         });
     } else if e.path.starts_with("gex://") && !e.is_dir {
-        r.context_menu(|ui| {
+        r.context_menu(|ui| { crate::theme::fade_in(ui);
             if ui.button("Copy into project").on_hover_text("makes a copy in res://assets/placeholders you can change").clicked() {
                 st.copy_builtin(&e.path);
                 ui.close();
@@ -932,27 +1004,17 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
     }
 }
 
-/// The kinds of asset, in the order the tree shows them: (group, does this file belong).
-const ASSET_GROUPS: &[(&str, fn(&str) -> bool)] = &[
-    ("Scenes", |n| n.ends_with(".jscene")),
-    ("Scripts", |n| n.ends_with(".jlb")),
-    ("Sprites", |n| gex_assets::image_load::is_image(n)),
-    ("Sounds", is_sound),
-    ("Models", |n| gex_assets::model::is_model(n)),
-    ("Fonts", |n| n.ends_with(".ttf") || n.ends_with(".otf")),
-    ("Shaders", |n| n.ends_with(".wgsl")),
-];
-
 fn is_sound(n: &str) -> bool {
     let n = n.to_ascii_lowercase();
     [".wav", ".mp3", ".ogg", ".flac"].iter().any(|e| n.ends_with(e))
 }
 
-/// Every file in the project (not the project file or hidden ones), looked up twice a second.
-fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<String>> {
+/// Everything in the project as (path, is a folder), without the project file and hidden
+/// ones, looked up twice a second.
+fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<(String, bool)>> {
     // The flag: the last look found the same files as the one before. Until it has, the
     // window redraws when the list goes stale, so a new file shows up without a mouse move.
-    type Cache = (f64, std::path::PathBuf, std::sync::Arc<Vec<String>>, bool);
+    type Cache = (f64, std::path::PathBuf, std::sync::Arc<Vec<(String, bool)>>, bool);
     let id = egui::Id::new("project files");
     let now = ui.input(|i| i.time);
     let old = ui.data(|d| d.get_temp::<Cache>(id)).filter(|c| c.1 == st.project.dir);
@@ -968,17 +1030,16 @@ fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<String>>
     let mut todo = vec!["res://".to_string()];
     while let Some(dir) = todo.pop() {
         for e in st.vfs.list(&dir) {
-            if e.name.starts_with('.') || e.name == gex_core::project::PROJECT_FILE {
+            if e.name.starts_with('.') || e.name == gex_core::project::PROJECT_FILE || out.len() >= 20000 {
                 continue;
             }
             if e.is_dir {
-                todo.push(e.path);
-            } else if out.len() < 20000 {
-                out.push(e.path);
+                todo.push(e.path.clone());
             }
+            out.push((e.path, e.is_dir));
         }
     }
-    out.sort_by_key(|p| p.to_lowercase());
+    out.sort_by_key(|p| p.0.to_lowercase());
     let files = std::sync::Arc::new(out);
     let settled = old.is_some_and(|o| *o.2 == *files);
     if !settled {
@@ -988,31 +1049,61 @@ fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<String>>
     files
 }
 
-/// One file in the asset tree: a small picture for images, click to select, drag to use,
-/// double-click to open, right-click for more.
-fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, tex: &mut std::collections::HashMap<String, egui::TextureHandle>, path: &str, label: &str) {
+/// "New folder / scene / script" entries that make the thing in `dir` and ask for its name.
+fn new_asset_menu(ui: &mut egui::Ui, st: &mut EditorState, dir: &str) {
+    let mut made = None;
+    if ui.button("New folder").clicked() {
+        made = st.new_folder(dir);
+    }
+    ui.menu_button("New scene", |ui| { crate::theme::fade_in(ui);
+        for (label, k) in [("2D", NodeKind::Node2D), ("3D", NodeKind::Node3D), ("UI / menu", NodeKind::Node)] {
+            if ui.button(label).clicked() {
+                made = st.new_scene_file(dir, k);
+            }
+        }
+    });
+    if ui.button("New script").clicked() {
+        made = st.new_script_file(dir);
+    }
+    if let Some(r) = made {
+        let name = r.rsplit('/').next().unwrap_or("").to_string();
+        set_dialog(ui.ctx(), AssetDialog::Rename(r, name));
+        ui.close();
+    }
+}
+
+/// The folder a path is in.
+fn parent_dir(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) if path[..i].ends_with(':') || path[..i].ends_with(":/") => &path[..i + 1],
+        Some(i) => &path[..i],
+        None => path,
+    }
+}
+
+/// One file in the asset tree: its icon (pictures and scenes show themselves), click to
+/// select, drag to use or to move into a folder, double-click to open, right-click for more.
+fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
     let name = path.rsplit('/').next().unwrap_or(path);
     let sel = st.asset_selected.as_deref() == Some(path);
-    let r = ui
-        .horizontal(|ui| {
-            if gex_assets::image_load::is_image(name) {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                // Pictures load when their row first scrolls into view.
-                if ui.is_rect_visible(rect) {
-                    let t = thumb(ui, st, tex, path);
-                    let size = t.size_vec2();
-                    let k = (16.0 / size.x).min(16.0 / size.y);
-                    ui.painter().image(t.id(), egui::Rect::from_center_size(rect.center(), size * k), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                }
-            }
-            ui.add(egui::Button::selectable(sel, label)).interact(egui::Sense::click_and_drag())
-        })
-        .inner;
+    let icon = if gex_assets::image_load::is_image(name) {
+        crate::icons::Icon::Image(path.to_string())
+    } else if name.ends_with(".jscene") && path.starts_with("res://") {
+        crate::icons::scene(st, path)
+    } else {
+        crate::icons::Icon::Silk(crate::icons::file(name).into())
+    };
+    let label = name.rsplit_once('.').map_or(name, |x| x.0);
+    let r = crate::icons::row(ui, st, &icon, RichText::new(label), sel).on_hover_text(name);
+    crate::docs::mark(ui, r.rect, format!("file:{}", path));
     r.dnd_set_drag_payload(AssetPath(path.to_string()));
+    let in_project = path.starts_with("res://");
     if r.clicked() {
         st.asset_selected = Some(path.to_string());
+        if in_project {
+            st.asset_dir = parent_dir(path).to_string();
+        }
     }
-    let in_project = path.starts_with("res://");
     asset_context_menu(&r, st, &gex_assets::vfs::Entry { name: name.to_string(), path: path.to_string(), is_dir: false }, in_project);
     if r.double_clicked() && in_project && st.playing.is_none() {
         if name.ends_with(".jscene") {
@@ -1020,6 +1111,71 @@ fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, tex: &mut std::collections
         } else if [".jlb", ".txt", ".vmt", ".wgsl", ".json", ".md"].iter().any(|x| name.ends_with(x)) {
             st.open_script(path, None);
         }
+    }
+}
+
+/// A folder in the asset tree and, when open, what's in it. Project folders take drops
+/// (things dragged onto them move in) and can be dragged themselves.
+fn asset_dir_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str, name: &str, files: Option<&[(String, bool)]>) {
+    let id = ui.make_persistent_id(("asset folder", path));
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let in_project = path.starts_with("res://");
+    let open = state.is_open();
+    let r = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+            crate::icons::row(ui, st, &crate::icons::Icon::Silk(if open { "folder" } else { "folder" }.into()), RichText::new(name), in_project && st.asset_dir == path && st.asset_selected.is_none())
+        })
+        .inner;
+    crate::docs::mark(ui, r.rect, "ui:folder");
+    if r.clicked() {
+        state.toggle(ui);
+        if in_project {
+            st.asset_dir = path.to_string();
+            st.asset_selected = None;
+        }
+    }
+    if in_project {
+        r.dnd_set_drag_payload(AssetPath(path.to_string()));
+        take_asset_drop(ui, st, &r, path);
+        asset_context_menu(&r, st, &gex_assets::vfs::Entry { name: name.to_string(), path: path.to_string(), is_dir: true }, true);
+    }
+    state.show_body_indented(&r, ui, |ui| match files {
+        Some(f) => asset_level(ui, st, f, path),
+        None => asset_folder(ui, st, path),
+    });
+}
+
+/// Something dragged from the tree and let go on a folder moves into it.
+fn take_asset_drop(ui: &egui::Ui, st: &mut EditorState, r: &egui::Response, dir: &str) {
+    let ok = |p: &AssetPath| p.0.starts_with("res://") && p.0 != dir && parent_dir(&p.0) != dir && !dir.starts_with(&format!("{}/", p.0));
+    if r.dnd_hover_payload::<AssetPath>().is_some_and(|p| ok(&p)) {
+        ui.painter().rect_stroke(r.rect, 0.0, egui::Stroke::new(1.5, theme::ACCENT), egui::StrokeKind::Inside);
+    }
+    if let Some(p) = r.dnd_release_payload::<AssetPath>().filter(|p| ok(p)) {
+        match st.move_asset(&p.0, dir) {
+            Ok(new) => {
+                st.asset_selected = Some(new);
+                // Show where it went.
+                let id = ui.make_persistent_id(("asset folder", dir));
+                let mut s = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+                s.set_open(true);
+                s.store(ui.ctx());
+            }
+            Err(e) => st.status = e,
+        }
+    }
+}
+
+/// What's directly in a project folder: folders first, then files.
+fn asset_level(ui: &mut egui::Ui, st: &mut EditorState, files: &[(String, bool)], dir: &str) {
+    let here: Vec<&(String, bool)> = files.iter().filter(|(p, _)| parent_dir(p) == dir).collect();
+    for (p, _) in here.iter().filter(|e| e.1) {
+        asset_dir_row(ui, st, p, p.rsplit('/').next().unwrap_or(p), Some(files));
+    }
+    for (p, _) in here.iter().filter(|e| !e.1) {
+        asset_row(ui, st, p);
     }
 }
 
@@ -1031,75 +1187,47 @@ fn thumb<'a>(ui: &egui::Ui, st: &EditorState, tex: &'a mut std::collections::Has
     })
 }
 
-/// A level of a group's tree: folders first, then files. `items` are (path parts below this
-/// level, full path).
-fn asset_level(ui: &mut egui::Ui, st: &mut EditorState, tex: &mut std::collections::HashMap<String, egui::TextureHandle>, salt: &str, items: &[(Vec<&str>, &str)], stems: bool) {
-    let mut folders: Vec<&str> = items.iter().filter(|(p, _)| p.len() > 1).map(|(p, _)| p[0]).collect();
-    folders.dedup();
-    for f in folders {
-        let inside: Vec<(Vec<&str>, &str)> = items.iter().filter(|(p, _)| p.len() > 1 && p[0] == f).map(|(p, full)| (p[1..].to_vec(), *full)).collect();
-        let salt = format!("{}/{}", salt, f);
-        egui::CollapsingHeader::new(f).id_salt(&salt).show(ui, |ui| asset_level(ui, st, tex, &salt, &inside, stems));
-    }
-    for (p, full) in items.iter().filter(|(p, _)| p.len() == 1) {
-        let label = if stems { p[0].rsplit_once('.').map_or(p[0], |x| x.0) } else { p[0] };
-        asset_row(ui, st, tex, full, label);
-    }
-}
-
 /// A folder outside the project (built-in art, a mounted game), listed as it's opened.
-fn asset_folder(ui: &mut egui::Ui, st: &mut EditorState, tex: &mut std::collections::HashMap<String, egui::TextureHandle>, dir: &str) {
+fn asset_folder(ui: &mut egui::Ui, st: &mut EditorState, dir: &str) {
     let entries = st.vfs.list(dir);
     for e in entries.iter().filter(|e| e.is_dir).take(2000) {
-        egui::CollapsingHeader::new(&e.name).id_salt(&e.path).show(ui, |ui| asset_folder(ui, st, tex, &e.path));
+        asset_dir_row(ui, st, &e.path, &e.name, None);
     }
     for e in entries.iter().filter(|e| !e.is_dir).take(2000) {
-        asset_row(ui, st, tex, &e.path, &e.name);
+        asset_row(ui, st, &e.path);
     }
 }
 
-/// The asset tree: the project's files grouped by kind (only the kinds it has), a preview of
-/// the selected one underneath.
+/// The asset tree: the project's folders and files as they are on disk (drag things onto
+/// folders to move them), then the built-in art and mounted games; a preview of the selected
+/// file underneath.
 pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::collections::HashMap<String, egui::TextureHandle>) {
-    let extras_id = egui::Id::new("assets show extras");
-    let mut extras: bool = ui.data(|d| d.get_temp(extras_id).unwrap_or(false));
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:assets");
     let filter_id = egui::Id::new("assets filter");
     let mut filter: String = ui.data(|d| d.get_temp(filter_id).unwrap_or_default());
+    if !st.asset_dir.starts_with("res://") || (st.asset_dir != "res://" && !st.project.res_to_path(&st.asset_dir).is_some_and(|p| p.is_dir())) {
+        st.asset_dir = "res://".into();
+    }
     ui.horizontal(|ui| {
         if st.playing.is_none() {
-            ui.menu_button("+", |ui| {
-                ui.menu_button("New scene", |ui| {
-                    for (label, k) in [("2D", NodeKind::Node2D), ("3D", NodeKind::Node3D), ("UI / menu", NodeKind::Node)] {
-                        if ui.button(label).clicked() {
-                            if let Some(r) = st.new_scene_file("res://scenes", k) {
-                                let name = r.rsplit('/').next().unwrap_or("").to_string();
-                                set_dialog(ui.ctx(), AssetDialog::Rename(r, name));
-                            }
-                            ui.close();
-                        }
-                    }
-                });
-                if ui.button("New script").clicked() {
-                    if let Some(r) = st.new_script_file("res://scripts") {
-                        let name = r.rsplit('/').next().unwrap_or("").to_string();
-                        set_dialog(ui.ctx(), AssetDialog::Rename(r, name));
-                    }
-                    ui.close();
+            let dir = st.asset_dir.clone();
+            ui.menu_button("+", |ui| { crate::theme::fade_in(ui);
+                if dir != "res://" {
+                    ui.label(RichText::new(format!("in {}", dir.trim_start_matches("res://"))).small().color(theme::TEXT_DIM));
                 }
+                new_asset_menu(ui, st, &dir);
                 #[cfg(windows)]
                 if ui.button("Import files…").clicked() {
                     if let Some(files) = rfd::FileDialog::new().pick_files() {
-                        st.asset_dir = "res://assets".into();
                         st.import_files(&files);
                     }
                     ui.close();
                 }
+                ui.separator();
                 if ui.button("Open project folder").on_hover_text("In the file manager. Files dropped on the GEX window are imported too").clicked() {
                     crate::files::reveal(&st.project.dir);
                     ui.close();
                 }
-                ui.separator();
-                ui.checkbox(&mut extras, "Show built-in art and mounts").on_hover_text("Placeholder pictures that come with GEX, and connected game installs");
                 if let Some(last) = st.file_undo.last() {
                     ui.separator();
                     if ui.button(format!("Undo: {}", last.describe())).clicked() {
@@ -1109,50 +1237,48 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 }
             })
             .response
-            .on_hover_text("New scene, new script, import");
+            .on_hover_text("New folder, scene or script (in the selected folder), import");
         }
         ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(f32::INFINITY));
     });
-    ui.data_mut(|d| {
-        d.insert_temp(extras_id, extras);
-        d.insert_temp(filter_id, filter.clone());
-    });
+    ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
     asset_dialogs(ui, st);
+    let _ = &ctx_textures;
     let files = project_files(ui, st);
     let needle = filter.trim().to_lowercase();
-    let shown: Vec<&String> = files.iter().filter(|p| needle.is_empty() || p.rsplit('/').next().unwrap_or(p).to_lowercase().contains(&needle)).collect();
     let preview = st.asset_selected.clone().filter(|s| gex_assets::image_load::is_image(s) || gex_assets::model::is_model(s) || is_sound(s));
     let preview_h = if preview.is_some() { 190.0 } else { 0.0 };
     egui::ScrollArea::vertical().id_salt("asset tree").max_height((ui.available_height() - preview_h).max(60.0)).auto_shrink([false, false]).show(ui, |ui| {
-        if files.is_empty() && !extras {
-            ui.label(RichText::new("No assets yet. The + button above makes a scene or a script; files dropped on the window are imported.").color(theme::TEXT_DIM));
-        } else if shown.is_empty() && !needle.is_empty() {
-            ui.label(RichText::new("Nothing matches.").color(theme::TEXT_DIM));
+        if !needle.is_empty() {
+            // Searching: the matching files, flat.
+            let found: Vec<&(String, bool)> = files.iter().filter(|(p, d)| !d && p.rsplit('/').next().unwrap_or(p).to_lowercase().contains(&needle)).collect();
+            if found.is_empty() {
+                ui.label(RichText::new("Nothing matches.").color(theme::TEXT_DIM));
+            }
+            for (p, _) in found {
+                asset_row(ui, st, p);
+            }
+            return;
         }
-        let mut rest: Vec<&String> = shown.clone();
-        for (group, belongs) in ASSET_GROUPS.iter().copied().chain([("Other", (|_| true) as fn(&str) -> bool)]) {
-            let (mine, others): (Vec<&String>, Vec<&String>) = rest.into_iter().partition(|p| belongs(p));
-            rest = others;
-            if mine.is_empty() {
-                continue;
-            }
-            // Folders every file of the group shares aren't shown (scenes/ under Scenes).
-            let dirs: Vec<Vec<&str>> = mine.iter().map(|p| p.trim_start_matches("res://").split('/').collect::<Vec<_>>()).collect();
-            let mut common = dirs[0].len() - 1;
-            for d in &dirs {
-                common = common.min(d.len() - 1).min(d.iter().zip(&dirs[0]).take_while(|(a, b)| a == b).count());
-            }
-            let items: Vec<(Vec<&str>, &str)> = dirs.iter().zip(&mine).map(|(d, full)| (d[common..].to_vec(), full.as_str())).collect();
-            let mut h = egui::CollapsingHeader::new(group).id_salt(("asset group", group)).default_open(true);
-            if !needle.is_empty() {
-                h = h.open(Some(true));
-            }
-            h.show(ui, |ui| asset_level(ui, st, ctx_textures, group, &items, group != "Other"));
+        if files.is_empty() {
+            ui.label(RichText::new("Nothing here yet. The + button makes folders, scenes and scripts; files dropped on the window are imported.").color(theme::TEXT_DIM));
         }
-        if extras {
-            for r in st.vfs.roots().into_iter().filter(|r| !r.path.starts_with("res://")) {
-                egui::CollapsingHeader::new(&r.name).id_salt(&r.path).show(ui, |ui| asset_folder(ui, st, ctx_textures, &r.path));
-            }
+        asset_level(ui, st, &files, "res://");
+        ui.add_space(6.0);
+        // What comes with the engine, and connected game installs (read in place).
+        for r in st.vfs.roots().into_iter().filter(|r| !r.path.starts_with("res://")) {
+            asset_dir_row(ui, st, &r.path, if r.path.starts_with("gex://") { "Built-in" } else { &r.name }, None);
+        }
+        // The empty space under the tree is the project's top folder.
+        let rest = ui.available_rect_before_wrap();
+        let bg = ui.interact(rest, ui.id().with("asset root"), egui::Sense::click());
+        take_asset_drop(ui, st, &bg, "res://");
+        if bg.clicked() {
+            st.asset_dir = "res://".into();
+            st.asset_selected = None;
+        }
+        if st.playing.is_none() {
+            bg.context_menu(|ui| new_asset_menu(ui, st, "res://"));
         }
     });
     let Some(sel) = preview else { return };
@@ -1258,6 +1384,7 @@ fn watches(ui: &mut egui::Ui, st: &mut EditorState, at: &gex_script::thread::Pau
 }
 
 pub fn console(ui: &mut egui::Ui, st: &mut EditorState) {
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:console");
     debugger(ui, st);
     ui.horizontal(|ui| {
         if ui.button("Clear").clicked() {
@@ -1325,7 +1452,9 @@ fn asset_dialogs(ui: &mut egui::Ui, st: &mut EditorState) {
         AssetDialog::Rename(..) => "Rename",
         AssetDialog::Delete(_) => "Delete",
     };
-    egui::Window::new(title).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| match &mut d {
+    egui::Window::new(title).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| {
+        theme::fade_in(ui);
+        match &mut d {
         AssetDialog::Rename(res, name) => {
             // The name is shown and typed without its ending (.jscene, .png...).
             let ext = res.rsplit('/').next().and_then(|n| n.rfind('.').filter(|i| *i > 0).map(|i| n[i..].to_string())).unwrap_or_default();
@@ -1351,6 +1480,16 @@ fn asset_dialogs(ui: &mut egui::Ui, st: &mut EditorState) {
         }
         AssetDialog::Delete(res) => {
             ui.label(format!("Move {} to the trash?", res));
+            // Looked up once per dialog, not every frame.
+            let uid = egui::Id::new(("asset users", res.as_str()));
+            let users: Vec<String> = ui.data(|d| d.get_temp(uid)).unwrap_or_else(|| {
+                let u = crate::files::users(&st.project, res);
+                ui.data_mut(|d| d.insert_temp(uid, u.clone()));
+                u
+            });
+            if !users.is_empty() {
+                ui.label(RichText::new(format!("Used in {} file(s): its instances and attached scripts are taken out of those scenes.", users.len())).color(theme::WARN));
+            }
             ui.label(RichText::new("It goes to the project's hidden .trash folder, so you can get it back.").small().color(theme::TEXT_DIM));
             ui.horizontal(|ui| {
                 if ui.button(RichText::new("Delete").color(theme::BAD)).clicked() {
@@ -1364,7 +1503,7 @@ fn asset_dialogs(ui: &mut egui::Ui, st: &mut EditorState) {
                 }
             });
         }
-    });
+    }});
     let keep = open && !done;
     ctx.data_mut(|m| m.insert_temp(dialog_id(), if keep { Some(d) } else { None }));
 }

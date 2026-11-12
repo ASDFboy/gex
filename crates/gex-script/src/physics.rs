@@ -106,7 +106,10 @@ fn num(tree: &SceneTree, id: NodeId, k: &str, d: f64) -> f32 {
 /// Everything about a body that, when changed, means building it again.
 fn shape_key(tree: &SceneTree, id: NodeId, scale: Vec3, settings: &PhysicsSettings) -> String {
     let n = &tree.nodes[id];
-    let mut s = format!("{:?}|{}", scale, settings.sleeping);
+    // Rounded: a turned node's scale comes back out of its matrix with noise in the last
+    // digits, and that must not count as a new shape (the body would be rebuilt every step).
+    let r = |v: f32| (v * 1000.0).round() / 1000.0;
+    let mut s = format!("{:?}|{}", [r(scale.x), r(scale.y), r(scale.z)], settings.sleeping);
     for k in ["body", "shape", "width", "height", "depth", "radius", "density", "mass", "can_sleep", "layer", "mask"] {
         s.push_str(&format!("|{:?}", n.props.get(k)));
     }
@@ -184,9 +187,12 @@ struct Entry2 {
     key: String,
     params: String,
     spin: f32,
+    /// Where the node was last seen or put (what a script would have to change to move it).
     pos: Vec2,
     angle: f32,
     vel: Vec2,
+    /// Where the body was before the last step: what's shown glides from here to where it is.
+    from: (Vec2, f32),
 }
 
 pub struct World2 {
@@ -282,7 +288,7 @@ impl World2 {
         let (body, collider) = self.world.insert(builder, col);
         self.owners.insert(collider, id);
         let spin = num(tree, id, "spin", 0.0);
-        self.bodies.insert(id, Entry2 { body, collider, key, params: params_key(tree, id, settings), pos, angle, vel, spin });
+        self.bodies.insert(id, Entry2 { body, collider, key, params: params_key(tree, id, settings), pos, angle, vel, spin, from: (pos, angle) });
         self.apply_params(id, &BodyParams::of(tree, id, settings));
     }
 
@@ -337,33 +343,87 @@ impl World2 {
                 self.apply_params(id, &BodyParams::of(tree, id, settings));
                 self.bodies.get_mut(&id).unwrap().params = params;
             }
+            let Some(e) = self.bodies.get(&id) else { continue };
+            if pos.distance(e.pos) > 0.01 + pos.length() * 1e-5 || (angle - e.angle).abs() > 1e-4 {
+                self.moved_by_script(id, pos, angle);
+            }
             let Some(e) = self.bodies.get_mut(&id) else { continue };
             let b = &mut self.world.bodies[e.body];
-            if pos.distance(e.pos) > 0.01 || (angle - e.angle).abs() > 1e-4 {
-                // Moved by a script or the editor: teleport.
-                let p = d2::Pose::new(d2::Vector::new(pos.x, pos.y) / PIXELS_PER_METRE, angle);
-                if b.is_kinematic() {
-                    b.set_next_kinematic_position(p);
-                } else {
-                    b.set_position(p, true);
-                }
-                e.pos = pos;
-                e.angle = angle;
-            }
             let vel = Vec2::new(num(tree, id, "vx", 0.0), num(tree, id, "vy", 0.0));
             if vel.distance(e.vel) > 1e-3 && b.is_dynamic() {
                 b.set_linvel(d2::Vector::new(vel.x, vel.y) / PIXELS_PER_METRE, true);
                 e.vel = vel;
             }
             let spin = num(tree, id, "spin", 0.0);
-            if (spin - e.spin).abs() > 1e-3 && b.is_dynamic() {
+            if (spin - e.spin).abs() > 1e-3 + e.spin.abs() * 1e-4 && b.is_dynamic() {
                 b.set_angvel(spin.to_radians(), true);
                 e.spin = spin;
             }
         }
     }
 
+    /// A script (or the editor) changed a body's node. A dynamic body nudged a short way is
+    /// pushed there, stopping and sliding at what's in the way, so walking it into a wall
+    /// doesn't put it through the wall; a jump further than its own size is a teleport.
+    fn moved_by_script(&mut self, id: NodeId, pos: Vec2, angle: f32) {
+        let Some(e) = self.bodies.get(&id) else { return };
+        let (body, collider, seen, seen_angle) = (e.body, e.collider, e.pos, e.angle);
+        let b = &self.world.bodies[body];
+        let cur = *b.position();
+        let (kinematic, dynamic) = (b.is_kinematic(), b.is_dynamic());
+        let delta = (pos - seen) / PIXELS_PER_METRE;
+        let size = self.world.colliders.get(collider).map(|c| c.compute_aabb().extents().length()).unwrap_or(1.0);
+        let turned = cur.rotation.angle() + (angle - seen_angle);
+        let mut new_pose = d2::Pose::new(d2::Vector::new(pos.x, pos.y) / PIXELS_PER_METRE, angle);
+        let mut nudged = false;
+        if dynamic && delta.length() <= size {
+            if let Some(col) = self.world.colliders.get(collider) {
+                let filter = d2::QueryFilter::default().exclude_rigid_body(body).exclude_sensors().groups(col.collision_groups());
+                let qp = self.world.query_pipeline_with_filter(filter);
+                let mut plain = d2::KinematicCharacterController::default();
+                plain.offset = d2::CharacterLength::Absolute(0.01);
+                plain.snap_to_ground = None;
+                plain.autostep = None;
+                plain.max_slope_climb_angle = std::f32::consts::PI;
+                plain.min_slope_slide_angle = std::f32::consts::PI;
+                let m = plain.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &cur, d2::Vector::new(delta.x, delta.y), |_| {});
+                new_pose = d2::Pose::new(cur.translation + m.translation, turned);
+                nudged = true;
+            }
+        }
+        let b = &mut self.world.bodies[body];
+        if kinematic {
+            b.set_next_kinematic_position(new_pose);
+        } else {
+            b.set_position(new_pose, true);
+        }
+        let e = self.bodies.get_mut(&id).unwrap();
+        let moved = Vec2::new(new_pose.translation.x - cur.translation.x, new_pose.translation.y - cur.translation.y) * PIXELS_PER_METRE;
+        e.from = if nudged { (e.from.0 + moved, e.from.1 + (angle - seen_angle)) } else { (pos, angle) };
+        e.pos = pos;
+        e.angle = angle;
+    }
+
+    /// Puts a body's node where the body is (world pixels, radians).
+    fn place(tree: &mut SceneTree, id: NodeId, pos: Vec2, angle: f32) {
+        let pm = parent_matrix(tree, id);
+        let local = pm.inverse().transform_point3(pos.extend(0.0));
+        let parent_angle = pm.to_scale_rotation_translation().1.to_euler(EulerRot::YXZ).2;
+        let n = &mut tree.nodes[id];
+        n.transform.position.x = local.x;
+        n.transform.position.y = local.y;
+        n.transform.rotation.z = (angle - parent_angle).to_degrees();
+    }
+
+    fn body_pose(b: &d2::RigidBody) -> (Vec2, f32) {
+        let t = b.translation() * PIXELS_PER_METRE;
+        (Vec2::new(t.x, t.y), b.rotation().angle())
+    }
+
     fn step(&mut self, tree: &mut SceneTree) {
+        for e in self.bodies.values_mut() {
+            e.from = Self::body_pose(&self.world.bodies[e.body]);
+        }
         self.world.step();
         let floor: HashSet<NodeId> = self.floor_contacts();
         for (id, e) in self.bodies.iter_mut() {
@@ -371,17 +431,10 @@ impl World2 {
             if !b.is_dynamic() {
                 continue;
             }
-            let t = b.translation() * PIXELS_PER_METRE;
-            let pos = Vec2::new(t.x, t.y);
-            let angle = b.rotation().angle();
+            let (pos, angle) = Self::body_pose(b);
             let v = b.linvel() * PIXELS_PER_METRE;
-            let pm = parent_matrix(tree, *id);
-            let local = pm.inverse().transform_point3(pos.extend(0.0));
-            let parent_angle = pm.to_scale_rotation_translation().1.to_euler(EulerRot::YXZ).2;
+            Self::place(tree, *id, pos, angle);
             let n = &mut tree.nodes[*id];
-            n.transform.position.x = local.x;
-            n.transform.position.y = local.y;
-            n.transform.rotation.z = (angle - parent_angle).to_degrees();
             n.props.insert("vx".into(), Variant::Num(v.x as f64));
             n.props.insert("vy".into(), Variant::Num(v.y as f64));
             let spin = b.angvel().to_degrees();
@@ -391,6 +444,26 @@ impl World2 {
             e.angle = angle;
             e.vel = Vec2::new(v.x, v.y);
             e.spin = spin;
+        }
+    }
+
+    /// Between physics steps: shows each moving body part of the way (`alpha`, 0..1) from
+    /// where it was before the last step to where it is, so motion is smooth at any frame rate.
+    fn present(&mut self, tree: &mut SceneTree, alpha: f32) {
+        for (id, e) in self.bodies.iter_mut() {
+            let b = &self.world.bodies[e.body];
+            if !b.is_dynamic() || b.is_sleeping() || !tree.contains(*id) {
+                continue;
+            }
+            let (pos, angle) = Self::body_pose(b);
+            let mut turn = (angle - e.from.1) % std::f32::consts::TAU;
+            if turn.abs() > std::f32::consts::PI {
+                turn -= std::f32::consts::TAU * turn.signum();
+            }
+            let (p, a) = (e.from.0.lerp(pos, alpha), e.from.1 + turn * alpha);
+            Self::place(tree, *id, p, a);
+            e.pos = p;
+            e.angle = a;
         }
     }
 
@@ -443,7 +516,16 @@ impl World2 {
         let qp = self.world.query_pipeline_with_filter(filter);
         let pose = *self.world.bodies[e.body].position();
         let d = d2::Vector::new(delta.x, delta.y) / PIXELS_PER_METRE;
-        let m = self.controller.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &pose, d, |_| {});
+        let mut hits = Vec::new();
+        let m = self.controller.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &pose, d, |c| hits.push(c));
+        // What it walked into gets pushed (a crate slides instead of acting like a wall).
+        if !hits.is_empty() {
+            let (shape, mass, dt) = (col.shared_shape().clone(), col.mass().max(1.0), self.world.integration_parameters.dt);
+            let filter = d2::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors();
+            let w = &mut self.world;
+            let mut qm = w.broad_phase.as_query_pipeline_mut(w.narrow_phase.query_dispatcher(), &mut w.bodies, &mut w.colliders, filter);
+            self.controller.solve_character_collision_impulses(dt, &mut qm, &*shape, mass, &hits);
+        }
         let new_t = pose.translation + m.translation;
         let new_pose = d2::Pose::new(new_t, pose.rotation.angle());
         let b = &mut self.world.bodies[e.body];
@@ -499,9 +581,12 @@ struct Entry3 {
     key: String,
     params: String,
     spin: Vec3,
+    /// Where the node was last seen or put (what a script would have to change to move it).
     pos: Vec3,
     rot: Quat,
     vel: Vec3,
+    /// Where the body was before the last step: what's shown glides from here to where it is.
+    from: (Vec3, Quat),
 }
 
 /// A skinned model gone limp: a body per bone, held together at the joints.
@@ -553,7 +638,6 @@ impl World3 {
         ip.dt = 1.0 / s.tick_rate.clamp(10.0, 480.0);
         ip.num_solver_iterations = s.solver_iterations.max(1) as usize;
         ip.max_ccd_substeps = s.ccd_substeps.max(1) as usize;
-        ip.contact_softness.natural_frequency = s.contact_stiffness.max(1.0);
         let c = &mut self.controller;
         c.max_slope_climb_angle = s.max_slope.to_radians();
         c.min_slope_slide_angle = s.max_slope.to_radians();
@@ -614,7 +698,7 @@ impl World3 {
         let col = if mass > 0.0 { col.mass(mass) } else { col.density(num(tree, id, "density", 1.0).max(0.001)) };
         let (body, collider) = self.world.insert(builder, col);
         self.owners.insert(collider, id);
-        self.bodies.insert(id, Entry3 { body, collider, key, params: params_key(tree, id, settings), pos, rot, vel, spin: spin3(tree, id) });
+        self.bodies.insert(id, Entry3 { body, collider, key, params: params_key(tree, id, settings), pos, rot, vel, spin: spin3(tree, id), from: (pos, rot) });
         self.apply_params(id, &BodyParams::of(tree, id, settings));
     }
 
@@ -691,32 +775,81 @@ impl World3 {
                 self.apply_params(id, &BodyParams::of(tree, id, settings));
                 self.bodies.get_mut(&id).unwrap().params = params;
             }
+            let Some(e) = self.bodies.get(&id) else { continue };
+            if pos.distance(e.pos) > 2e-4 + pos.length() * 1e-5 || rot.angle_between(e.rot) > 2e-3 {
+                self.moved_by_script(id, pos, rot);
+            }
             let Some(e) = self.bodies.get_mut(&id) else { continue };
             let b = &mut self.world.bodies[e.body];
-            if pos.distance(e.pos) > 1e-4 || rot.angle_between(e.rot) > 1e-4 {
-                let p = d3::Pose::from_parts(pos, rot);
-                if b.is_kinematic() {
-                    b.set_next_kinematic_position(p);
-                } else {
-                    b.set_position(p, true);
-                }
-                e.pos = pos;
-                e.rot = rot;
-            }
             let vel = Vec3::new(num(tree, id, "vx", 0.0), num(tree, id, "vy", 0.0), num(tree, id, "vz", 0.0));
-            if vel.distance(e.vel) > 1e-4 && b.is_dynamic() {
+            if vel.distance(e.vel) > 1e-4 + e.vel.length() * 1e-5 && b.is_dynamic() {
                 b.set_linvel(vel, true);
                 e.vel = vel;
             }
             let spin = spin3(tree, id);
-            if spin.distance(e.spin) > 1e-4 && b.is_dynamic() {
+            if spin.distance(e.spin) > 1e-3 + e.spin.length() * 1e-4 && b.is_dynamic() {
                 b.set_angvel(spin, true);
                 e.spin = spin;
             }
         }
     }
 
+    /// A script (or the editor) changed a body's node: see the 2D one.
+    fn moved_by_script(&mut self, id: NodeId, pos: Vec3, rot: Quat) {
+        let Some(e) = self.bodies.get(&id) else { return };
+        let (body, collider, seen, seen_rot) = (e.body, e.collider, e.pos, e.rot);
+        let b = &self.world.bodies[body];
+        let cur = *b.position();
+        let (kinematic, dynamic) = (b.is_kinematic(), b.is_dynamic());
+        let delta = pos - seen;
+        let size = self.world.colliders.get(collider).map(|c| c.compute_aabb().extents().length()).unwrap_or(1.0);
+        let turned = (rot * seen_rot.inverse() * cur.rotation).normalize();
+        let mut new_pose = d3::Pose::from_parts(pos, rot);
+        let mut nudged = false;
+        if dynamic && delta.length() <= size {
+            if let Some(col) = self.world.colliders.get(collider) {
+                let filter = d3::QueryFilter::default().exclude_rigid_body(body).exclude_sensors().groups(col.collision_groups());
+                let qp = self.world.query_pipeline_with_filter(filter);
+                let mut plain = d3::KinematicCharacterController::default();
+                plain.offset = d3::CharacterLength::Absolute(0.01);
+                plain.snap_to_ground = None;
+                plain.autostep = None;
+                plain.max_slope_climb_angle = std::f32::consts::PI;
+                plain.min_slope_slide_angle = std::f32::consts::PI;
+                let m = plain.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &cur, delta, |_| {});
+                new_pose = d3::Pose::from_parts(cur.translation + m.translation, turned);
+                nudged = true;
+            }
+        }
+        let b = &mut self.world.bodies[body];
+        if kinematic {
+            b.set_next_kinematic_position(new_pose);
+        } else {
+            b.set_position(new_pose, true);
+        }
+        let e = self.bodies.get_mut(&id).unwrap();
+        let moved = new_pose.translation - cur.translation;
+        e.from = if nudged { (e.from.0 + moved, (rot * seen_rot.inverse() * e.from.1).normalize()) } else { (pos, rot) };
+        e.pos = pos;
+        e.rot = rot;
+    }
+
+    /// Puts a body's node where the body is (world space).
+    fn place(tree: &mut SceneTree, id: NodeId, pos: Vec3, rot: Quat) {
+        let pm = parent_matrix(tree, id);
+        let local = pm.inverse() * Mat4::from_rotation_translation(rot, pos);
+        let (_, lr, lt) = local.to_scale_rotation_translation();
+        let (y, x, z) = lr.to_euler(EulerRot::YXZ);
+        let n = &mut tree.nodes[id];
+        n.transform.position = lt;
+        n.transform.rotation = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
+    }
+
     fn step(&mut self, tree: &mut SceneTree) {
+        for e in self.bodies.values_mut() {
+            let b = &self.world.bodies[e.body];
+            e.from = (b.translation(), *b.rotation());
+        }
         self.world.step();
         let floor = self.floor_contacts();
         for (id, e) in self.bodies.iter_mut() {
@@ -727,15 +860,8 @@ impl World3 {
             let pos = b.translation();
             let rot = *b.rotation();
             let v = b.linvel();
-            let pm = parent_matrix(tree, *id);
-            let scale = tree.nodes[*id].transform.scale;
-            let local = pm.inverse() * Mat4::from_rotation_translation(rot, pos);
-            let (_, lr, lt) = local.to_scale_rotation_translation();
-            let (y, x, z) = lr.to_euler(EulerRot::YXZ);
+            Self::place(tree, *id, pos, rot);
             let n = &mut tree.nodes[*id];
-            n.transform.position = lt;
-            n.transform.rotation = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
-            n.transform.scale = scale;
             n.props.insert("vx".into(), Variant::Num(v.x as f64));
             n.props.insert("vy".into(), Variant::Num(v.y as f64));
             n.props.insert("vz".into(), Variant::Num(v.z as f64));
@@ -744,10 +870,27 @@ impl World3 {
                 n.props.insert(k.into(), Variant::Num(a.to_degrees() as f64));
             }
             n.props.insert("on_floor".into(), Variant::Bool(floor.contains(id)));
-            e.pos = pos;
-            e.rot = rot;
+            // What the node now says (after the trip through degrees), so only a real
+            // change by a script counts as one.
+            let (p, r, _) = pose3(tree, *id);
+            e.pos = p;
+            e.rot = r;
             e.vel = v;
             e.spin = w;
+        }
+    }
+
+    /// Between physics steps: see the 2D one.
+    fn present(&mut self, tree: &mut SceneTree, alpha: f32) {
+        for (id, e) in self.bodies.iter_mut() {
+            let b = &self.world.bodies[e.body];
+            if !b.is_dynamic() || b.is_sleeping() || !tree.contains(*id) {
+                continue;
+            }
+            Self::place(tree, *id, e.from.0.lerp(b.translation(), alpha), e.from.1.slerp(*b.rotation(), alpha));
+            let (p, r, _) = pose3(tree, *id);
+            e.pos = p;
+            e.rot = r;
         }
     }
 
@@ -899,7 +1042,16 @@ impl World3 {
         let filter = d3::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors().groups(col.collision_groups());
         let qp = self.world.query_pipeline_with_filter(filter);
         let pose = *self.world.bodies[e.body].position();
-        let m = self.controller.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &pose, delta, |_| {});
+        let mut hits = Vec::new();
+        let m = self.controller.move_shape(self.world.integration_parameters.dt, &qp, col.shape(), &pose, delta, |c| hits.push(c));
+        // What it walked into gets pushed (a crate slides instead of acting like a wall).
+        if !hits.is_empty() {
+            let (shape, mass, dt) = (col.shared_shape().clone(), col.mass().max(1.0), self.world.integration_parameters.dt);
+            let filter = d3::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors();
+            let w = &mut self.world;
+            let mut qm = w.broad_phase.as_query_pipeline_mut(w.narrow_phase.query_dispatcher(), &mut w.bodies, &mut w.colliders, filter);
+            self.controller.solve_character_collision_impulses(dt, &mut qm, &*shape, mass, &hits);
+        }
         let new_t = pose.translation + m.translation;
         let new_pose = d3::Pose::from_parts(new_t, pose.rotation);
         let b = &mut self.world.bodies[e.body];
@@ -1001,6 +1153,18 @@ impl Physics {
         }
         if let Some(w) = &mut self.w3 {
             w.step(tree);
+        }
+    }
+
+    /// After the frame's steps: shows moving bodies `alpha` (0..1) of the way into the step
+    /// that's still to come, so motion is smooth whatever the frame rate.
+    pub fn present(&mut self, tree: &mut SceneTree, alpha: f32) {
+        let alpha = alpha.clamp(0.0, 1.0);
+        if let Some(w) = &mut self.w2 {
+            w.present(tree, alpha);
+        }
+        if let Some(w) = &mut self.w3 {
+            w.present(tree, alpha);
         }
     }
 

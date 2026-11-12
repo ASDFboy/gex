@@ -300,6 +300,18 @@ impl NodeKind {
                 ("texture", Res(String::new())),
                 ("uv_scale_x", Num(1.0)),
                 ("uv_scale_y", Num(1.0)),
+                ("face_front", Res(String::new())),
+                ("face_back", Res(String::new())),
+                ("face_left", Res(String::new())),
+                ("face_right", Res(String::new())),
+                ("face_top", Res(String::new())),
+                ("face_bottom", Res(String::new())),
+                ("hide_front", Bool(false)),
+                ("hide_back", Bool(false)),
+                ("hide_left", Bool(false)),
+                ("hide_right", Bool(false)),
+                ("hide_top", Bool(false)),
+                ("hide_bottom", Bool(false)),
                 ("cast_shadows", Bool(true)),
                 ("collision", Bool(false)),
                 ("animation", Text(String::new())),
@@ -574,4 +586,19 @@ impl Node {
     pub fn color(&self, k: &str) -> [f32; 4] {
         self.props.get(k).map(Variant::as_color).unwrap_or([1.0; 4])
     }
+}
+
+/// The `$name` variables a script declares (a line of its own, outside any block): values set
+/// per instance in the editor instead of in the script.
+pub fn script_vars(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix('$') else { continue };
+        let name: String = rest.chars().take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_').collect();
+        let after = rest[name.len()..].trim();
+        if !name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit()) && (after.is_empty() || after.starts_with(">>")) && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
 }

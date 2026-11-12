@@ -321,34 +321,47 @@ struct Drag {
 
 pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::RenderState>, textures: &mut Option<egui::TextureId>) {
     let playing = st.playing.is_some();
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:scene_view");
     ui.horizontal(|ui| {
-        if ui.selectable_label(!st.mode_3d, "2D").clicked() {
+        let a = ui.selectable_label(!st.mode_3d, "2D");
+        if a.clicked() {
             st.mode_3d = false;
         }
-        if ui.selectable_label(st.mode_3d, "3D").clicked() {
+        let b = ui.selectable_label(st.mode_3d, "3D");
+        if b.clicked() {
             st.mode_3d = true;
         }
+        crate::docs::mark(ui, a.rect.union(b.rect), "ui:2d3d");
         ui.separator();
-        for (t, label, key) in [(Tool::Move, "Move", "W"), (Tool::Rotate, "Rotate", "E"), (Tool::Scale, "Scale", "R")] {
-            if ui.selectable_label(st.tool == t, label).on_hover_text(format!("{} (hold Ctrl to snap)", key)).clicked() {
+        for (t, label, key) in [(Tool::Move, "Move", "1"), (Tool::Rotate, "Rotate", "2"), (Tool::Scale, "Scale", "3")] {
+            if crate::docs::on(ui.selectable_label(st.tool == t, label).on_hover_text(format!("Key: {}", key)), ui, "ui:tools").clicked() {
                 st.tool = t;
             }
         }
         ui.separator();
-        ui.checkbox(&mut st.show_grid, "Grid");
-        ui.checkbox(&mut st.show_colliders, "Colliders").on_hover_text("Outline 2D colliders and bodies (in the editor and while playing)");
+        let snap0 = ui.label("Snap").rect;
+        let (step, unit, speed) = if st.mode_3d { (&mut st.snap3, " m", 0.05) } else { (&mut st.snap2, " px", 1.0) };
+        ui.add(egui::DragValue::new(step).range(0.0..=10000.0).speed(speed).suffix(unit)).on_hover_text("Moving and scaling go in steps of this (scaling in 2D: steps of 0.25). 0 is off.\nHolding Ctrl while dragging flips snapping.");
+        ui.add(egui::DragValue::new(&mut st.snap_angle).range(0.0..=180.0).speed(1.0).suffix("°")).on_hover_text("Rotating goes in steps of this. 0 is off.\nHolding Ctrl while dragging flips snapping.");
+        crate::docs::mark(ui, snap0.union(ui.min_rect().intersect(egui::Rect::everything_right_of(snap0.left()))), "ui:snap");
+        ui.separator();
+        let r = ui.checkbox(&mut st.show_grid, "Grid");
+        crate::docs::mark(ui, r.rect, "ui:grid");
+        let r = ui.checkbox(&mut st.show_colliders, "Colliders").on_hover_text("Outline 2D colliders and bodies (in the editor and while playing)");
+        crate::docs::mark(ui, r.rect, "ui:colliders");
         if let Some(p) = &mut st.playing {
             ui.separator();
-            ui.checkbox(&mut p.game_camera, "Game camera").on_hover_text("Off: look around with the editor camera while the game runs");
+            let r = ui.checkbox(&mut p.game_camera, "Game camera").on_hover_text("Off: look around with the editor camera while the game runs");
+            crate::docs::mark(ui, r.rect, "ui:game_camera");
             if !ui.ctx().memory(|m| m.focused().is_some_and(|f| Some(f) == ui.ctx().data(|d| d.get_temp::<egui::Id>(egui::Id::new("gex viewport id"))))) {
                 ui.label(egui::RichText::new("Click the view to give the game the keyboard").small().color(theme::WARN));
             }
         } else {
             ui.separator();
             ui.label(egui::RichText::new("Controls").small().color(theme::TEXT_DIM)).on_hover_text(if st.mode_3d {
-                "Right-drag: orbit\nMiddle-drag or Shift+right-drag: pan\nWheel: zoom\nRight button + WASD: fly\nLeft-click: select, drag to move"
+                "Click the view, then W A S D: move, Q / E: down / up (Shift: fast)\nRight-drag: look around\nMiddle-drag or Shift+right-drag: pan\nWheel: zoom\nLeft-click: select, drag to move"
             } else {
-                "Right-drag or middle-drag: pan\nWheel: zoom\nLeft-click: select, drag to move (drag empty space to box-select)"
+                "Click the view, then W A S D: move (Shift: fast)\nRight-drag or middle-drag: pan\nWheel: zoom\nLeft-click: select, drag to move (drag empty space to box-select)"
             });
         }
     });
@@ -447,13 +460,26 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         if st.mode_3d {
             if secondary && !shift {
                 st.cam3.orbit(delta.x, delta.y);
-                let f = |k: &str| keys.contains(k) as i32 as f32;
-                st.cam3.fly(f("w") - f("s"), f("d") - f("a"), f("e") - f("q"));
             } else if middle || (secondary && shift) {
                 st.cam3.pan(delta.x, delta.y);
             }
         } else if secondary || middle {
             st.cam2.center -= Vec2::new(delta.x, delta.y) * ppp / st.cam2.zoom;
+        }
+    }
+
+    // W A S D move the editor camera while the view has the keyboard; Shift goes much faster.
+    if !game_cam && resp.has_focus() && !ui.input(|i| i.modifiers.command || i.modifiers.alt) {
+        let f = |k: &str| keys.contains(k) as i32 as f32;
+        let (fwd, right, up) = (f("w") - f("s"), f("d") - f("a"), f("e") - f("q"));
+        if fwd != 0.0 || right != 0.0 || up != 0.0 {
+            let k = ui.input(|i| i.stable_dt).min(0.1) * 60.0 * if shift { 5.0 } else { 1.0 };
+            if st.mode_3d {
+                st.cam3.fly(fwd * k, right * k, up * k);
+            } else {
+                st.cam2.center += Vec2::new(right, -fwd) * 9.0 * k * ppp / st.cam2.zoom;
+            }
+            ui.ctx().request_repaint();
         }
     }
 
@@ -550,8 +576,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                                 }
                             }
                         };
-                        if ctrl {
-                            let step = if st.mode_3d { 0.25 } else { 16.0 };
+                        let set = if st.mode_3d { st.snap3 } else { st.snap2 };
+                        if ctrl != (set > 0.0) {
+                            let step = if set > 0.0 { set } else if st.mode_3d { 0.25 } else { 16.0 };
                             move_by = (move_by / step).round() * step;
                         }
                     }
@@ -559,8 +586,8 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                         if let Some(c) = g.px(&cams, g.pivot) {
                             let ang = |p: Vec2| (p.y - c.y).atan2(p.x - c.x);
                             let mut a = ang(now) - ang(d.screen_start);
-                            if ctrl {
-                                let step = 15f32.to_radians();
+                            if ctrl != (st.snap_angle > 0.0) {
+                                let step = (if st.snap_angle > 0.0 { st.snap_angle } else { 15.0 }).to_radians();
                                 a = (a / step).round() * step;
                             }
                             let axis = if let Handle::Axis(i) = d.handle { g.axes[i] } else { view };
@@ -599,7 +626,17 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                         let uniform = grow.x == grow.y && grow.y == grow.z;
                         // Scaling every axis also spreads the other dragged nodes out from the grabbed one.
                         let t = d.pivot + turn * (t0 - d.pivot) * if uniform { grow.x } else { 1.0 } + move_by;
-                        let world = Mat4::from_scale_rotation_translation(s0 * grow, turn * r0, t);
+                        let mut s1 = s0 * grow;
+                        let set = if st.mode_3d { st.snap3 } else { st.snap2 };
+                        if st.tool == Tool::Scale && ctrl != (set > 0.0) {
+                            let step = if st.mode_3d && set > 0.0 { set } else { 0.25 };
+                            for i in 0..3 {
+                                if grow[i] != 1.0 {
+                                    s1[i] = ((s1[i] / step).round() * step).max(step);
+                                }
+                            }
+                        }
+                        let world = Mat4::from_scale_rotation_translation(s1, turn * r0, t);
                         let parent_inv = st.tree.nodes[*id].parent.map(|p| st.tree.global_matrix(p).inverse()).unwrap_or(Mat4::IDENTITY);
                         let (s, r, t) = (parent_inv * world).to_scale_rotation_translation();
                         let (ry, rx, rz) = r.to_euler(gex_core::glam::EulerRot::YXZ);

@@ -37,7 +37,9 @@ impl Script {
 pub enum FileOp {
     Renamed { old: String, new: String },
     /// Moved to the project's .trash folder.
-    Trashed { res: String, at: PathBuf },
+    /// `fixed`: scene files that used it and were changed, as they were before.
+    /// `open`: open scenes it was taken out of, with how deep their undo history was after.
+    Trashed { res: String, at: PathBuf, fixed: Vec<(PathBuf, String)>, open: Vec<(String, usize)> },
     /// New files (imported or made).
     Created(Vec<String>),
 }
@@ -129,6 +131,10 @@ pub struct EditorState {
     pub cam2: EditorCamera2D,
     pub cam3: EditorCamera3D,
     pub show_grid: bool,
+    /// Snap steps while dragging: move in 2D (pixels), move and scale in 3D (meters), turn (degrees). 0 is off.
+    pub snap2: f32,
+    pub snap3: f32,
+    pub snap_angle: f32,
     pub show_colliders: bool,
     /// Painting tiles into the selected TileMap2D with this tile (-1 erases).
     pub tile_brush: Option<i32>,
@@ -184,6 +190,9 @@ impl EditorState {
             selection: Vec::new(),
             docs: Vec::new(),
             tool: Tool::Move,
+            snap2: 0.0,
+            snap3: 0.0,
+            snap_angle: 0.0,
             undo: Vec::new(),
             redo: Vec::new(),
             last_change: None,
@@ -766,18 +775,109 @@ impl EditorState {
         }
         let to = crate::files::trash(&self.project, res)?;
         self.scripts.retain(|k, _| k != res && !k.starts_with(&format!("{}/", res)));
+        let (fixed, open) = self.forget_asset(res);
         if self.asset_selected.as_deref() == Some(res) {
             self.asset_selected = None;
         }
         self.log(LogKind::Info, format!("moved {} to {} (Undo file change puts it back)", res, to.display()));
-        self.file_undo.push(FileOp::Trashed { res: res.to_string(), at: to });
+        self.file_undo.push(FileOp::Trashed { res: res.to_string(), at: to, fixed, open });
         self.previews.forget(res);
+        crate::icons::forget(res);
         Ok(())
+    }
+
+    /// After a file or folder is deleted: takes its instances, attached scripts and uses out of
+    /// every scene. Open scenes change in the editor (undoable there); the others on disk.
+    /// Gives the changed files as they were, for undo.
+    fn forget_asset(&mut self, res: &str) -> (Vec<(PathBuf, String)>, Vec<(String, usize)>) {
+        let inside = format!("{}/", res);
+        let gone = |s: &str| s == res || s.starts_with(&inside);
+        let open: Vec<String> = self.scene_res.iter().chain(self.docs.iter().filter_map(|d| d.scene_res.as_ref())).cloned().collect();
+        let mut n = 0;
+        let mut changed_open = Vec::new();
+        for r in &open {
+            let depth = self.with_scene(r, |st| {
+                let uses = |t: &SceneTree| {
+                    t.nodes.iter().any(|(id, x)| {
+                        x.scripts.iter().any(|s| gone(s))
+                            || (x.instance_of.as_deref().is_some_and(gone) && !x.from_instance && Some(id) != t.root)
+                            || x.props.values().any(|v| matches!(v, gex_core::Variant::Res(p) | gex_core::Variant::Text(p) if p.contains("://") && gone(p)))
+                    })
+                };
+                if !uses(&st.tree) {
+                    return None;
+                }
+                st.will_change("asset deleted");
+                st.last_change = None;
+                let roots: Vec<NodeId> = st.tree.nodes.iter().filter(|(id, x)| x.instance_of.as_deref().is_some_and(gone) && !x.from_instance && Some(*id) != st.tree.root).map(|(id, _)| id).collect();
+                for id in roots {
+                    st.tree.remove(id);
+                }
+                for (_, x) in st.tree.nodes.iter_mut() {
+                    x.scripts.retain(|s| !gone(s));
+                    for v in x.props.values_mut() {
+                        if let gex_core::Variant::Res(p) | gex_core::Variant::Text(p) = v {
+                            if p.contains("://") && gone(p) {
+                                p.clear();
+                            }
+                        }
+                    }
+                }
+                st.selection.retain(|i| st.tree.contains(*i));
+                st.selected = st.selected.filter(|i| st.tree.contains(*i)).or(st.tree.root);
+                Some(st.undo.len())
+            });
+            if let Some(Some(d)) = depth {
+                n += 1;
+                changed_open.push((r.clone(), d));
+            }
+        }
+        let mut fixed = Vec::new();
+        for path in crate::files::scene_files(&self.project) {
+            if self.project.path_to_res(&path).is_some_and(|r| open.contains(&r)) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(mut file) = scene::parse(&text) else { continue };
+            if scene::remove_refs(&mut file, &gone) && std::fs::write(&path, scene::to_text(&file)).is_ok() {
+                fixed.push((path, text));
+            }
+        }
+        if n + fixed.len() > 0 {
+            self.log(LogKind::Info, format!("took it out of {} scene(s) that used it", n + fixed.len()));
+        }
+        (fixed, changed_open)
+    }
+
+    /// Moves a file or folder into another project folder (scenes and scripts using it follow).
+    pub fn move_asset(&mut self, res: &str, dir: &str) -> Result<String, String> {
+        let name = res.rsplit('/').next().unwrap_or(res);
+        let to = if dir.ends_with("://") { format!("{}{}", dir, name) } else { format!("{}/{}", dir.trim_end_matches('/'), name) };
+        if to == res {
+            return Ok(to);
+        }
+        self.rename_asset(res, &to)
+    }
+
+    /// Makes a folder in a project folder.
+    pub fn new_folder(&mut self, dir: &str) -> Option<String> {
+        let res = crate::files::free_name(&self.project, dir, "new_folder")?;
+        let name = res.rsplit('/').next()?.to_string();
+        match crate::files::new_folder(&self.project, dir, &name) {
+            Ok(r) => {
+                self.file_undo.push(FileOp::Created(vec![r.clone()]));
+                Some(r)
+            }
+            Err(e) => {
+                self.log(LogKind::Error, e);
+                None
+            }
+        }
     }
 
     /// Copies files from disk into the project (dropped on the window, or picked).
     pub fn import_files(&mut self, files: &[PathBuf]) {
-        let dir = if self.asset_dir.starts_with("res://") { self.asset_dir.clone() } else { "res://assets".to_string() };
+        let dir = if self.asset_dir.starts_with("res://") { self.asset_dir.clone() } else { "res://".to_string() };
         if let Some(p) = self.project.res_to_path(&dir) {
             let _ = std::fs::create_dir_all(p);
         }
@@ -860,14 +960,26 @@ impl EditorState {
         let depth = self.file_undo.len();
         let r = match &op {
             FileOp::Renamed { old, new } => {
-                let name = old.rsplit('/').next().unwrap_or(old).to_string();
-                self.rename_asset(new, &name).map(|_| ())
+                self.rename_asset(new, old).map(|_| ())
             }
-            FileOp::Trashed { res, at } => match self.project.res_to_path(res) {
+            FileOp::Trashed { res, at, fixed, open } => match self.project.res_to_path(res) {
                 Some(to) if to.exists() => Err(format!("{} exists again, so it wasn't put back", res)),
                 Some(to) => {
                     let _ = std::fs::create_dir_all(to.parent().unwrap());
                     std::fs::rename(at, &to).map_err(|e| e.to_string()).map(|_| {
+                        // The scenes that used it get it back: files on disk, and open scenes
+                        // that haven't been changed since.
+                        for (path, text) in fixed {
+                            let _ = std::fs::write(path, text);
+                        }
+                        for (scene, depth) in open {
+                            self.with_scene(scene, |st| {
+                                if st.undo.len() == *depth {
+                                    st.undo();
+                                    st.redo.pop();
+                                }
+                            });
+                        }
                         self.asset_selected = Some(res.clone());
                         self.log(LogKind::Info, format!("put {} back", res));
                     })
@@ -1092,10 +1204,12 @@ impl EditorState {
             .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
             .collect();
         let base = if base.is_empty() { "script".to_string() } else { base };
-        let mut res = format!("res://scripts/{}.jlb", base);
+        // Next to the scene it's for (no folders are made for you).
+        let dir = self.scene_res.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d.trim_end_matches('/').to_string()).filter(|d| d.len() > "res:/".len()).unwrap_or_else(|| "res:/".into());
+        let mut res = format!("{}/{}.jlb", dir, base);
         let mut i = 2;
         while self.project.res_to_path(&res).is_some_and(|p| p.exists()) {
-            res = format!("res://scripts/{}_{}.jlb", base, i);
+            res = format!("{}/{}_{}.jlb", dir, base, i);
             i += 1;
         }
         let text = format!(">> {}'s script. `self` is the node.\n", self.tree.nodes[id].name);

@@ -155,3 +155,97 @@ pub fn apply(ctx: &egui::Context) {
         s.spacing.button_padding = egui::vec2(6.0, 3.0);
     });
 }
+
+/// The window's own minimize, maximize and close buttons (the system title bar is off to save
+/// height). Call inside a right-to-left layout.
+pub fn window_buttons(ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+    ui.spacing_mut().item_spacing.x = 0.0;
+    for (i, tip) in ["Close", if maximized { "Restore" } else { "Maximize" }, "Minimize"].into_iter().enumerate() {
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(34.0, 22.0), egui::Sense::click());
+        let hot = resp.hovered();
+        let p = ui.painter();
+        if hot {
+            p.rect_filled(rect, 0.0, if i == 0 { Color32::from_rgb(0xc8, 0x1e, 0x3c) } else { GRAY_LIGHT });
+        }
+        let st = Stroke::new(1.0, if hot { Color32::WHITE } else { TEXT_DIM });
+        let c = rect.center();
+        match i {
+            0 => {
+                p.line_segment([c + egui::vec2(-4.0, -4.0), c + egui::vec2(4.5, 4.5)], st);
+                p.line_segment([c + egui::vec2(-4.0, 4.0), c + egui::vec2(4.5, -4.5)], st);
+            }
+            1 => {
+                p.rect_stroke(Rect::from_center_size(c, egui::vec2(9.0, 9.0)), 0.0, st, egui::StrokeKind::Middle);
+            }
+            _ => {
+                p.line_segment([c + egui::vec2(-4.5, 0.5), c + egui::vec2(4.5, 0.5)], st);
+            }
+        }
+        if resp.on_hover_text(tip).clicked() {
+            ctx.send_viewport_cmd(match i {
+                0 => egui::ViewportCommand::Close,
+                1 => egui::ViewportCommand::Maximized(!maximized),
+                _ => egui::ViewportCommand::Minimized(true),
+            });
+        }
+    }
+    ui.add_space(4.0);
+}
+
+/// The empty part of the top bar moves the window (double-click: maximize). Call before
+/// the bar's own widgets so they stay clickable.
+pub fn window_drag(ui: &mut egui::Ui, rect: Rect) {
+    let r = ui.interact(rect, egui::Id::new("window drag"), egui::Sense::click_and_drag());
+    if r.double_clicked() {
+        let m = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!m));
+    } else if r.drag_started_by(egui::PointerButton::Primary) {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+/// Without the system frame the window's edges are ours to make resizable.
+pub fn window_resize(ctx: &egui::Context) {
+    use egui::viewport::ResizeDirection as D;
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)) {
+        return;
+    }
+    let r = ctx.content_rect();
+    let Some(p) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+    let m = 5.0;
+    let (l, rt, t, b) = (p.x < r.left() + m, p.x > r.right() - m, p.y < r.top() + m, p.y > r.bottom() - m);
+    let (dir, cur) = match (l, rt, t, b) {
+        (true, _, true, _) => (D::NorthWest, egui::CursorIcon::ResizeNwSe),
+        (_, true, true, _) => (D::NorthEast, egui::CursorIcon::ResizeNeSw),
+        (true, _, _, true) => (D::SouthWest, egui::CursorIcon::ResizeNeSw),
+        (_, true, _, true) => (D::SouthEast, egui::CursorIcon::ResizeNwSe),
+        (true, ..) => (D::West, egui::CursorIcon::ResizeHorizontal),
+        (_, true, ..) => (D::East, egui::CursorIcon::ResizeHorizontal),
+        (_, _, true, _) => (D::North, egui::CursorIcon::ResizeVertical),
+        (_, _, _, true) => (D::South, egui::CursorIcon::ResizeVertical),
+        _ => return,
+    };
+    ctx.set_cursor_icon(cur);
+    if ctx.input(|i| i.pointer.primary_pressed()) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+    }
+}
+
+/// Fades in whatever is drawn in this ui from the moment it first shows (menus, dialogs,
+/// windows): call at the top of its contents. Gives how far in it is (0..1).
+pub fn fade_in(ui: &mut egui::Ui) -> f32 {
+    let id = ui.id().with("fade in");
+    let (now, frame) = (ui.input(|i| i.time), ui.ctx().cumulative_frame_nr());
+    // (when it appeared, the last frame it was drawn)
+    let (start, last) = ui.data(|d| d.get_temp::<(f64, u64)>(id)).unwrap_or((now, 0));
+    let start = if frame > last + 1 { now } else { start };
+    ui.data_mut(|d| d.insert_temp(id, (start, frame)));
+    let t = (((now - start) / 0.11) as f32).clamp(0.0, 1.0);
+    if t < 1.0 {
+        ui.set_opacity(0.15 + 0.85 * t);
+        ui.ctx().request_repaint();
+    }
+    t
+}

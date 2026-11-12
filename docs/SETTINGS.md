@@ -105,7 +105,7 @@ a sprite's `blend` and `filter`, a mesh's `rim` and `fog`, a light's `softness`,
 
 | Setting | Default | What it does |
 |---|---|---|
-| `solver_iterations` | `4` | How hard the solver works each step: more keeps stacks and joints steadier. (1 to 32) |
+| `solver_iterations` | `8` | How hard the solver works each step: more keeps stacks and joints steadier. (1 to 32) |
 | `ccd` | `true` | Continuous collision: fast bodies can't pass through thin walls (a body's own ccd setting can turn it off). |
 | `ccd_substeps` | `1` | Extra checks per step for fast bodies. (1 to 8) |
 | `contact_stiffness` | `30.0` | How hard touching bodies push apart: higher is stiffer, lower is squishier. (1.0 to 120.0) |

@@ -22,7 +22,7 @@ pub enum WinKind {
     /// The events (on_... functions) of a node's scripts.
     Events { res: String, node: String },
     Script { res: String },
-    /// Timeline, Profiler or Find in files.
+    /// Timeline or Profiler.
     Tool { name: String },
 }
 
@@ -41,6 +41,70 @@ pub struct Workspace {
     pub name: String,
     pub windows: Vec<Win>,
     pub pan: [f32; 2],
+    /// Where the view is gliding to (after a window opens).
+    #[serde(skip)]
+    pan_to: Option<[f32; 2]>,
+    /// The windows (and their sizes) the last arrangement was made for.
+    #[serde(skip)]
+    arranged: Option<Vec<(u64, [i32; 2])>>,
+}
+
+impl Workspace {
+    /// Lays the windows out so none overlap: each window opened on its own starts a row (new
+    /// rows go under the others), and windows opened from another sit to its right.
+    fn arrange(&mut self) {
+        const GAP: f32 = 36.0;
+        fn place(ws: &mut [Win], kids: &std::collections::HashMap<u64, Vec<usize>>, i: usize, x: f32, y: f32) -> f32 {
+            ws[i].pos = [x, y];
+            let (id, [w, h]) = (ws[i].id, ws[i].size);
+            let mut cy = y;
+            for &k in kids.get(&id).map(|v| v.as_slice()).unwrap_or(&[]) {
+                cy += place(ws, kids, k, x + w + GAP, cy) + GAP;
+            }
+            h.max(cy - GAP - y)
+        }
+        let ids: Vec<u64> = self.windows.iter().map(|w| w.id).collect();
+        let mut order: Vec<usize> = (0..self.windows.len()).collect();
+        order.sort_by_key(|i| self.windows[*i].id);
+        let mut kids: std::collections::HashMap<u64, Vec<usize>> = Default::default();
+        let mut roots = Vec::new();
+        for i in order {
+            match self.windows[i].parent.filter(|p| ids.contains(p) && *p != self.windows[i].id) {
+                Some(p) => kids.entry(p).or_default().push(i),
+                None => roots.push(i),
+            }
+        }
+        let mut y = 0.0;
+        for r in roots {
+            y += place(&mut self.windows, &kids, r, 0.0, y) + GAP;
+        }
+    }
+
+    /// Re-arranges when windows were opened, closed or resized, and glides the view to new ones.
+    fn keep_arranged(&mut self, view: Vec2) {
+        let mut now: Vec<(u64, [i32; 2])> = self.windows.iter().map(|w| (w.id, [w.size[0] as i32, w.size[1] as i32])).collect();
+        now.sort();
+        let Some(before) = self.arranged.replace(now.clone()) else { return };
+        if before == now {
+            return;
+        }
+        self.arrange();
+        let fresh: Vec<u64> = now.iter().map(|n| n.0).filter(|id| !before.iter().any(|b| b.0 == *id)).collect();
+        let rect_of = |w: &Win| Rect::from_min_size(Pos2::from(w.pos), Vec2::from(w.size));
+        let Some(mut bb) = self.windows.iter().filter(|w| fresh.contains(&w.id)).map(rect_of).reduce(|a, b| a.union(b)) else { return };
+        // The windows they were opened from stay in view too, when there's room.
+        let mut up: Vec<u64> = self.windows.iter().filter(|w| fresh.contains(&w.id)).filter_map(|w| w.parent).collect();
+        while let Some(p) = up.pop() {
+            if let Some(w) = self.windows.iter().find(|w| w.id == p) {
+                let both = bb.union(rect_of(w));
+                if both.width() <= view.x - 40.0 && both.height() <= view.y - 40.0 {
+                    bb = both;
+                    up.extend(w.parent);
+                }
+            }
+        }
+        self.pan_to = Some([20.0 - bb.min.x, 20.0 - bb.min.y]);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -191,7 +255,7 @@ impl Layout {
         id
     }
 
-    /// Opens a tool (Timeline, Profiler, Find in files) as a window in the current workspace.
+    /// Opens a tool (Timeline, Profiler) as a window in the current workspace.
     pub fn open_tool(&mut self, name: &str) {
         let wi = self.current_workspace();
         self.open_window(wi, WinKind::Tool { name: name.to_string() }, None);
@@ -333,41 +397,74 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
 fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
     let mut activate = None;
     let mut close = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
+    // A strip of real tabs: the open one is lit and joins the page under it.
+    let strip_bg = ui.painter().add(egui::Shape::Noop);
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        let h = 24.0;
         for (i, t) in l.tabs.iter().enumerate() {
             let active = i == l.active;
             let (label, dirty) = match t {
                 TopTab::Workspace(w) => (l.workspaces[*w].name.clone(), false),
-                TopTab::Scene(r) => (format!("{}", r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jscene")), st.is_dirty(r)),
+                TopTab::Scene(r) => (r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jscene").to_string(), st.is_dirty(r)),
             };
-            let text = if dirty { format!("{} *", label) } else { label };
-            let r = ui.add(egui::Button::selectable(active, RichText::new(text).color(if active { theme::TEXT } else { theme::TEXT_DIM })));
-            if active {
-                // A Monokai-green line under the tab being shown.
-                let y = r.rect.bottom() + 1.0;
-                ui.painter().line_segment([Pos2::new(r.rect.left(), y), Pos2::new(r.rect.right(), y)], Stroke::new(2.0, theme::ACCENT));
-            }
-            if r.clicked() {
-                activate = Some(i);
-            }
             let closeable = match t {
                 TopTab::Workspace(_) => l.tabs.iter().filter(|t| matches!(t, TopTab::Workspace(_))).count() > 1,
                 TopTab::Scene(_) => true,
             };
-            if closeable && ui.add(egui::Button::new(RichText::new("✖").small().color(theme::TEXT_DIM)).frame(false)).on_hover_text("Close").clicked() {
-                close = Some(i);
+            let galley = ui.painter().layout_no_wrap(label, egui::FontId::proportional(13.0), theme::TEXT);
+            let w = (galley.size().x + 22.0 + if closeable || dirty { 18.0 } else { 0.0 }).max(72.0);
+            let (rect, r) = ui.allocate_exact_size(Vec2::new(w, h), Sense::click());
+            let lit = ui.ctx().animate_bool_with_time(r.id, active, 0.12);
+            let hover = ui.ctx().animate_bool_with_time(r.id.with("h"), r.hovered(), 0.1);
+            let p = ui.painter();
+            let base = theme::mix(Color32::from_rgb(0x17, 0x17, 0x17), Color32::from_rgb(0x20, 0x20, 0x20), hover);
+            p.rect_filled(rect, 0.0, theme::mix(base, Color32::from_rgb(0x2a, 0x2a, 0x2a), lit));
+            if lit > 0.0 {
+                p.rect_filled(Rect::from_min_size(rect.min, Vec2::new(rect.width(), 2.0)), 0.0, theme::alpha(theme::ACCENT, (lit * 255.0) as u8));
             }
-            ui.add_space(6.0);
+            p.galley(Pos2::new(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0), galley, if active { theme::TEXT } else { theme::TEXT_DIM });
+            // The right end: a dot while there are unsaved changes, a cross to close when pointed at.
+            let x = Rect::from_center_size(Pos2::new(rect.right() - 13.0, rect.center().y), Vec2::splat(16.0));
+            let over_x = closeable && ui.rect_contains_pointer(x);
+            if closeable && (r.hovered() || !dirty) && (r.hovered() || active) {
+                let c = if over_x { theme::TEXT } else { theme::TEXT_DIM };
+                if over_x {
+                    p.rect_filled(x, 0.0, theme::GRAY_LIGHT);
+                }
+                let (c0, d) = (x.center(), 3.5);
+                p.line_segment([c0 + Vec2::new(-d, -d), c0 + Vec2::new(d, d)], Stroke::new(1.2, c));
+                p.line_segment([c0 + Vec2::new(-d, d), c0 + Vec2::new(d, -d)], Stroke::new(1.2, c));
+            } else if dirty {
+                p.circle_filled(x.center(), 3.5, theme::WARN);
+            }
+            if r.clicked() {
+                if over_x {
+                    close = Some(i);
+                } else {
+                    activate = Some(i);
+                }
+            }
         }
-        if ui.small_button("+").on_hover_text("New workspace").clicked() {
+        let (rect, r) = ui.allocate_exact_size(Vec2::new(26.0, h), Sense::click());
+        if r.hovered() {
+            ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(0x1e, 0x1e, 0x1e));
+        }
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(15.0), theme::TEXT_DIM);
+        if r.on_hover_text("New workspace").clicked() {
             let n = l.workspaces.len() + 1;
             l.workspaces.push(Workspace { name: format!("Workspace {}", n), ..Default::default() });
             l.tabs.push(TopTab::Workspace(l.workspaces.len() - 1));
             activate = Some(l.tabs.len() - 1);
         }
     });
-    ui.add_space(2.0);
+    let strip = Rect::from_x_y_ranges(ui.max_rect().x_range(), row.response.rect.y_range());
+    crate::docs::mark(ui, strip, "ui:tabs");
+    ui.painter().set(strip_bg, egui::Shape::Vec(vec![
+        egui::Shape::rect_filled(strip, 0.0, Color32::from_rgb(0x0c, 0x0c, 0x0c)),
+        egui::Shape::line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2a, 0x2a))),
+    ]));
+    ui.add_space(3.0);
     // While playing, the game stays in its own tab (other scenes open once it stops).
     if let (Some(i), true) = (activate, st.playing.is_some()) {
         if matches!(l.tabs.get(i), Some(TopTab::Scene(r)) if Some(r) != st.scene_res.as_ref()) {
@@ -449,9 +546,24 @@ fn scene_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &str,
 /// A workspace: a canvas of windows. Drag the background (or hold the middle button) to look around.
 fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
     let rect = ui.available_rect_before_wrap();
+    crate::docs::mark(ui, rect, "ui:workspace");
     let bg = ui.allocate_rect(rect, Sense::click_and_drag());
     {
         let ws = &mut l.workspaces[wi];
+        ws.keep_arranged(rect.size());
+        if bg.dragged() || ui.input(|i| i.pointer.middle_down()) {
+            ws.pan_to = None;
+        }
+        if let Some(to) = ws.pan_to {
+            let k = 1.0 - (-ui.input(|i| i.stable_dt).min(0.1) * 14.0).exp();
+            ws.pan[0] += (to[0] - ws.pan[0]) * k;
+            ws.pan[1] += (to[1] - ws.pan[1]) * k;
+            if (to[0] - ws.pan[0]).abs() + (to[1] - ws.pan[1]).abs() < 0.5 {
+                ws.pan = to;
+                ws.pan_to = None;
+            }
+            ui.ctx().request_repaint();
+        }
         if bg.dragged() {
             ws.pan[0] += bg.drag_delta().x;
             ws.pan[1] += bg.drag_delta().y;
@@ -545,6 +657,7 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         let clip = wr.intersect(rect);
         let mut wui = ui.new_child(egui::UiBuilder::new().max_rect(wr).id_salt(("ws win", w.id)));
         wui.set_clip_rect(clip);
+        theme::fade_in(&mut wui);
         let p = wui.painter().clone();
         p.rect_filled(wr.translate(Vec2::new(0.0, 3.0)).expand(1.0), 0.0, Color32::from_black_alpha(80));
         p.rect_filled(wr, 0.0, Color32::from_rgb(0x1a, 0x1a, 0x1a));
@@ -739,7 +852,7 @@ fn scene_window(ui: &mut egui::Ui, st: &mut EditorState, res: &str, node: &str, 
                         let depth = st.tree.path_of(*id).matches('/').count().saturating_sub(1);
                         ui.horizontal(|ui| {
                             ui.add_space(depth as f32 * 12.0);
-                            if ui.selectable_label(picked == Some(*id), format!("{} {}", panels::kind_icon(n.kind), n.name)).clicked() {
+                            if crate::icons::row(ui, st, &crate::icons::node(&st.tree, *id), RichText::new(&n.name), picked == Some(*id)).clicked() {
                                 picked = Some(*id);
                             }
                         });

@@ -248,7 +248,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
                     tl.selected = None;
                     changed = true;
                 }
-                resp.context_menu(|ui| {
+                resp.context_menu(|ui| { crate::theme::fade_in(ui);
                     if let Some(k) = hit.or(tl.selected.filter(|s| s.0 == ti).map(|s| s.1)) {
                         let mut e = file.clips[ci].tracks[ti].keys[k].ease.clone();
                         ui.label(format!("key at {:.2} s", file.clips[ci].tracks[ti].keys[k].t));

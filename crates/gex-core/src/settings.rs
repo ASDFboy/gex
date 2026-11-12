@@ -241,7 +241,7 @@ settings! {
         ("World", sleeping, bool, true, 0, 0, [], "Bodies that stop moving go to sleep (cheaper) until something touches them."),
         ("Timing", tick_rate, f32, 60.0, 10.0, 480.0, [], "Physics steps each second: higher is more accurate (fast objects, stacks) and slower."),
         ("Timing", max_steps, u32, 5, 1, 30, [], "The most physics steps one frame may catch up on when the game falls behind."),
-        ("Solver", solver_iterations, u32, 4, 1, 32, [], "How hard the solver works each step: more keeps stacks and joints steadier."),
+        ("Solver", solver_iterations, u32, 8, 1, 32, [], "How hard the solver works each step: more keeps stacks and joints steadier."),
         ("Solver", ccd, bool, true, 0, 0, [], "Continuous collision: fast bodies can't pass through thin walls (a body's own ccd setting can turn it off)."),
         ("Solver", ccd_substeps, u32, 1, 1, 8, [], "Extra checks per step for fast bodies."),
         ("Solver", contact_stiffness, f32, 30.0, 1.0, 120.0, [], "How hard touching bodies push apart: higher is stiffer, lower is squishier."),

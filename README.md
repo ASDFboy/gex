@@ -80,12 +80,13 @@ and start it again.
 | Ctrl+Z / Ctrl+Y | undo / redo |
 | Ctrl+C / Ctrl+V / Ctrl+D | copy / paste / duplicate nodes |
 | Delete | delete the selected nodes |
-| W / E / R | move / rotate / scale tool |
+| 1 / 2 / 3 | move / rotate / scale tool |
+| W A S D (Q / E) | move the editor camera (Shift: fast) |
 | `:` | the command line (`:w`, `:q`, `:play`, `:add Sprite2D`, `:e scenes/level.jscene`, `:branch`, `:vim`, `:2d`, `:3d`…) |
 | Right-drag / middle-drag (or Shift+right-drag) / wheel | look around (3D) or pan (2D) / pan / zoom in the scene view |
 | F12 or Ctrl+click | go to a function's definition (script editor) |
-| Ctrl+F | find and replace (script editor) |
-| Ctrl+Shift+F | find in every script and scene |
+| Ctrl+H | find and replace (script editor) |
+| Ctrl+F | find in every script and scene |
 
 ## Learn it
 
@@ -111,3 +112,7 @@ and start it again.
 | `third_party/jlb` | the .jlb interpreter (jlb-rust), with an embedding API added |
 
 How the pieces fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Credits
+
+Icons: [Silk](http://www.famfamfam.com/lab/icons/silk/) by Mark James, Creative Commons Attribution 2.5.

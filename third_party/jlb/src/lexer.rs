@@ -258,6 +258,28 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
             toks.push(Token { tok: Tok::Num(value), line, pos: sp.get() });
             continue;
         }
+        // $name: a variable set from outside for each thing the script is on. It reads and
+        // writes self.name. On a line of its own outside any block it's just the declaration.
+        if ch == '$' && (at(i + 1).is_ascii_lowercase() || at(i + 1) == '_') {
+            let st = i + 1;
+            i += 1;
+            while at(i).is_ascii_lowercase() || at(i).is_ascii_digit() || at(i) == '_' {
+                i += 1;
+            }
+            let word: String = c[st..i].iter().collect();
+            let mut j = i;
+            while at(j) == ' ' || at(j) == '\t' || at(j) == '\r' {
+                j += 1;
+            }
+            let ends = j >= n || at(j) == '\n' || (at(j) == '>' && at(j + 1) == '>');
+            let starts = matches!(toks.last(), None | Some(Token { tok: Tok::Newline, .. }));
+            if !(stack.is_empty() && starts && ends) {
+                for tok in [Tok::Name(Rc::from("self")), Tok::Op("."), Tok::Name(Rc::from(word.as_str()))] {
+                    toks.push(Token { tok, line, pos: sp.get() });
+                }
+            }
+            continue;
+        }
         // Names, keywords and built-ins.
         if ch.is_ascii_alphabetic() || ch == '_' {
             let st = i;

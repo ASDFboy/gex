@@ -79,8 +79,37 @@ pub struct Search {
     /// (file, line number, the line)
     pub results: Vec<(String, usize, String)>,
     pub searched: String,
-    /// Put the cursor in the search box (Ctrl+Shift+F).
+    /// Put the cursor in the search box (Ctrl+F).
     pub focus: bool,
+    /// The find window is showing (over everything else).
+    pub open: bool,
+}
+
+/// Find in files: a window over whatever is open (Ctrl+F; Escape closes).
+pub fn search_window(ctx: &egui::Context, st: &mut EditorState) {
+    if !st.search.open {
+        return;
+    }
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        st.search.open = false;
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("Find in files")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_size([680.0, 380.0])
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 54.0])
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            crate::theme::fade_in(ui);
+            crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:find");
+            search(ui, st)
+        });
+    if !open {
+        st.search.open = false;
+    }
 }
 
 pub fn search(ui: &mut egui::Ui, st: &mut EditorState) {
@@ -90,7 +119,7 @@ pub fn search(ui: &mut egui::Ui, st: &mut EditorState) {
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             go = true;
         }
-        if std::mem::take(&mut st.search.focus) || (ui.memory(|m| m.focused().is_none()) && st.search.results.is_empty() && st.search.query.is_empty()) {
+        if std::mem::take(&mut st.search.focus) {
             r.request_focus();
         }
         ui.checkbox(&mut st.search.case, "Aa").on_hover_text("match case");
@@ -118,6 +147,7 @@ pub fn search(ui: &mut egui::Ui, st: &mut EditorState) {
         }
     });
     if let Some((file, line)) = open {
+        st.search.open = false;
         if file.ends_with(".jscene") {
             if st.playing.is_none() {
                 st.open_scene(&file);

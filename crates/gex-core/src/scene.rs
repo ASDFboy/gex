@@ -94,6 +94,38 @@ pub fn to_text(file: &SceneFile) -> String {
     ron::ser::to_string_pretty(file, cfg).expect("scenes always serialize")
 }
 
+/// Takes out everything in a scene file that uses files that are gone: instances of a deleted
+/// scene, attached scripts, and properties pointing at them. True if anything changed.
+pub fn remove_refs(file: &mut SceneFile, gone: &dyn Fn(&str) -> bool) -> bool {
+    fn props(p: &mut BTreeMap<String, Variant>, gone: &dyn Fn(&str) -> bool) -> bool {
+        let n = p.len();
+        p.retain(|_, v| !matches!(v, Variant::Res(r) | Variant::Text(r) if r.contains("://") && gone(r)));
+        p.len() != n
+    }
+    fn kids(c: &mut Vec<NodeDesc>, gone: &dyn Fn(&str) -> bool) -> bool {
+        let n = c.len();
+        c.retain(|d| !d.instance.as_deref().is_some_and(gone));
+        let mut changed = c.len() != n;
+        for d in c {
+            changed |= node(d, gone);
+        }
+        changed
+    }
+    fn scripts(s: &mut Vec<String>, gone: &dyn Fn(&str) -> bool) -> bool {
+        let n = s.len();
+        s.retain(|x| !gone(x));
+        s.len() != n
+    }
+    fn node(d: &mut NodeDesc, gone: &dyn Fn(&str) -> bool) -> bool {
+        let mut changed = props(&mut d.props, gone) | scripts(&mut d.scripts, gone) | kids(&mut d.children, gone);
+        for o in d.overrides.values_mut() {
+            changed |= props(&mut o.props, gone) | scripts(&mut o.scripts, gone) | kids(&mut o.children, gone);
+        }
+        changed
+    }
+    node(&mut file.root, gone)
+}
+
 /// Builds a whole tree from scene text.
 pub fn load(text: &str, read: SceneReader) -> Result<SceneTree, SceneError> {
     let file = parse(text)?;

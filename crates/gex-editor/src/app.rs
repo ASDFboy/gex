@@ -387,13 +387,15 @@ impl EditorApp {
         let Some(st) = &mut self.st else { return };
         let mut close = false;
         let bar_bg = ui.painter().add(egui::Shape::Noop);
+        let top = ui.cursor().top();
+        theme::window_drag(ui, egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + 24.0));
         let bar = egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
+            ui.menu_button("File", |ui| { crate::theme::fade_in(ui);
                 if theme::menu_item(ui, "Save all", "Ctrl+S").clicked() {
                     st.save_all();
                     ui.close();
                 }
-                ui.menu_button("Open scene", |ui| {
+                ui.menu_button("Open scene", |ui| { crate::theme::fade_in(ui);
                     for s in panels::list_files(st, "res://", "jscene") {
                         if ui.button(&s).clicked() {
                             st.open_scene(&s);
@@ -401,7 +403,7 @@ impl EditorApp {
                         }
                     }
                 });
-                ui.menu_button("New scene", |ui| {
+                ui.menu_button("New scene", |ui| { crate::theme::fade_in(ui);
                     for k in [gex_core::NodeKind::Node2D, gex_core::NodeKind::Node3D, gex_core::NodeKind::Node] {
                         if ui.button(format!("{} root", k.name())).clicked() {
                             let mut res = "res://scenes/new_scene.jscene".to_string();
@@ -441,7 +443,7 @@ impl EditorApp {
                     ui.close();
                 }
             });
-            ui.menu_button("Edit", |ui| {
+            ui.menu_button("Edit", |ui| { crate::theme::fade_in(ui);
                 if theme::menu_item(ui, "Undo", "Ctrl+Z").clicked() {
                     st.undo();
                     ui.close();
@@ -466,9 +468,9 @@ impl EditorApp {
                 }
             });
             ui.menu_button("Node", |ui| panels::add_node_menu(ui, st));
-            ui.menu_button("View", |ui| {
+            ui.menu_button("View", |ui| { crate::theme::fade_in(ui);
                 if self.classic {
-                    for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler, Tab::Search] {
+                    for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler] {
                         let name = match &t {
                             Tab::Search => "Find in files".to_string(),
                             t => format!("{:?}", t),
@@ -486,12 +488,17 @@ impl EditorApp {
                     ui.checkbox(&mut self.ws.show_assets, "Assets");
                     ui.checkbox(&mut self.ws.show_console, "Console");
                     ui.separator();
-                    for t in ["Timeline", "Profiler", "Find in files"] {
+                    for t in ["Timeline", "Profiler"] {
                         if ui.button(t).clicked() {
                             self.ws.open_tool(t);
                             ui.close();
                         }
                     }
+                }
+                if theme::menu_item(ui, "Find in files", "Ctrl+F").clicked() {
+                    st.search.open = true;
+                    st.search.focus = true;
+                    ui.close();
                 }
                 ui.separator();
                 let mut classic = self.classic;
@@ -519,11 +526,15 @@ impl EditorApp {
             } else if theme::primary_button(ui, "■  Stop", egui::Color32::from_rgb(0xc8, 0x1e, 0x5c)).on_hover_text("Stop the game (F5)").clicked() {
                 st.stop();
             }
+            crate::docs::mark(ui, egui::Rect::from_min_max(egui::pos2(ui.min_rect().right() - 80.0, ui.min_rect().top()), ui.min_rect().max), "ui:play");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                theme::window_buttons(ui);
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
             });
         });
         let full = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), bar.response.rect.y_range()).expand2(egui::vec2(8.0, 2.0));
+        crate::docs::mark(ui, full, "ui:menubar");
         ui.painter().set(bar_bg, theme::header(full, false));
         if close {
             self.st = None;
@@ -555,15 +566,15 @@ impl EditorApp {
                 _ => None,
             });
             let close = i.consume_key(egui::Modifiers::COMMAND, egui::Key::W);
-            if i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F) {
+            if i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F) || i.consume_key(egui::Modifiers::COMMAND, egui::Key::F) {
                 find_in_files = true;
             }
             let plain = !i.modifiers.command && !i.modifiers.alt;
-            let tool = if plain && i.key_pressed(egui::Key::W) {
+            let tool = if plain && i.key_pressed(egui::Key::Num1) {
                 Some(state::Tool::Move)
-            } else if plain && i.key_pressed(egui::Key::E) {
+            } else if plain && i.key_pressed(egui::Key::Num2) {
                 Some(state::Tool::Rotate)
-            } else if plain && i.key_pressed(egui::Key::R) {
+            } else if plain && i.key_pressed(egui::Key::Num3) {
                 Some(state::Tool::Scale)
             } else {
                 None
@@ -590,13 +601,10 @@ impl EditorApp {
             st.save_all();
         }
         if find_in_files {
-            if self.classic {
-                show_tab(&mut self.dock, Tab::Search);
-            } else {
-                self.ws.open_tool("Find in files");
-            }
+            st.search.open = true;
             st.search.focus = true;
         }
+        crate::tools::search_window(ctx, st);
         if std::mem::take(&mut st.open_timeline) {
             if self.classic {
                 show_tab(&mut self.dock, Tab::Timeline);
@@ -689,6 +697,7 @@ impl EditorApp {
             });
         });
         ui.painter().set(status_bg, theme::header(status.response.rect, true));
+        crate::docs::mark(ui, status.response.rect, "ui:status");
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -724,6 +733,7 @@ impl EditorApp {
         }
         let mut open = true;
         egui::Window::new("Project settings").collapsible(false).open(&mut open).default_width(560.0).default_height(560.0).show(ctx, |ui| {
+            theme::fade_in(ui);
             ui.horizontal(|ui| {
                 for (i, t) in ["General", "Graphics", "Physics", "Input", "Half-Life 2"].iter().enumerate() {
                     ui.selectable_value(&mut f.tab, i, *t);
@@ -930,6 +940,7 @@ impl EditorApp {
         let mut pick: usize = ctx.data(|d| d.get_temp(mem.with("platform"))).unwrap_or(0).min(players.len().saturating_sub(1));
         let mut name: String = ctx.data(|d| d.get_temp(mem.with("name"))).unwrap_or_else(|| st.project.config.name.clone());
         egui::Window::new("Export game").collapsible(false).open(&mut open).default_width(520.0).show(ctx, |ui| {
+            theme::fade_in(ui);
             ui.label("Makes a folder you can zip up and run anywhere: the GEX player, renamed after your game, plus your project's files. Double-clicking the program starts the game.");
             egui::Grid::new("export grid").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                 ui.label("Folder");
@@ -1101,11 +1112,19 @@ impl eframe::App for EditorApp {
         crate::startup::mark_running();
         let ctx = ui.ctx().clone();
         theme::backdrop(&ctx);
+        theme::window_resize(&ctx);
         if self.st.is_none() {
+            egui::Panel::top("launcher bar").frame(egui::Frame::NONE).show(ui, |ui| {
+                let top = ui.cursor().top();
+                theme::window_drag(ui, egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + 24.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), theme::window_buttons);
+            });
             self.launcher(ui);
             return;
         }
         self.shortcuts(&ctx);
+        // Middle-click documentation, for what the last frame drew under the pointer.
+        crate::docs::show(&ctx);
         if let Some(st) = &mut self.st {
             if let Some(p) = &mut st.playing {
                 let (keys, axes) = self.pads.poll();

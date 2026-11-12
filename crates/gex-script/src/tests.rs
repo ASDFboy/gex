@@ -892,3 +892,100 @@ DEF on_step(dt) {
     assert_eq!(t.nodes[root].props.get("gy"), Some(&Variant::Num(2000.0)));
     assert_eq!(t.nodes[root].props.get("shadows"), Some(&Variant::Bool(true)));
 }
+
+#[test]
+fn dollar_variables_are_set_per_instance() {
+    let scene = r#"(root: (name: "Root", kind: Some(Node2D), children: [
+        (name: "A", kind: Some(Sprite2D), scripts: ["res://mover.jlb"], props: {"speed": Num(60.0)}),
+        (name: "B", kind: Some(Sprite2D), scripts: ["res://mover.jlb"]),
+    ]))"#;
+    let script = "$speed >> how fast\n$label\nDEF on_step(dt) {\n    self.x += $speed * dt\n    $label = \"moved\"\n}\n";
+    assert_eq!(gex_core::node::script_vars(script), vec!["speed".to_string(), "label".to_string()]);
+    let p = project("dollar", &[("scenes/main.jscene", scene), ("mover.jlb", script)]);
+    let mut g = Game::from_scene(p, "res://scenes/main.jscene", None).unwrap();
+    for _ in 0..60 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    }
+    let errors: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errors.is_empty(), "{:#?}", errors);
+    let t = g.tree();
+    let (a, b) = (t.find_path(None, "Root/A").unwrap(), t.find_path(None, "Root/B").unwrap());
+    assert!((t.nodes[a].transform.position.x - 60.0).abs() < 0.01, "A uses its own speed");
+    assert_eq!(t.nodes[b].transform.position.x, 0.0, "B was given none: 0");
+    assert_eq!(t.nodes[a].props.get("label"), Some(&Variant::Text("moved".into())));
+}
+
+/// Runs a scene for some frames at a frame rate and gives the game back.
+fn run_scene(name: &str, kind: &str, kids: &str, files: &[(&str, &str)], fps: f64, frames: usize) -> Game {
+    let scene = format!(r#"(root: (name: "Root", kind: Some({}), children: [{}]))"#, kind, kids);
+    let mut all = vec![("scenes/main.jscene", scene.as_str())];
+    all.extend_from_slice(files);
+    let mut g = Game::from_scene(project(name, &all), "res://scenes/main.jscene", None).unwrap();
+    for _ in 0..frames {
+        g.frame(1.0 / fps, HashSet::new(), [0.0, 0.0], HashSet::new());
+    }
+    let errors: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errors.is_empty(), "{:#?}", errors);
+    g
+}
+
+#[test]
+fn physics_2d_rests_blocks_and_moves_smoothly() {
+    let mut kids = String::from(r#"(name: "Floor", kind: Some(Body2D), transform: Some((position: (400.0, 500.0, 0.0))), props: {"body": Text("static"), "width": Num(800.0), "height": Num(32.0)}),"#);
+    for i in 0..5 {
+        kids.push_str(&format!(r#"(name: "B{}", kind: Some(Body2D), transform: Some((position: (400.0, {}, 0.0)))),"#, i, 468.0 - 33.0 * i as f32));
+    }
+    kids.push_str(r#"(name: "Wall", kind: Some(Body2D), transform: Some((position: (700.0, 300.0, 0.0))), props: {"body": Text("static"), "width": Num(8.0), "height": Num(300.0)}),"#);
+    kids.push_str(r#"(name: "Ball", kind: Some(Body2D), transform: Some((position: (100.0, 300.0, 0.0))), props: {"shape": Text("circle"), "radius": Num(8.0), "vx": Num(6000.0), "gravity_scale": Num(0.0)}),"#);
+    kids.push_str(r#"(name: "Pusher", kind: Some(Body2D), transform: Some((position: (600.0, 200.0, 0.0))), props: {"gravity_scale": Num(0.0)}, scripts: ["res://push.jlb"]),"#);
+    kids.push_str(r#"(name: "Faller", kind: Some(Body2D), transform: Some((position: (100.0, -4000.0, 0.0), rotation: (0.0, 0.0, 30.0))), props: {"spin": Num(90.0)}),"#);
+    let files = [("push.jlb", "DEF on_step(dt) {\n self.x += 200 * dt\n}\n")];
+    // A frame rate that isn't the physics rate: some frames have no step, and still move.
+    let mut g = run_scene("p2d", "Node2D", &kids, &files, 144.0, 144);
+    let y = |g: &Game| {
+        let t = g.tree();
+        t.nodes[t.find_path(None, "Root/Faller").unwrap()].transform.position.y
+    };
+    let mut last = y(&g);
+    for _ in 0..40 {
+        g.frame(1.0 / 144.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+        let now = y(&g);
+        assert!(now - last > 0.5, "a falling, turning body moves every frame (it moved {})", now - last);
+        last = now;
+    }
+    for _ in 0..(144 * 3) {
+        g.frame(1.0 / 144.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    }
+    let t = g.tree();
+    let at = |name: &str| t.nodes[t.find_path(None, &format!("Root/{}", name)).unwrap()].clone();
+    for i in 0..5 {
+        let n = at(&format!("B{}", i));
+        assert!((n.transform.position.y - (468.0 - 32.0 * i as f32)).abs() < 1.5 && n.transform.position.x == 400.0 && n.num("vy", 0.0).abs() < 0.5, "the stack rests: B{} at {:?}", i, n.transform.position);
+    }
+    assert!(at("Ball").transform.position.x < 700.0, "a fast ball doesn't pass through a thin wall");
+    assert!(at("Pusher").transform.position.x < 700.0, "a body a script walks into a wall stays on its side");
+}
+
+#[test]
+fn physics_3d_stack_rests_and_a_tumbling_body_lands() {
+    let mut kids = String::from(r#"(name: "Floor", kind: Some(Body3D), transform: Some((position: (0.0, -0.5, 0.0))), props: {"body": Text("static"), "width": Num(40.0), "height": Num(1.0), "depth": Num(40.0)}),"#);
+    for i in 0..5 {
+        kids.push_str(&format!(r#"(name: "B{}", kind: Some(Body3D), transform: Some((position: (0.0, {}, 0.0)))),"#, i, 0.5 + 1.02 * i as f32));
+    }
+    kids.push_str(r#"(name: "Tumbler", kind: Some(Body3D), transform: Some((position: (-6.0, 3.0, 0.0), rotation: (30.0, 20.0, 40.0))), props: {"spin_x": Num(200.0), "spin_z": Num(140.0)}),"#);
+    kids.push_str(r#"(name: "Crate", kind: Some(Body3D), transform: Some((position: (8.0, 0.5, 0.0)))),"#);
+    kids.push_str(r#"(name: "Walker", kind: Some(Body3D), transform: Some((position: (6.0, 0.5, 0.0))), props: {"body": Text("kinematic")}, scripts: ["res://walk.jlb"]),"#);
+    let files = [("walk.jlb", "DEF on_physics(dt) {\n MOVE(self.id, 1.5 * dt, 0, 0)\n}\n")];
+    let g = run_scene("p3d", "Node3D", &kids, &files, 60.0, 300);
+    let t = g.tree();
+    let at = |name: &str| t.nodes[t.find_path(None, &format!("Root/{}", name)).unwrap()].clone();
+    for i in 0..5 {
+        let n = at(&format!("B{}", i));
+        let p = n.transform.position;
+        let speed = (n.num("vx", 0.0).powi(2) + n.num("vy", 0.0).powi(2) + n.num("vz", 0.0).powi(2)).sqrt();
+        assert!((p.y - (0.5 + i as f32)).abs() < 0.02 && p.x.abs() < 0.01 && p.z.abs() < 0.01 && speed < 0.01, "the stack rests without creeping: B{} at {:?}, speed {}", i, p, speed);
+    }
+    let tumbler = at("Tumbler").transform.position;
+    assert!((tumbler.y - 0.5).abs() < 0.05, "a spinning body falls and lands (it's at {:?})", tumbler);
+    assert!(at("Crate").transform.position.x > 9.0, "a body moved with MOVE pushes a crate along (it's at {:?})", at("Crate").transform.position);
+}

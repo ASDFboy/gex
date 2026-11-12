@@ -51,6 +51,13 @@ pub fn highlight(text: &str, font: FontId) -> LayoutJob {
                 i += 1;
             }
             color = theme::C_NUMBER;
+        } else if c == '$' {
+            // A variable set per instance in Properties.
+            i += 1;
+            while i < chars.len() && is_word(at(i)) {
+                i += 1;
+            }
+            color = theme::C_EVENT;
         } else if is_word(c) {
             while i < chars.len() && is_word(at(i)) {
                 i += 1;
@@ -190,6 +197,7 @@ fn find_definition(st: &EditorState, res: &str, name: &str) -> Option<(String, u
 }
 
 pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:script_editor");
     let vim_on = st.vim_enabled;
     let paused_here: Option<usize> = st.playing.as_ref().and_then(|p| p.handle.paused.as_ref()).and_then(|p| {
         let path = st.project.res_to_path(res)?.canonicalize().ok()?;
@@ -211,7 +219,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
         if ui.add_enabled(s.dirty(), egui::Button::new("Save")).on_hover_text("Ctrl+S").clicked() {
             save = true;
         }
-        if ui.selectable_label(s.find.is_some(), "Find").on_hover_text("Find and replace (Ctrl+F)").clicked() {
+        if ui.selectable_label(s.find.is_some(), "Find").on_hover_text("Find and replace in this script (Ctrl+H)").clicked() {
             s.find = if s.find.is_some() { None } else { Some((String::new(), String::new())) };
         }
         if ui.selectable_label(vim_on, "Vim").on_hover_text("Vim keys: Esc for normal mode, i to type").clicked() {
@@ -233,7 +241,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     });
     let id = egui::Id::new(("script", res));
     let focused = ui.memory(|m| m.has_focus(id));
-    if focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+    if focused && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::H)) {
         s.find = Some((s.find.take().map(|f| f.0).unwrap_or_default(), String::new()));
     }
 
@@ -447,6 +455,30 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                 .layouter(&mut layouter)
                 .show(ui);
             typed = s.text != before;
+            // Middle-click a word: what it is.
+            if let (true, Some(p)) = (crate::docs::clicked(ui.ctx()) && out.response.contains_pointer(), ui.ctx().pointer_latest_pos()) {
+                let at: usize = out.galley.cursor_from_pos(p - out.galley_pos).index.0;
+                let chars: Vec<char> = s.text.chars().collect();
+                let word_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+                let (mut a, mut b) = (at.min(chars.len()), at.min(chars.len()));
+                while a > 0 && word_char(chars[a - 1]) {
+                    a -= 1;
+                }
+                while b < chars.len() && word_char(chars[b]) {
+                    b += 1;
+                }
+                let w: String = chars[a..b].iter().collect();
+                let topic = if w.starts_with('$') {
+                    "ui:script_vars".to_string()
+                } else if w.starts_with("on_") || w.starts_with("when_") {
+                    format!("event:{}", w)
+                } else if w.len() > 1 && w.chars().all(|c| !c.is_ascii_lowercase()) && w.chars().any(|c| c.is_ascii_uppercase()) {
+                    format!("cmd:{}", w)
+                } else {
+                    "ui:script_editor".to_string()
+                };
+                crate::docs::open(ui.ctx(), topic);
+            }
             if let Some(l) = paused_here {
                 let r = egui::Rect::from_min_size(egui::pos2(out.response.rect.left(), out.response.rect.top() + (l - 1) as f32 * row_h), egui::vec2(out.response.rect.width(), row_h));
                 ui.painter().rect_filled(r, 0.0, theme::WARN.gamma_multiply(0.12));

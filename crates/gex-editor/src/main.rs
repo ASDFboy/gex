@@ -24,6 +24,8 @@ mod tools;
 mod ui_layer;
 mod vim;
 mod gizmo;
+mod docs;
+mod icons;
 mod viewport;
 mod workspace;
 
@@ -91,5 +93,8 @@ fn main() -> std::process::ExitCode {
         ));
     }
     let project = args.first().map(PathBuf::from);
-    startup::run(eframe::run_native("GEX", options("GEX", [1500.0, 900.0]), Box::new(move |cc| Ok(Box::new(app::EditorApp::new(cc, project))))))
+    // The editor draws its own title bar buttons in the menu bar (more room for everything else).
+    let mut opts = options("GEX", [1500.0, 900.0]);
+    opts.viewport = opts.viewport.with_decorations(false);
+    startup::run(eframe::run_native("GEX", opts, Box::new(move |cc| Ok(Box::new(app::EditorApp::new(cc, project))))))
 }

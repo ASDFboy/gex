@@ -47,6 +47,7 @@ fn group(kind: NodeKind, k: &str) -> &'static str {
             _ => "Main",
         },
         _ => match k {
+            k if kind == Mesh3D && (k.starts_with("face_") || k.starts_with("hide_")) => "Advanced texture settings",
             "opacity" | "blend" | "filter" | "lit" | "modulate" | "sides" | "emissive_color" | "rim" | "rim_color" | "alpha_cut" | "on_top" | "fog" | "receive_shadows"
             | "cast_shadows" | "draw_distance" | "unlit" | "specular" | "emissive" | "normal_map" | "shader" | "flip_h" | "flip_v" | "glow" => "Look",
             k if k.starts_with("uv_") || k.starts_with("parallax") || k.starts_with("repeat") => "Look",
@@ -82,6 +83,8 @@ pub fn info(kind: NodeKind, k: &str) -> PropInfo {
         (_, "draw_distance") => p(&[], Some((0.0, 1000.0)), "Not drawn when further than this from the camera, in metres (0 = always drawn). Saves time on small far things."),
         (_, "uv_offset_x") | (_, "uv_offset_y") => p(&[], None, "Shifts the texture across the surface, in repeats."),
         (_, "uv_scroll_x") | (_, "uv_scroll_y") => p(&[], Some((-10.0, 10.0)), "Slides the texture across the surface, in repeats per second (water, conveyor belts)."),
+        (Mesh3D, k) if k.starts_with("face_") => p(&[], None, "A texture for just this face of a cube (empty: the mesh's texture)."),
+        (Mesh3D, k) if k.starts_with("hide_") => p(&[], None, "Don't draw this face of a cube."),
         (_, "uv_scale_x") | (_, "uv_scale_y") => p(&[], None, "How many times the texture repeats across the surface."),
         (_, "unlit") => p(&[], None, "Ignores lights: drawn at its plain color."),
         (_, "specular") if kind == Light3D => p(&[], Some((0.0, 4.0)), "Strength of the shiny highlights this light makes."),

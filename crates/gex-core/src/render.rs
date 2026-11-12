@@ -536,7 +536,8 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     });
                 }
             }
-            NodeKind::Mesh3D => out.meshes.push(MeshDraw {
+            NodeKind::Mesh3D => {
+                let whole = MeshDraw {
                 color: tinted(tree, id, n.color("color")),
                 texture: n.text("texture").to_string(),
                 uv_scale: [n.num("uv_scale_x", 1.0) as f32, n.num("uv_scale_y", 1.0) as f32],
@@ -557,7 +558,39 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 unlit: n.prop("unlit").is_some_and(|v| v.as_bool()),
                 shader: n.text("shader").to_string(),
                 ..mesh_look(n, MeshDraw::new(id, model, n.text("mesh")))
-            }),
+            };
+                // A cube with faces of their own (a texture, or hidden) is drawn face by face.
+                const FACES: [(&str, [f32; 3], [f32; 3], [f32; 3]); 6] = [
+                    ("right", [1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+                    ("left", [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+                    ("top", [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+                    ("bottom", [0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+                    ("front", [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                    ("back", [0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+                ];
+                let face_tex = |f: &str| n.text(&format!("face_{}", f)).to_string();
+                let hidden = |f: &str| n.prop(&format!("hide_{}", f)).is_some_and(|v| v.as_bool());
+                if whole.mesh == "cube" && FACES.iter().any(|f| !face_tex(f.0).is_empty() || hidden(f.0)) {
+                    for (f, nrm, u, w) in FACES {
+                        if hidden(f) {
+                            continue;
+                        }
+                        let (nrm, u, w) = (Vec3::from(nrm), Vec3::from(u), Vec3::from(w));
+                        let m = Mat4::from_cols(u.extend(0.0), w.extend(0.0), nrm.extend(0.0), (nrm * 0.5).extend(1.0));
+                        let t = face_tex(f);
+                        out.meshes.push(MeshDraw {
+                            model: model * m,
+                            mesh: "quad".into(),
+                            texture: if t.is_empty() { whole.texture.clone() } else { t },
+                            // With a face missing you can see inside, unless told otherwise.
+                            two_sided: whole.two_sided.or(Some(FACES.iter().any(|f| hidden(f.0)))),
+                            ..whole.clone()
+                        });
+                    }
+                } else {
+                    out.meshes.push(whole);
+                }
+            }
             NodeKind::Sprite3D => {
                 let (w, h) = (n.num("width", 1.0) as f32, n.num("height", 1.0) as f32);
                 out.meshes.push(MeshDraw {

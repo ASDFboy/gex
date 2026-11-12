@@ -40,7 +40,7 @@ Everything in a game is a node, and a scene is a tree of nodes.
 The frame in the scene view is the game window. 2D positions are in pixels, with y going
 **down**.
 
-Moving things in the view: **W / E / R** pick move, rotate and scale. Drag an arrow (or a
+Moving things in the view: **1 / 2 / 3** pick move, rotate and scale (click the view first; **W A S D** then move the camera, faster with Shift). Drag an arrow (or a
 ring, when rotating) to change one axis, a small two-colored square to change two, or the
 object itself to move it freely as you look at it. Hold Ctrl to snap.
 
@@ -200,7 +200,8 @@ open it, right-click it → Open.
 | Ctrl+S | save everything |
 | Ctrl+Z / Ctrl+Y | undo / redo |
 | Ctrl+C, Ctrl+V, Ctrl+D, Delete | copy, paste, duplicate, delete nodes |
-| W / E / R | move / rotate / scale in the scene view |
+| 1 / 2 / 3 | move / rotate / scale in the scene view |
+| W A S D (Q / E) | move the editor camera (Shift: fast) |
 | `:` | the command line: `:w`, `:play`, `:add Sprite2D`, `:e scenes/menu.jscene`, `:vim`… |
 
 Next: [Tutorial 2: going further](TUTORIAL-2-ADVANCED.md).

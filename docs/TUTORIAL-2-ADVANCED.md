@@ -369,7 +369,7 @@ export. Keep `hl2://` projects for yourself. More in [HL2.md](HL2.md).
 
 ## Working faster in the editor
 
-- **Ctrl+Shift+F** finds text in every script and scene; click a result to open it there.
+- **Ctrl+F** finds text in every script and scene; click a result to open it there.
 - The Assets panel previews models (drag to turn them; it lists their animations) and plays
   sounds. Its **↶** button (or Edit → Undo file change) undoes the last rename, delete, new file
   or import.
@@ -381,7 +381,7 @@ export. Keep `hl2://` projects for yourself. More in [HL2.md](HL2.md).
 - **Vim keys** in the script editor (`:vim`): normal mode `hjkl w b e 0 $ gg G`, `dd yy p P x
   D`, `dw cw`, `i a I A o O`, `u` / Ctrl+R, and `:` for the command line.
 - **Script editor**: completion as you type (Tab or Enter takes it), F12 or Ctrl+click jumps to
-  a function's definition, Ctrl+F finds and replaces.
+  a function's definition, Ctrl+H finds and replaces.
 - **Files**: drop files on the window to import them; right-click in the Assets panel to
   rename (every scene and script that uses the file is fixed) or delete (into the project's
   hidden `.trash` folder, so nothing's lost).

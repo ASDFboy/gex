@@ -39,7 +39,6 @@ fn join_res(dir: &str, name: &str) -> String {
     }
 }
 
-#[cfg(test)]
 pub fn new_folder(p: &Project, dir: &str, name: &str) -> Result<String, String> {
     let res = join_res(dir, check_name(name)?);
     let path = p.res_to_path(&res).ok_or("not a project folder")?;
@@ -122,8 +121,17 @@ pub fn rename(p: &Project, old: &str, new_name: &str) -> Result<(String, Vec<Str
     if !from.exists() {
         return Err(format!("{} doesn't exist", old));
     }
-    let parent = old.rsplit_once('/').map(|(d, _)| d.to_string()).filter(|d| d.contains("://") && !d.ends_with(':')).unwrap_or_else(|| "res://".into());
-    let new = join_res(&parent, check_name(new_name)?);
+    // A whole res:// path moves it; a bare name renames it where it is.
+    let new = if new_name.starts_with("res://") {
+        check_name(new_name.rsplit('/').next().unwrap_or(""))?;
+        if new_name == old || new_name.starts_with(&format!("{}/", old)) {
+            return Err("a folder can't go inside itself".into());
+        }
+        new_name.to_string()
+    } else {
+        let parent = old.rsplit_once('/').map(|(d, _)| d.to_string()).filter(|d| d.contains("://") && !d.ends_with(':')).unwrap_or_else(|| "res://".into());
+        join_res(&parent, check_name(new_name)?)
+    };
     let to = p.res_to_path(&new).ok_or("not a project path")?;
     if to.exists() {
         return Err(format!("{} already exists", new));
@@ -141,6 +149,21 @@ pub fn rename(p: &Project, old: &str, new_name: &str) -> Result<(String, Vec<Str
         }
     }
     Ok((new, fixed))
+}
+
+/// The project's scene files and scripts that mention this path.
+pub fn users(p: &Project, res: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    text_files(&p.dir, &mut files);
+    files.into_iter().filter(|f| std::fs::read_to_string(f).is_ok_and(|t| t.contains(res))).filter_map(|f| p.path_to_res(&f)).filter(|r| r != res && !r.starts_with(&format!("{}/", res))).collect()
+}
+
+/// The project's scene files (not hidden ones).
+pub fn scene_files(p: &Project) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    text_files(&p.dir, &mut files);
+    files.retain(|f| f.extension().is_some_and(|e| e == "jscene"));
+    files
 }
 
 /// Moves a file or folder into the project's hidden `.trash` folder (not shown in the editor,
@@ -201,6 +224,26 @@ mod tests {
         assert_eq!(st.asset_selected.as_deref(), Some("res://assets/placeholders/shapes/red/star_2.png"));
         st.undo_file_op();
         assert!(!dir.join("assets/placeholders/shapes/red/star_2.png").exists());
+    }
+
+    #[test]
+    fn deleting_takes_uses_out_and_moving_keeps_them() {
+        let dir = std::env::temp_dir().join(format!("gex-forget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let p = crate::templates::create_demo(&dir).unwrap();
+        let mut st = crate::state::EditorState::new(p);
+        let main = std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap();
+        assert!(main.contains("res://scripts/player.jlb"));
+        // Moving into a new folder: the scene follows.
+        let folder = st.new_folder("res://").unwrap();
+        let moved = st.move_asset("res://scripts/player.jlb", &folder).unwrap();
+        assert_eq!(moved, format!("{}/player.jlb", folder));
+        // Deleting: the open scene loses the script (undoable there), and so do files on disk.
+        st.delete_asset(&moved).unwrap();
+        assert!(!st.tree.nodes.iter().any(|(_, n)| n.scripts.iter().any(|s| s.contains("player.jlb"))));
+        st.save_all();
+        assert!(!std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap().contains("player.jlb"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

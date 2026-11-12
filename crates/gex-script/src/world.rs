@@ -488,6 +488,15 @@ impl Game {
             return;
         };
         let handlers = scan_handlers(&path);
+        // $variables nobody gave this node a value for start at 0.
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let mut st = self.st.borrow_mut();
+            if let Some(n) = st.tree.nodes.get_mut(id) {
+                for v in gex_core::node::script_vars(&text) {
+                    n.props.entry(v).or_insert(Variant::Num(0.0));
+                }
+            }
+        }
         let (me, before) = self.self_table(id);
         self.st.borrow_mut().current = Some(id);
         match self.it.load_module(&path, &[("self", me)]) {
@@ -811,6 +820,16 @@ impl Game {
                 self.stats.physics_ms += t0.elapsed().as_secs_f32() * 1000.0;
             }
             self.collisions();
+        }
+        // Too far behind to catch up: drop the backlog instead of fast-forwarding later.
+        if steps == max_steps && self.physics_acc > step {
+            self.physics_acc = step;
+        }
+        {
+            let alpha = (self.physics_acc / step) as f32;
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            st.physics.present(&mut st.tree, alpha);
         }
         self.broadcast("on_step", vec![num(dt)]);
         self.broadcast("on_draw", vec![]);
