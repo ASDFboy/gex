@@ -23,6 +23,7 @@ mod timeline;
 mod tools;
 mod ui_layer;
 mod vim;
+mod gizmo;
 mod viewport;
 mod workspace;
 

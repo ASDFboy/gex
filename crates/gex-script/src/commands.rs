@@ -29,6 +29,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("DESTROY", "(node)", "removes a node (at the end of the frame); runs on_destroy"),
     ("SEND", "(node, event, inputs...)", "runs on_<event>(inputs...) on one node"),
     ("EMIT", "(event, inputs...)", "runs on_<event>(inputs...) on every node that has it"),
+    ("BROADCAST", "(event, inputs...)", "the same as EMIT: every node with on_<event> receives it"),
     ("TIMER", "(name, seconds, repeat)", "runs on_timer(name) and on_timer_<name>() later"),
     ("TWEEN", "(node, property, to, seconds, ease)", "slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property)"),
     ("TWEEN_STOP", "(node, property)", "stops a node's tweens (just that property's, if given), leaving the value where it is"),
@@ -381,7 +382,7 @@ impl Host for EngineHost {
                 st.queue.push_back(Pending::Event { target: Some(id), handler: format!("on_{}", ev), args: a[2..].to_vec() });
                 Ok(Value::Null)
             }
-            "EMIT" => {
+            "EMIT" | "BROADCAST" => {
                 let ev = text_arg(name, &a, 0)?;
                 st.queue.push_back(Pending::Event { target: None, handler: format!("on_{}", ev), args: a[1..].to_vec() });
                 Ok(Value::Null)

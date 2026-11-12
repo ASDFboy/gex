@@ -452,7 +452,9 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                 ui.painter().rect_filled(r, 0.0, theme::WARN.gamma_multiply(0.12));
             }
             let target = set_cursor.map(|c| (c, c)).or(select).or(goto.map(|l| {
-                let idx: usize = s.text.lines().take(l.saturating_sub(1)).map(|x| x.chars().count() + 1).sum();
+                // After the line's indent, ready to type.
+                let indent = s.text.lines().nth(l.saturating_sub(1)).map(|x| x.chars().take_while(|c| c.is_whitespace()).count()).unwrap_or(0);
+                let idx: usize = s.text.lines().take(l.saturating_sub(1)).map(|x| x.chars().count() + 1).sum::<usize>() + indent;
                 (idx, idx)
             }));
             if let Some((a, b)) = target {

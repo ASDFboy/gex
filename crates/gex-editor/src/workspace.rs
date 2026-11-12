@@ -61,6 +61,14 @@ pub struct Layout {
     /// The scene being edited last frame (to notice it changing from elsewhere).
     #[serde(skip)]
     pub last_scene: Option<String>,
+    /// While the game plays: the tab to go back to when it stops.
+    #[serde(skip)]
+    tab_before_play: Option<usize>,
+    #[serde(skip)]
+    was_playing: bool,
+    /// How many file changes (renames, deletes) the tabs and windows have caught up with.
+    #[serde(skip)]
+    file_ops_seen: usize,
     #[serde(skip)]
     saved_text: String,
 }
@@ -75,6 +83,9 @@ impl Default for Layout {
             show_assets: true,
             show_console: true,
             last_scene: None,
+            tab_before_play: None,
+            was_playing: false,
+            file_ops_seen: 0,
             saved_text: String::new(),
         }
     }
@@ -157,7 +168,7 @@ impl Layout {
         let size = match kind {
             WinKind::Scene { .. } => [320.0, 520.0],
             WinKind::Events { .. } => [260.0, 320.0],
-            WinKind::Script { .. } => [620.0, 460.0],
+            WinKind::Script { .. } => [720.0, 520.0],
             WinKind::Tool { .. } => [640.0, 300.0],
         };
         let pos = match near.and_then(|n| ws.windows.iter().find(|w| w.id == n)) {
@@ -190,23 +201,97 @@ impl Layout {
     /// Opens a scene's window in the current workspace and shows that workspace.
     pub fn open_scene_window(&mut self, res: &str) {
         let wi = self.current_workspace();
-        self.open_window(wi, WinKind::Scene { res: res.to_string(), node: String::new() }, None);
+        let fresh = !self.workspaces[wi].windows.iter().any(|w| matches!(&w.kind, WinKind::Scene { res: r, .. } if r == res));
+        let id = self.open_window(wi, WinKind::Scene { res: res.to_string(), node: String::new() }, None);
+        if fresh {
+            // Its events come with it, like an object's in GameMaker.
+            self.open_window(wi, WinKind::Events { res: res.to_string(), node: String::new() }, Some(id));
+        }
         self.show_workspace(wi);
     }
 }
 
 /// The editor body in the GameMaker-style layout.
-pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<&egui_wgpu::RenderState>, viewport_tex: &mut Option<egui::TextureId>, previews: &mut std::collections::HashMap<String, egui::TextureHandle>) {
-    // The scene being edited changed from elsewhere (an "open" button, :e): show its tab.
+/// The scene being edited changed from elsewhere (Assets, an "open" button, :e): show its tab.
+fn follow_scene(l: &mut Layout, st: &EditorState) {
     if st.scene_res != l.last_scene {
         if let Some(r) = st.scene_res.clone() {
             l.open_scene_tab(&r);
         }
         l.last_scene = st.scene_res.clone();
     }
+}
+
+/// After a rename or delete in Assets: tabs and windows follow a renamed file, and those of a
+/// file that's gone close.
+fn follow_files(l: &mut Layout, st: &EditorState) {
+    let n = st.file_undo.len();
+    if n == l.file_ops_seen {
+        return;
+    }
+    let renamed = match st.file_undo.last() {
+        Some(crate::state::FileOp::Renamed { old, new }) if n > l.file_ops_seen => Some((old.clone(), new.clone())),
+        _ => None,
+    };
+    l.file_ops_seen = n;
+    let here = l.tabs.get(l.active).cloned();
+    let fix = |r: &mut String| {
+        if let Some((old, new)) = &renamed {
+            if r == old {
+                *r = new.clone();
+            }
+        }
+    };
+    let gone = |r: &str| r.starts_with("res://") && !st.project.res_to_path(r).is_some_and(|p| p.is_file());
+    for t in &mut l.tabs {
+        if let TopTab::Scene(r) = t {
+            fix(r);
+        }
+    }
+    let mut seen: Vec<TopTab> = Vec::new();
+    l.tabs.retain(|t| {
+        let keep = !seen.contains(t) && !matches!(t, TopTab::Scene(r) if gone(r));
+        seen.push(t.clone());
+        keep
+    });
+    for w in &mut l.workspaces {
+        for x in &mut w.windows {
+            match &mut x.kind {
+                WinKind::Scene { res, .. } | WinKind::Events { res, .. } | WinKind::Script { res } => fix(res),
+                WinKind::Tool { .. } => {}
+            }
+        }
+        w.windows.retain(|x| !matches!(&x.kind, WinKind::Scene { res, .. } | WinKind::Events { res, .. } | WinKind::Script { res } if gone(res)));
+    }
+    let here = here.map(|mut t| {
+        if let TopTab::Scene(r) = &mut t {
+            fix(r);
+        }
+        t
+    });
+    l.active = here.and_then(|t| l.tabs.iter().position(|x| *x == t)).unwrap_or(0);
+}
+
+pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<&egui_wgpu::RenderState>, viewport_tex: &mut Option<egui::TextureId>, previews: &mut std::collections::HashMap<String, egui::TextureHandle>) {
+    follow_files(l, st);
+    follow_scene(l, st);
     for r in std::mem::take(&mut st.open_windows) {
         l.open_scene_window(&r);
     }
+    // Play shows the game (its scene's tab); Stop goes back to where you were.
+    let playing = st.playing.is_some();
+    if playing && !l.was_playing {
+        if let Some(r) = st.scene_res.clone() {
+            let before = l.active;
+            l.open_scene_tab(&r);
+            l.tab_before_play = (l.active != before).then_some(before);
+        }
+    } else if !playing && l.was_playing {
+        if let Some(i) = l.tab_before_play.take().filter(|i| *i < l.tabs.len()) {
+            l.active = i;
+        }
+    }
+    l.was_playing = playing;
     // Scripts asked for from outside the workspace windows open in the workspace.
     if !st.open_requests.is_empty() {
         let wi = l.current_workspace();
@@ -235,6 +320,8 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         tab_strip(ui, l, st);
+        // Again: the Assets and Console panels above may have just opened a scene.
+        follow_scene(l, st);
         match l.tabs.get(l.active).cloned() {
             Some(TopTab::Workspace(wi)) => canvas(ui, l, wi, st),
             Some(TopTab::Scene(res)) => scene_tab(ui, l, st, &res, rs, viewport_tex),
@@ -334,8 +421,19 @@ fn scene_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &str,
     let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0);
     egui::Panel::left("scene tab side").resizable(true).default_size(290.0).frame(glass).show(ui, |ui| {
         egui::Panel::bottom("scene tab inspector").resizable(true).default_size(ui.available_height() * 0.6).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
-            theme::title(ui, "Properties");
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::inspector(ui, st));
+            let id = egui::Id::new("scene tab side events");
+            let mut ev: bool = ui.data(|d| d.get_temp(id).unwrap_or(false));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut ev, false, "Properties");
+                ui.selectable_value(&mut ev, true, "Events").on_hover_text("The selected instance's scripts and the events they handle");
+            });
+            ui.data_mut(|d| d.insert_temp(id, ev));
+            ui.separator();
+            if ev {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::events(ui, st));
+            } else {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::inspector(ui, st));
+            }
         });
         ui.horizontal(|ui| {
             theme::title(ui, "Instances");
@@ -397,11 +495,25 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         y += step;
     }
     let wins = l.workspaces[wi].windows.clone();
-    if wins.is_empty() {
+    if wins.is_empty() && st.scene_res.is_none() && st.playing.is_none() {
+        // A project with nothing in it yet: offer the first scene.
+        let r = Rect::from_center_size(rect.center(), Vec2::new(360.0, 80.0));
+        let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Center)));
+        c.label(RichText::new("This project is empty. Start with a scene:").color(theme::TEXT_DIM));
+        c.add_space(6.0);
+        c.horizontal(|ui| {
+            ui.add_space(86.0);
+            for (label, k) in [("New 2D scene", gex_core::NodeKind::Node2D), ("New 3D scene", gex_core::NodeKind::Node3D)] {
+                if ui.button(label).clicked() {
+                    st.new_scene_file("res://scenes", k);
+                }
+            }
+        });
+    } else if wins.is_empty() {
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "Double-click a script in Assets to open it here.\nRight-click a scene in Assets and pick Open as a window, or drag it here.\nDrag the background to look around.",
+            "Double-click a scene or script in Assets to open it here.\nDrag the background to look around.",
             egui::FontId::proportional(14.0),
             theme::TEXT_DIM,
         );

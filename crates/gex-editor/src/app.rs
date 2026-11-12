@@ -1146,6 +1146,12 @@ impl eframe::App for EditorApp {
             }
             // Script tabs to open / close (the workspace layout opens its own windows).
             let requests = if self.classic { std::mem::take(&mut st.open_requests) } else { Vec::new() };
+            if self.classic {
+                // The classic layout has no scene windows: opening a scene edits it.
+                for r in std::mem::take(&mut st.open_windows) {
+                    st.open_scene(&r);
+                }
+            }
             for r in requests {
                 let t = Tab::Script(r);
                 match self.dock.find_tab(&t) {

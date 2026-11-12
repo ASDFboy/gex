@@ -1,6 +1,6 @@
 # Scripting nodes with .jlb
 
-Every node can have any number of scripts (Events panel → **+ New script** or **Attach
+Every node can have any number of scripts (Events → **Add event**, **New script** or **Attach
 existing**). A script is an ordinary `.jlb` file:
 
 ```
@@ -107,6 +107,7 @@ The script editor completes these as you type and shows each one's inputs.
 |---|---|
 | `SEND(node, event, inputs...)` | runs on_<event>(inputs...) on one node |
 | `EMIT(event, inputs...)` | runs on_<event>(inputs...) on every node that has it |
+| `BROADCAST(event, inputs...)` | another name for EMIT |
 | `TIMER(name, seconds, repeat)` | runs on_timer(name) and on_timer_<name>() later |
 | `TWEEN(node, property, to, seconds, ease)` | slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property) |
 | `TWEEN_STOP(node, property)` | stops a node's tweens (just that property's, if given), leaving the value where it is |

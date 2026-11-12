@@ -69,6 +69,8 @@ pub struct Playing {
     pub buttons: HashSet<String>,
     /// The viewport shows the game's own camera (else the editor camera, to look around).
     pub game_camera: bool,
+    /// Just started: the view takes the keyboard so the game can be played straight away.
+    pub focus_view: bool,
     /// Raw mouse movement since the last frame request.
     pub mouse_delta: [f32; 2],
     /// The last few seconds of frames: (time between frames, where the game's time went).
@@ -165,8 +167,6 @@ pub struct EditorState {
     pub file_undo: Vec<FileOp>,
     /// Something asked for the Timeline panel to be shown.
     pub open_timeline: bool,
-    /// Assets panel: show folders of pictures as thumbnails.
-    pub asset_grid: bool,
     /// Something asked for the command line to open (":" in Vim normal mode).
     pub open_command: bool,
 }
@@ -219,7 +219,6 @@ impl EditorState {
             previews: Default::default(),
             file_undo: Vec::new(),
             open_timeline: false,
-            asset_grid: true,
             search: Default::default(),
             particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
@@ -520,22 +519,40 @@ impl EditorState {
 
     // ---------- nodes ----------
 
+    /// Adds a node from the "+ Node" menu: at the top of the scene, in the middle of the view.
+    /// Colliders are the exception: they go on the selected node, fitted to it.
     pub fn add_node(&mut self, kind: gex_core::NodeKind) -> NodeId {
+        use gex_core::NodeKind as K;
+        let on_selected = matches!(kind, K::Collider2D | K::Collider3D) && self.selected.is_some_and(|s| Some(s) != self.tree.root && !matches!(self.tree.nodes[s].kind, K::Collider2D | K::Collider3D));
+        let parent = if on_selected { self.selected } else { self.tree.root };
+        self.add_child(parent, kind)
+    }
+
+    /// Adds a node under a parent. Under the scene's root it appears in the middle of the view;
+    /// under anything else it sits on its parent.
+    pub fn add_child(&mut self, parent: Option<NodeId>, kind: gex_core::NodeKind) -> NodeId {
         self.will_change("add");
         let mut n = gex_core::Node::new(kind.name(), kind);
+        let root = self.tree.root;
+        let mut parent = parent.or(root);
         if kind.is_ui() {
             n.transform.position = gex_core::glam::Vec3::new(40.0, 40.0, 0.0);
-            let id = self.tree.add(self.selected.filter(|s| self.tree.nodes[*s].kind.is_ui()).or(self.tree.root), n);
-            self.select(Some(id));
-            return id;
+            parent = parent.filter(|s| self.tree.nodes[*s].kind.is_ui()).or(root);
+        } else if parent == root {
+            if kind.is_2d() && !self.mode_3d {
+                let parent_m = parent.map(|p| self.tree.global_matrix(p)).unwrap_or_default();
+                n.transform.position = parent_m.inverse().transform_point3(self.cam2.center.extend(0.0));
+            }
+        } else if let (gex_core::NodeKind::Collider2D, Some(p)) = (kind, parent) {
+            // A collider starts the size of what it's on.
+            let pn = &self.tree.nodes[p];
+            for k in ["width", "height"] {
+                if let Some(v) = pn.prop(k).and_then(gex_core::Variant::as_f64) {
+                    n.props.insert(k.into(), gex_core::Variant::Num(v));
+                }
+            }
         }
-        // New 2D nodes appear in the middle of the view.
-        if kind.is_2d() && !self.mode_3d {
-            let parent_m = self.selected.map(|p| self.tree.global_matrix(p)).unwrap_or_default();
-            let local = parent_m.inverse().transform_point3(self.cam2.center.extend(0.0));
-            n.transform.position = local;
-        }
-        let id = self.tree.add(self.selected, n);
+        let id = self.tree.add(parent, n);
         self.select(Some(id));
         id
     }
@@ -779,9 +796,17 @@ impl EditorState {
 
     /// A new empty scene file in a folder, opened in a tab.
     pub fn new_scene_file(&mut self, dir: &str, kind: gex_core::NodeKind) -> Option<String> {
-        let res = crate::files::free_name(&self.project, dir, "new_scene.jscene")?;
+        let _ = std::fs::create_dir_all(self.project.res_to_path(dir)?);
+        // The first scene is where the game starts.
+        let main = self.project.config.main_scene.clone();
+        let first = !self.project.res_to_path(&main).is_some_and(|p| p.is_file());
+        let res = crate::files::free_name(&self.project, dir, if first { "main.jscene" } else { "new_scene.jscene" })?;
         let path = self.project.res_to_path(&res)?;
         let root = if kind.is_3d() { "World" } else { "Main" };
+        if first {
+            self.project.config.main_scene = res.clone();
+            let _ = self.project.save();
+        }
         if let Err(e) = std::fs::write(&path, gex_core::scene::new_scene_text(root, kind)) {
             self.log(LogKind::Error, e.to_string());
             return None;
@@ -793,6 +818,7 @@ impl EditorState {
 
     /// A new script file in a folder, opened in a tab.
     pub fn new_script_file(&mut self, dir: &str) -> Option<String> {
+        let _ = std::fs::create_dir_all(self.project.res_to_path(dir)?);
         let res = crate::files::free_name(&self.project, dir, "new_script.jlb")?;
         let path = self.project.res_to_path(&res)?;
         if let Err(e) = std::fs::write(&path, ">> Attach this to a node in the Events panel.\n\nDEF on_create() {\n\t\n}\n") {
@@ -1072,11 +1098,7 @@ impl EditorState {
             res = format!("res://scripts/{}_{}.jlb", base, i);
             i += 1;
         }
-        let text = format!(
-            ">> {} — attached to {}\n>> Outside variables belong to this node; `self` is the node.\n\nDEF on_create() {{\n\t\n}}\n\nDEF on_step(dt) {{\n\t\n}}\n",
-            res.trim_start_matches("res://"),
-            self.tree.nodes[id].name
-        );
+        let text = format!(">> {}'s script. `self` is the node.\n", self.tree.nodes[id].name);
         let p = self.project.res_to_path(&res)?;
         let _ = std::fs::create_dir_all(p.parent()?);
         if let Err(e) = std::fs::write(&p, text) {
@@ -1085,7 +1107,7 @@ impl EditorState {
         }
         self.will_change("script");
         self.tree.nodes[id].scripts.push(res.clone());
-        self.open_script(&res, Some(7));
+        self.open_script(&res, None);
         Some(res)
     }
 
@@ -1118,6 +1140,10 @@ impl EditorState {
         if self.playing.is_some() {
             return;
         }
+        if self.scene_res.is_none() {
+            self.status = "nothing to play yet: make a scene first (+ in Assets)".into();
+            return;
+        }
         // Scripts run from disk, so unsaved edits are saved first.
         let dirty: Vec<String> = self.scripts.values().filter(|s| s.dirty()).map(|s| s.res.clone()).collect();
         for r in dirty {
@@ -1139,6 +1165,7 @@ impl EditorState {
             mouse: [0.0; 2],
             buttons: HashSet::new(),
             game_camera: true,
+            focus_view: true,
             mouse_delta: [0.0; 2],
             stats: Default::default(),
             last_frame: Instant::now(),

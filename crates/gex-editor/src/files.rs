@@ -39,6 +39,7 @@ fn join_res(dir: &str, name: &str) -> String {
     }
 }
 
+#[cfg(test)]
 pub fn new_folder(p: &Project, dir: &str, name: &str) -> Result<String, String> {
     let res = join_res(dir, check_name(name)?);
     let path = p.res_to_path(&res).ok_or("not a project folder")?;
@@ -61,6 +62,9 @@ pub fn free_name(p: &Project, dir: &str, name: &str) -> Option<String> {
 /// Copies files (and folders) from anywhere on disk into a project folder. Gives the new paths.
 pub fn import(p: &Project, dir: &str, files: &[PathBuf]) -> Result<Vec<String>, String> {
     let mut made = Vec::new();
+    if let Some(d) = p.res_to_path(dir) {
+        let _ = std::fs::create_dir_all(d);
+    }
     for f in files {
         let name = f.file_name().ok_or("no file name")?.to_string_lossy().into_owned();
         let res = free_name(p, dir, &name).ok_or("no free name")?;

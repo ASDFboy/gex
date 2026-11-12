@@ -56,11 +56,9 @@ pub fn create_project(dir: &Path, name: &str) -> Result<Project, String> {
     if dir.join(PROJECT_FILE).exists() {
         return Project::open(dir);
     }
-    std::fs::create_dir_all(dir.join("scripts")).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(dir.join("assets")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let p = Project { dir: dir.to_path_buf(), config: ProjectConfig { name: name.to_string(), ..Default::default() } };
     p.save()?;
-    write_all(dir, &[("scenes/main.jscene", &gex_core::scene::new_scene_text("Main", gex_core::NodeKind::Node2D))])?;
     Ok(p)
 }
 

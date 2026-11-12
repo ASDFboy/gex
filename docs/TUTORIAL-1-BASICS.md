@@ -12,38 +12,44 @@ menu that ties them together). Every script in it is commented.
 
 1. Start `gex`. The launcher shows your recent projects on the left.
 2. Under **NEW PROJECT**, type a name and a folder, then **Create empty project**.
-3. The editor opens on `scenes/main.jscene`, which holds one node: `Main` (a Node2D).
+3. The project starts with nothing in it. Press **New 2D scene**: it makes `scenes/main.jscene`
+   (the first scene is where the game starts) and opens it. It holds one node, `Main`.
 
 The editor works like GameMaker's. Along the top are tabs:
 
 | Tab | What it's for |
 |---|---|
-| Workspace | a canvas of windows. Right-click a scene in Assets → **Open as a window** (or drag it onto the canvas) to see its nodes and properties, like an object. **⚡ Events** opens its events beside it; click an event to open the script beside that. Drag the background to look around; **+** adds another workspace |
-| A scene (`main`) | the scene itself, like a room: **Instances** (the node tree; drag to re-parent, right-click for more) and the selected **Instance**'s properties on the left, the view in the middle (2D / 3D at the top left; W / E / R pick move / rotate / scale). Drag a scene from Assets into the view to place an instance of it |
+| A scene (`main`) | the scene itself, like a room. On the left: **Instances** (the node tree; drag to re-parent, right-click for more) and under it the selected one's **Properties** and **Events**. In the middle: the view |
+| Workspace | a canvas of windows for editing scenes like objects, and scripts. Double-click a scene in Assets and its window opens here with its events beside it; click an event and its script opens beside that. Drag the background to look around; **+** adds another workspace |
 
-Assets (your project's files) are on the right and the Console (messages and errors) along the
-bottom; **View** hides either. Prefer panels docked around one view? **View → Classic docked
-layout** switches (and back).
+**Assets** on the right lists what the project has, grouped by kind (scenes, scripts, sprites,
+sounds...). **+** makes a scene or a script, double-click opens one, right-click has the rest,
+and files dropped on the window are imported. The Console (messages and errors) is along the
+bottom. Prefer panels docked around one view? **View → Classic docked layout** switches.
 
 ## 2. Nodes: make a player
 
 Everything in a game is a node, and a scene is a tree of nodes.
 
-1. Select `Main`, then **+ Node → 2D → Sprite2D** in the Hierarchy. Rename it by typing
-   `Player` in the name field at the top of the Inspector.
-2. In the Inspector, set **Position** to x 640, y 360 (the middle of a 1280×720 window), and in
-   **Properties** set `width` and `height` to 40 and `color` to something bright.
+1. **+ Node → Sprite2D**. It appears in the middle of the view. Rename it by typing `Player`
+   in the name field at the top of Properties.
+2. Set `width` and `height` to 40 and `color` to something bright.
 3. Want a picture instead of a colored box? Drop a PNG on the editor window (it's copied into
-   the project), then drag it from the Assets panel onto the `texture` field.
+   the project), then drag it from Assets onto the `texture` field.
 
-The grey frame in the scene view is the game window. 2D positions are in pixels, with y going
+The frame in the scene view is the game window. 2D positions are in pixels, with y going
 **down**.
+
+Moving things in the view: **W / E / R** pick move, rotate and scale. Drag an arrow (or a
+ring, when rotating) to change one axis, a small two-colored square to change two, or the
+object itself to move it freely as you look at it. Hold Ctrl to snap.
 
 ## 3. Scripts: make it move
 
-1. With `Player` selected, open the **Events** tab and press **+ New script**. A script tab opens
-   with `scripts/player.jlb`.
-2. Replace its contents with:
+1. With `Player` selected, switch **Properties** to **Events** and press **Add event → Step**.
+   That makes `scripts/player.jlb`, attaches it, and opens it in the workspace with the cursor
+   inside the new event.
+2. Make the script read:
 
 ```
 >> Outside variables belong to this node.
@@ -57,27 +63,30 @@ DEF on_step(dt) {
 }
 ```
 
-3. Press **F5** (or ▶ Play). Click the scene view and use the arrow keys. **Shift+F5** stops.
+3. Press **F5** (or ▶ Play). The editor shows the game; use the arrow keys. **F5** again stops
+   and brings you back to the script.
 
 What's going on:
 
 - A script is a list of **events**: functions with fixed names that the engine calls.
   `on_step(dt)` runs every frame; `dt` is the seconds since the last one.
 - `self` is the node the script is on. `self.x`, `self.y`, `self.rotation`, `self.visible`, and
-  every property in the Inspector (`self.color`, `self.width`...) can be read and changed.
+  every property (`self.color`, `self.width`...) can be read and changed.
 - Variables written at the top of the file (`speed`) belong to this node. Ten players would each
   have their own `speed`. Inside a function, change one with `GLOBAL speed = 400`.
 - ALL-CAPS words like `KEY_DOWN` are engine commands. Type a few letters and the editor offers
   them, with their inputs. The full list is in [SCRIPTING.md](SCRIPTING.md).
 
-The Events tab lists the events a script handles; **+ Event** adds a new one with its inputs
-filled in. A node can have several scripts, and each one gets the events.
+**Add event** has every event the engine sends: create, destroy, step, draw, keys, mouse,
+collisions, timers, and **Custom** for your own (section 6). A node can have several scripts,
+and each one gets the events.
 
 ## 4. Collisions: a coin to collect
 
-1. Add a child to `Main`: **Sprite2D**, named `Coin`, 20×20, yellow, at x 300, y 250.
-2. Right-click `Coin` → **Add child → Collider2D**, size 20×20. Do the same for `Player` (40×40).
-3. Add a script to `Player`'s list of events (in `player.jlb`):
+1. **+ Node → Sprite2D**, named `Coin`, 20×20, yellow. Drag it somewhere away from the player.
+2. With `Coin` selected, **+ Node → Collider2D**: it goes on the coin, already the coin's size.
+   Do the same for `Player`.
+3. Select `Player`, then **Events → Add event → Collision → Start**, and fill it in:
 
 ```
 DEF on_collide_start(other) {
@@ -108,7 +117,7 @@ To spawn more while the game runs, use `SPAWN("res://scenes/coin.jscene", x, y)`
 
 1. Add a **Label** to `Main` (under **UI**), named `Score`, at x 20, y 16, `text` = `Score: 0`.
    UI nodes stay put on the screen while the camera moves.
-2. Add a script to `Main` (select it, **+ New script**):
+2. Select `Main`, then **Events → Add event → Custom**, type `coin_taken`, **Add**:
 
 ```
 score = 0
@@ -128,7 +137,9 @@ DEF on_collide_start(other) {
 }
 ```
 
-`EMIT("coin_taken")` runs `on_coin_taken()` on every script that has it. `SEND(node,
+`EMIT("coin_taken")` is a broadcast, like Scratch's: it runs `on_coin_taken()` on every script
+that has it (`BROADCAST` is another name for the same command), and once a name is broadcast
+somewhere, **Add event → Custom** lists it. `SEND(node,
 "coin_taken")` runs it on one node only. You can pass values: `EMIT("hurt", 10)` →
 `DEF on_hurt(amount)`.
 
@@ -152,9 +163,7 @@ DEF on_timer_spawn() {
 
 ## 8. A menu and a second scene
 
-1. **File → New scene → with a Node2D root**. It opens in a new tab as
-   `scenes/new_scene.jscene`; right-click that file in the Assets panel → **Rename…** →
-   `menu.jscene`.
+1. In Assets, **+ → New scene → UI / menu**, and name it `menu`.
 2. Add a **Button** (UI) named `Play`, and a script on the root:
 
 ```
@@ -166,7 +175,7 @@ DEF on_pressed_play() {
 Clicking a Button named `Play` runs `on_pressed_play()` (a Button named `Start Game` would be
 `on_pressed_start_game()`). The `0.5` fades to black and back over half a second.
 
-3. **File → Save scene as main scene** so the game starts on the menu.
+3. **File → Set as main scene** so the game starts on the menu.
 
 To keep a value across scenes (lives, an inventory), `REMEMBER("lives", 3)` and later
 `RECALL("lives")`. To keep it after the game closes, `SAVE_DATA("best", score)` and

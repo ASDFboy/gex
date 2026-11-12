@@ -5,13 +5,14 @@ use std::collections::HashSet;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense};
 use egui_wgpu::wgpu;
-use gex_core::glam::{Mat4, Vec2, Vec3};
+use gex_core::glam::{Mat4, Quat, Vec2, Vec3};
 use gex_core::render::{extract, RenderList};
 use gex_core::{Node, NodeId, NodeKind, Variant};
 use gex_render::camera::ray_box;
 use gex_render::{Cameras, Overlay, Renderer};
 
 use crate::panels::AssetPath;
+use crate::gizmo::{Gizmo, Handle};
 use crate::state::{EditorState, Tool};
 use crate::theme;
 
@@ -310,11 +311,12 @@ fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Op
 struct Drag {
     /// The dragged nodes and their world transforms when the drag began.
     nodes: Vec<(NodeId, Mat4)>,
-    /// Pointer in the world when it began, and the grabbed node's position.
-    start: Vec3,
-    plane_y: f32,
+    /// The grabbed node's position.
     pivot: Vec3,
     screen_start: Vec2,
+    /// The handle grabbed, and the gizmo as it was then.
+    handle: Handle,
+    giz: Gizmo,
 }
 
 pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::RenderState>, textures: &mut Option<egui::TextureId>) {
@@ -338,7 +340,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         if let Some(p) = &mut st.playing {
             ui.separator();
             ui.checkbox(&mut p.game_camera, "Game camera").on_hover_text("Off: look around with the editor camera while the game runs");
-            ui.label(egui::RichText::new("Click the view to give the game the keyboard").small().color(theme::TEXT_DIM));
+            if !ui.ctx().memory(|m| m.focused().is_some_and(|f| Some(f) == ui.ctx().data(|d| d.get_temp::<egui::Id>(egui::Id::new("gex viewport id"))))) {
+                ui.label(egui::RichText::new("Click the view to give the game the keyboard").small().color(theme::WARN));
+            }
         } else {
             ui.separator();
             ui.label(egui::RichText::new("Controls").small().color(theme::TEXT_DIM)).on_hover_text(if st.mode_3d {
@@ -387,7 +391,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gex viewport id"), resp.id));
     if let Some(p) = &mut st.playing {
         // Feed the game while the view has focus (or holds the mouse).
-        if p.locked && !resp.has_focus() {
+        if (p.locked || std::mem::take(&mut p.focus_view)) && !resp.has_focus() {
             resp.request_focus();
         }
         if resp.clicked() && p.lock_suspended {
@@ -475,13 +479,31 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     }
     // Select, drag nodes (move / rotate / scale), box select, drop assets (editing only).
     let mut box_rect: Option<Rect> = None;
+    let mut gizmo_draw: Option<(Gizmo, Option<Handle>)> = None;
     if !playing && !painting {
         let drag_id = egui::Id::new("viewport drag");
         let ctrl = ui.input(|i| i.modifiers.command);
+        // The handles on the selected node.
+        let giz = st.selected.filter(|s| st.tree.contains(*s) && Some(*s) != st.tree.root && (st.tree.nodes[*s].kind.is_3d() == st.mode_3d)).and_then(|s| {
+            let m = st.tree.global_matrix(s);
+            Gizmo::new(&cams, st.mode_3d, st.tool, m.w_axis.truncate(), m.to_scale_rotation_translation().1, ppp)
+        });
+        let dragging = ui.data(|m| m.get_temp::<Drag>(drag_id));
+        gizmo_draw = match (&dragging, giz, pointer) {
+            (Some(d), _, _) => Some((d.giz, Some(d.handle))),
+            (None, Some(g), Some(pp)) if resp.hovered() => Some((g, g.hit(&cams, to_px(pp), ppp))),
+            (None, Some(g), _) => Some((g, None)),
+            _ => None,
+        };
         if resp.drag_started_by(egui::PointerButton::Primary) {
             // Where the button went down (the pointer may already have moved on).
             if let Some(pp) = ui.input(|i| i.pointer.press_origin()).or(pointer) {
-                let hit = pick(st, &list, &cams, to_px(pp)).filter(|h| Some(*h) != st.tree.root);
+                let grabbed = giz.and_then(|g| g.hit(&cams, to_px(pp), ppp).map(|h| (g, h)));
+                let hit = if grabbed.is_some() { None } else { pick(st, &list, &cams, to_px(pp)).filter(|h| Some(*h) != st.tree.root) };
+                if let Some((g, handle)) = grabbed {
+                    let nodes: Vec<(NodeId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
+                    ui.data_mut(|d| d.insert_temp(drag_id, Drag { nodes, pivot: g.pivot, screen_start: to_px(pp), handle, giz: g }));
+                }
                 match hit {
                     Some(h) => {
                         if !st.is_selected(h) {
@@ -492,10 +514,11 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                             }
                         }
                         let nodes: Vec<(NodeId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
-                        let plane_y = st.tree.global_matrix(h).w_axis.y;
-                        let start = pointer_world(st, &cams, to_px(pp), plane_y).unwrap_or(Vec3::ZERO);
-                        let pivot = st.tree.global_matrix(h).w_axis.truncate();
-                        ui.data_mut(|d| d.insert_temp(drag_id, Drag { nodes, start, plane_y, pivot, screen_start: to_px(pp) }));
+                        let hm = st.tree.global_matrix(h);
+                        let pivot = hm.w_axis.truncate();
+                        if let Some(g) = Gizmo::new(&cams, st.mode_3d, st.tool, pivot, hm.to_scale_rotation_translation().1, ppp) {
+                            ui.data_mut(|d| d.insert_temp(drag_id, Drag { nodes, pivot, screen_start: to_px(pp), handle: Handle::Free, giz: g }));
+                        }
                     }
                     None if !st.mode_3d => {
                         ui.data_mut(|d| d.insert_temp(drag_id.with("box"), pp));
@@ -507,64 +530,83 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         if resp.dragged_by(egui::PointerButton::Primary) {
             if let (Some(d), Some(pp)) = (ui.data(|m| m.get_temp::<Drag>(drag_id)), pointer) {
                 let now = to_px(pp);
-                if let Some(at) = pointer_world(st, &cams, now, d.plane_y) {
+                let g = d.giz;
+                let drag = now - d.screen_start;
+                let view = g.toward_viewer(&cams);
+                // What the drag means, once for every dragged node.
+                let mut move_by = Vec3::ZERO;
+                let mut turn = Quat::IDENTITY;
+                let mut grow = Vec3::ONE;
+                match st.tool {
+                    Tool::Move => {
+                        move_by = match d.handle {
+                            Handle::Axis(i) => g.axes[i] * g.along(&cams, i, drag),
+                            // Two axes: slide on their plane. The node itself: on the plane facing the camera.
+                            h => {
+                                let normal = if let Handle::Plane(i) = h { g.axes[i] } else { view };
+                                match (g.on_plane(&cams, d.screen_start, normal), g.on_plane(&cams, now, normal)) {
+                                    (Some(a), Some(b)) => b - a,
+                                    _ => Vec3::ZERO,
+                                }
+                            }
+                        };
+                        if ctrl {
+                            let step = if st.mode_3d { 0.25 } else { 16.0 };
+                            move_by = (move_by / step).round() * step;
+                        }
+                    }
+                    Tool::Rotate => {
+                        if let Some(c) = g.px(&cams, g.pivot) {
+                            let ang = |p: Vec2| (p.y - c.y).atan2(p.x - c.x);
+                            let mut a = ang(now) - ang(d.screen_start);
+                            if ctrl {
+                                let step = 15f32.to_radians();
+                                a = (a / step).round() * step;
+                            }
+                            let axis = if let Handle::Axis(i) = d.handle { g.axes[i] } else { view };
+                            // The screen's y points down: clockwise there is a negative turn about an axis facing the viewer.
+                            let sign = if !st.mode_3d { 1.0 } else if axis.dot(view) >= 0.0 { -1.0 } else { 1.0 };
+                            turn = Quat::from_axis_angle(axis, a * sign);
+                        }
+                    }
+                    Tool::Scale => {
+                        let f = |amount: f32| (1.0 + amount / g.k).max(0.01);
+                        match d.handle {
+                            Handle::Axis(i) => grow[i] = f(g.along(&cams, i, drag)),
+                            Handle::Plane(i) => {
+                                let (a, b) = ((i + 1) % 3, (i + 2) % 3);
+                                let k = f((g.along(&cams, a, drag) + g.along(&cams, b, drag)) / 2.0);
+                                grow[a] = k;
+                                grow[b] = k;
+                            }
+                            Handle::Free => {
+                                if let Some(c) = g.px(&cams, g.pivot) {
+                                    let d0 = d.screen_start.distance(c);
+                                    let k = if d0 > 8.0 * ppp { (now.distance(c) / d0).max(0.01) } else { f((drag.x - drag.y) / (78.0 * ppp) * g.k) };
+                                    grow = Vec3::splat(k);
+                                }
+                            }
+                        }
+                    }
+                }
+                {
                     st.will_change("drag");
-                    let tool = st.tool;
                     for (id, start_m) in &d.nodes {
                         if !st.tree.contains(*id) {
                             continue;
                         }
                         let (s0, r0, t0) = start_m.to_scale_rotation_translation();
-                        let world = match tool {
-                            Tool::Move => {
-                                let mut delta = at - d.start;
-                                if !st.mode_3d {
-                                    delta.z = 0.0;
-                                }
-                                let mut t = t0 + delta;
-                                if ctrl && !st.mode_3d {
-                                    t.x = (t.x / 16.0).round() * 16.0;
-                                    t.y = (t.y / 16.0).round() * 16.0;
-                                } else if ctrl {
-                                    t = (t * 4.0).round() / 4.0;
-                                }
-                                Mat4::from_scale_rotation_translation(s0, r0, t)
-                            }
-                            Tool::Rotate => {
-                                let angle = if st.mode_3d {
-                                    (now.x - d.screen_start.x) * 0.01
-                                } else {
-                                    let a0 = (d.start - d.pivot).truncate();
-                                    let a1 = (at - d.pivot).truncate();
-                                    a1.y.atan2(a1.x) - a0.y.atan2(a0.x)
-                                };
-                                let mut angle = angle;
-                                if ctrl {
-                                    let step = 15f32.to_radians();
-                                    angle = (angle / step).round() * step;
-                                }
-                                let q = if st.mode_3d { gex_core::glam::Quat::from_rotation_y(angle) } else { gex_core::glam::Quat::from_rotation_z(angle) };
-                                // Rotate about the pivot (the node that was grabbed).
-                                let t = d.pivot + q * (t0 - d.pivot);
-                                Mat4::from_scale_rotation_translation(s0, q * r0, t)
-                            }
-                            Tool::Scale => {
-                                let f = if st.mode_3d {
-                                    (1.0 - (now.y - d.screen_start.y) * 0.01).max(0.01)
-                                } else {
-                                    let d0 = (d.start - d.pivot).truncate().length().max(1.0);
-                                    ((at - d.pivot).truncate().length() / d0).max(0.01)
-                                };
-                                Mat4::from_scale_rotation_translation(s0 * f, r0, d.pivot + (t0 - d.pivot) * f)
-                            }
-                        };
+                        let uniform = grow.x == grow.y && grow.y == grow.z;
+                        // Scaling every axis also spreads the other dragged nodes out from the grabbed one.
+                        let t = d.pivot + turn * (t0 - d.pivot) * if uniform { grow.x } else { 1.0 } + move_by;
+                        let world = Mat4::from_scale_rotation_translation(s0 * grow, turn * r0, t);
                         let parent_inv = st.tree.nodes[*id].parent.map(|p| st.tree.global_matrix(p).inverse()).unwrap_or(Mat4::IDENTITY);
                         let (s, r, t) = (parent_inv * world).to_scale_rotation_translation();
                         let (ry, rx, rz) = r.to_euler(gex_core::glam::EulerRot::YXZ);
                         let tr = &mut st.tree.nodes[*id].transform;
                         tr.position = t;
                         tr.scale = s;
-                        tr.rotation = Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
+                        tr.rotation = Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees()) + Vec3::ZERO; // + 0 turns -0 into 0
                     }
                 }
             }
@@ -601,7 +643,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
             }
         }
         if resp.clicked() {
-            if let Some(pp) = pointer {
+            if let Some(pp) = pointer.filter(|pp| giz.is_none_or(|g| g.hit(&cams, to_px(*pp), ppp).is_none())) {
                 let hit = pick(st, &list, &cams, to_px(pp));
                 match (hit, ctrl) {
                     (Some(h), true) => st.toggle_select(h),
@@ -650,6 +692,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     }
     if let Some(p) = &mut st.playing {
         p.ui_events.extend(events);
+    }
+    if let Some((g, lit)) = gizmo_draw {
+        g.paint(&ui.painter_at(rect), &cams, rect.min, ppp, lit);
     }
     if let Some(b) = box_rect {
         ui.painter().rect(b, 0.0, theme::ACCENT.gamma_multiply(0.12), egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);

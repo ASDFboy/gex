@@ -48,7 +48,14 @@ pub fn add_node_menu(ui: &mut egui::Ui, st: &mut EditorState) {
         ("UI (screen space)", |k| k.is_ui()),
         ("3D", |k| k.is_3d()),
     ];
-    for (i, (title, f)) in groups.iter().enumerate() {
+    // A 2D scene offers no 3D nodes, and the other way round.
+    let root = st.tree.root.map(|r| st.tree.nodes[r].kind);
+    let skip = match root {
+        Some(k) if k.is_2d() => "3D",
+        Some(k) if k.is_3d() => "2D",
+        _ => "",
+    };
+    for (i, (title, f)) in groups.iter().filter(|g| g.0 != skip).enumerate() {
         if i > 0 {
             ui.separator();
         }
@@ -198,8 +205,7 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
             }
         }
         Some(Action::AddChild(id, k)) if !playing => {
-            st.select(Some(id));
-            st.add_node(k);
+            st.add_child(Some(id), k);
         }
         _ => {}
     }
@@ -636,63 +642,200 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("on_ready()", "runs when when_ready() turns TRUE"),
 ];
 
+/// An event function's name as people say it: on_press_space → "Key pressed: space".
+fn event_label(h: &str) -> String {
+    let fixed = [
+        ("on_create", "Create"),
+        ("on_destroy", "Destroy"),
+        ("on_step", "Step"),
+        ("on_physics", "Physics step"),
+        ("on_draw", "Draw"),
+        ("on_key_pressed", "Any key pressed"),
+        ("on_key_released", "Any key released"),
+        ("on_mouse_pressed", "Mouse pressed"),
+        ("on_mouse_moved", "Mouse moved"),
+        ("on_mouse_wheel", "Mouse wheel"),
+        ("on_collide_start", "Collision start"),
+        ("on_collide", "While colliding"),
+        ("on_collide_end", "Collision end"),
+        ("on_timer", "Any timer"),
+        ("on_pressed", "Clicked"),
+        ("on_text_changed", "Text changed"),
+        ("on_text_submitted", "Text submitted"),
+        ("on_animation_end", "Animation end"),
+        ("on_tween_end", "Tween end"),
+        ("on_ready", "When ready"),
+        ("when_ready", "Ready condition"),
+    ];
+    if let Some((_, l)) = fixed.iter().find(|(n, _)| *n == h) {
+        return l.to_string();
+    }
+    for (prefix, what) in [("on_press_", "Key pressed"), ("on_release_", "Key released"), ("on_timer_", "Timer"), ("on_pressed_", "Clicked")] {
+        if let Some(rest) = h.strip_prefix(prefix) {
+            return format!("{}: {}", what, rest);
+        }
+    }
+    format!("Custom: {}", h.trim_start_matches("on_"))
+}
+
+/// Names sent with EMIT / BROADCAST / SEND anywhere in the project's scripts.
+fn broadcast_names(st: &EditorState) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in list_files(st, "res://", "jlb") {
+        let text = st.script_text(&f);
+        for call in ["EMIT(\"", "BROADCAST(\""] {
+            for part in text.split(call).skip(1) {
+                if let Some(name) = part.split('"').next().filter(|n| jlb::value::is_ident(n)) {
+                    if !out.iter().any(|o| o == name) {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The "Add event" menu. Gives back the function to add, like `on_press_space()`.
+fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
+    let pick = std::cell::RefCell::new(None::<String>);
+    let item = |ui: &mut egui::Ui, label: &str, sig: &str| {
+        let what = EVENTS.iter().find(|e| e.0 == sig).map(|e| e.1).unwrap_or("");
+        let mut r = ui.button(label);
+        if !what.is_empty() {
+            r = r.on_hover_text(what);
+        }
+        if r.clicked() {
+            *pick.borrow_mut() = Some(sig.to_string());
+        }
+    };
+    item(ui, "Create", "on_create()");
+    item(ui, "Destroy", "on_destroy()");
+    item(ui, "Step", "on_step(dt)");
+    item(ui, "Physics step", "on_physics(dt)");
+    item(ui, "Draw", "on_draw()");
+    ui.separator();
+    for (title, any, prefix) in [("Key pressed", "on_key_pressed(key)", "on_press_"), ("Key released", "on_key_released(key)", "on_release_")] {
+        ui.menu_button(title, |ui| {
+            item(ui, "Any key", any);
+            ui.separator();
+            for k in ["left", "right", "up", "down", "space", "enter", "escape", "shift", "w", "a", "s", "d"] {
+                item(ui, k, &format!("{}{}()", prefix, k));
+            }
+            ui.separator();
+            let mem = egui::Id::new(("other key", prefix));
+            let mut key: String = ui.data_mut(|d| d.get_temp(mem).unwrap_or_default());
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut key).hint_text("other key or action").desired_width(120.0));
+                if ui.add_enabled(jlb::value::is_ident(&key), egui::Button::new("Add")).on_hover_text("A key (f, tab, pad_a...) or an input action from Project settings").clicked() {
+                    *pick.borrow_mut() = Some(format!("{}{}()", prefix, key.to_lowercase()));
+                    key.clear();
+                }
+            });
+            ui.data_mut(|d| d.insert_temp(mem, key));
+        });
+    }
+    ui.menu_button("Mouse", |ui| {
+        item(ui, "Pressed", "on_mouse_pressed(button, x, y)");
+        item(ui, "Moved", "on_mouse_moved(x, y)");
+        item(ui, "Wheel", "on_mouse_wheel(amount)");
+    });
+    ui.menu_button("Collision", |ui| {
+        item(ui, "Start", "on_collide_start(other)");
+        item(ui, "While colliding", "on_collide(other)");
+        item(ui, "End", "on_collide_end(other)");
+    });
+    ui.menu_button("Other", |ui| {
+        item(ui, "Timer", "on_timer(name)");
+        item(ui, "Animation end", "on_animation_end(name)");
+        item(ui, "Tween end", "on_tween_end(property)");
+        item(ui, "Clicked (a Button)", "on_pressed()");
+        item(ui, "Text changed (a TextInput)", "on_text_changed(text)");
+        item(ui, "Text submitted (a TextInput)", "on_text_submitted(text)");
+    });
+    ui.separator();
+    ui.menu_button("Custom", |ui| {
+        ui.label(RichText::new("Runs when any script calls BROADCAST(\"name\"),\nor SEND(node, \"name\") for one node.").small().color(theme::TEXT_DIM));
+        let known = broadcast_names(st);
+        if !known.is_empty() {
+            ui.separator();
+        }
+        for n in known {
+            if ui.button(&n).on_hover_text("Already broadcast somewhere in this project").clicked() {
+                *pick.borrow_mut() = Some(format!("on_{}()", n));
+            }
+        }
+        ui.separator();
+        let mem = egui::Id::new("custom event");
+        let mut custom: String = ui.data_mut(|d| d.get_temp(mem).unwrap_or_default());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut custom).hint_text("new name").desired_width(120.0));
+            if ui.add_enabled(jlb::value::is_ident(&custom), egui::Button::new("Add")).clicked() {
+                *pick.borrow_mut() = Some(format!("on_{}()", custom));
+                custom.clear();
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(mem, custom));
+    });
+    if pick.borrow().is_some() {
+        ui.close();
+    }
+    pick.into_inner()
+}
+
+/// The selected node's events (the on_... functions of its scripts) and the scripts themselves.
 pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
     let Some(id) = st.selected.filter(|i| st.tree.contains(*i)) else {
-        ui.label("Select a node to see its scripts and events.");
+        ui.label(RichText::new("Select a node to see its events.").color(theme::TEXT_DIM));
         return;
     };
     let playing = st.playing.is_some();
-    let name = st.tree.nodes[id].name.clone();
-    ui.label(RichText::new(format!("Scripts on {}", name)).strong());
-    ui.label(RichText::new("Each script is a .jlb file; its events are functions named on_…").color(theme::TEXT_DIM).small());
-    ui.separator();
     let scripts = st.tree.nodes[id].scripts.clone();
+    ui.horizontal(|ui| {
+        theme::title(ui, &format!("Events of {}", st.tree.nodes[id].name));
+        if !playing {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mut add = None;
+                ui.menu_button("Add event", |ui| add = add_event_menu(ui, st));
+                if let Some(sig) = add {
+                    // The first event makes the node's script.
+                    if let Some(res) = scripts.first().cloned().or_else(|| st.new_script_for(id)) {
+                        st.add_event(&res, &sig);
+                    }
+                }
+            });
+        }
+    });
+    let mut any = false;
+    for res in &scripts {
+        let text = st.script_text(res);
+        // In the order they're written.
+        let found = gex_script::world::scan_handlers_text(&text);
+        let mut handlers: Vec<(usize, String)> = found.into_iter().filter_map(|h| text.lines().position(|l| l.trim_start().strip_prefix("DEF ").is_some_and(|r| r.trim_start().starts_with(&format!("{}(", h)))).map(|l| (l + 1, h))).collect();
+        handlers.sort();
+        for (line, h) in handlers {
+            any = true;
+            if ui.add(egui::Button::selectable(false, event_label(&h))).on_hover_text(format!("{} in {}", h, res.trim_start_matches("res://"))).clicked() {
+                st.open_script(res, Some(line));
+            }
+        }
+    }
+    if !any {
+        ui.label(RichText::new("None yet.").color(theme::TEXT_DIM));
+    }
+    ui.add_space(6.0);
+    ui.separator();
+    theme::title(ui, "Scripts");
     let mut detach = None;
     for (i, res) in scripts.iter().enumerate() {
-        let text = st.script_text(res);
-        let mut handlers: Vec<String> = gex_script::world::scan_handlers_text(&text).into_iter().collect();
-        handlers.sort();
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.link(RichText::new(format!("📜 {}", res.trim_start_matches("res://"))).monospace()).clicked() {
-                    st.open_script(res, None);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !playing && ui.small_button("Detach").on_hover_text("remove from this node (the file stays)").clicked() {
-                        detach = Some(i);
-                    }
-                });
-            });
-            for h in &handlers {
-                let line = text.lines().position(|l| l.contains(&format!("DEF {}(", h)) || l.contains(&format!("DEF {} (", h))).map(|l| l + 1);
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    if ui.link(RichText::new(format!("⚡ {}", h)).color(theme::C_EVENT)).clicked() {
-                        st.open_script(res, line);
-                    }
-                });
+        ui.horizontal(|ui| {
+            if ui.link(res.trim_start_matches("res://")).clicked() {
+                st.open_script(res, None);
             }
-            ui.menu_button("+ Event", |ui| {
-                for (sig, what) in EVENTS {
-                    if ui.button(*sig).on_hover_text(*what).clicked() {
-                        st.add_event(res, sig);
-                        ui.close();
-                    }
-                }
-                ui.separator();
-                let mem = egui::Id::new("custom event");
-                let mut custom: String = ui.data_mut(|d| d.get_temp(mem).unwrap_or_default());
-                ui.horizontal(|ui| {
-                    ui.label("on_");
-                    ui.add(egui::TextEdit::singleline(&mut custom).hint_text("my_event").desired_width(100.0));
-                    if ui.add_enabled(jlb::value::is_ident(&custom), egui::Button::new("add")).on_hover_text("runs for SEND(node, \"my_event\") and EMIT(\"my_event\")").clicked() {
-                        st.add_event(res, &format!("on_{}()", custom));
-                        custom.clear();
-                        ui.close();
-                    }
-                });
-                ui.data_mut(|d| d.insert_temp(mem, custom));
-            });
+            if !playing && ui.small_button("Detach").on_hover_text("Remove from this node (the file stays)").clicked() {
+                detach = Some(i);
+            }
         });
     }
     if let Some(i) = detach {
@@ -703,33 +846,22 @@ pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
         return;
     }
     ui.horizontal(|ui| {
-        if ui.button("+ New script").clicked() {
+        if ui.small_button("New script").clicked() {
             st.new_script_for(id);
         }
-        ui.menu_button("Attach existing", |ui| {
-            let all = list_files(st, "res://", "jlb");
+        ui.menu_button("Attach", |ui| {
+            let all: Vec<String> = list_files(st, "res://", "jlb").into_iter().filter(|s| !scripts.contains(s)).collect();
             if all.is_empty() {
-                ui.label("no .jlb files yet");
+                ui.label(RichText::new("No other scripts in the project.").color(theme::TEXT_DIM));
             }
             for s in all {
-                if ui.button(&s).clicked() {
+                if ui.button(s.trim_start_matches("res://")).clicked() {
                     st.will_change("attach");
-                    if !st.tree.nodes[id].scripts.contains(&s) {
-                        st.tree.nodes[id].scripts.push(s);
-                    }
+                    st.tree.nodes[id].scripts.push(s);
                     ui.close();
                 }
             }
         });
-    });
-    ui.separator();
-    egui::CollapsingHeader::new("Engine commands").default_open(false).show(ui, |ui| {
-        for (name, args, what) in gex_script::commands::COMMANDS {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("{}{}", name, args)).monospace().color(theme::C_ENGINE));
-                ui.label(RichText::new(*what).color(theme::TEXT_DIM).small());
-            });
-        }
     });
 }
 
@@ -759,9 +891,20 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
     }
     if in_project {
         r.context_menu(|ui| {
-            if e.name.ends_with(".jscene") && ui.button("Open as a window").on_hover_text("in the workspace: its nodes, properties and events (like an object)").clicked() {
-                st.open_windows.push(e.path.clone());
-                ui.close();
+            if e.name.ends_with(".jscene") {
+                if ui.button("Open").on_hover_text("Its nodes, properties and events, as a window in the workspace").clicked() {
+                    st.open_windows.push(e.path.clone());
+                    ui.close();
+                }
+                if ui.button("Open in its own tab").on_hover_text("The scene view, to place and arrange things in it").clicked() {
+                    st.open_scene(&e.path);
+                    ui.close();
+                }
+                if st.scene_res.as_deref() != Some(e.path.as_str()) && ui.button("Place in the current scene").clicked() {
+                    st.instance_scene(&e.path);
+                    ui.close();
+                }
+                ui.separator();
             }
             if ui.button("Rename…").clicked() {
                 set_dialog(ui.ctx(), AssetDialog::Rename(e.path.clone(), e.name.clone()));
@@ -789,190 +932,262 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
     }
 }
 
-pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::collections::HashMap<String, egui::TextureHandle>) {
-    ui.horizontal_wrapped(|ui| {
-        for r in st.vfs.roots() {
-            if ui.selectable_label(st.asset_dir.starts_with(&r.path), &r.name).clicked() {
-                st.asset_dir = r.path.clone();
+/// The kinds of asset, in the order the tree shows them: (group, does this file belong).
+const ASSET_GROUPS: &[(&str, fn(&str) -> bool)] = &[
+    ("Scenes", |n| n.ends_with(".jscene")),
+    ("Scripts", |n| n.ends_with(".jlb")),
+    ("Sprites", |n| gex_assets::image_load::is_image(n)),
+    ("Sounds", is_sound),
+    ("Models", |n| gex_assets::model::is_model(n)),
+    ("Fonts", |n| n.ends_with(".ttf") || n.ends_with(".otf")),
+    ("Shaders", |n| n.ends_with(".wgsl")),
+];
+
+fn is_sound(n: &str) -> bool {
+    let n = n.to_ascii_lowercase();
+    [".wav", ".mp3", ".ogg", ".flac"].iter().any(|e| n.ends_with(e))
+}
+
+/// Every file in the project (not the project file or hidden ones), looked up twice a second.
+fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<String>> {
+    // The flag: the last look found the same files as the one before. Until it has, the
+    // window redraws when the list goes stale, so a new file shows up without a mouse move.
+    type Cache = (f64, std::path::PathBuf, std::sync::Arc<Vec<String>>, bool);
+    let id = egui::Id::new("project files");
+    let now = ui.input(|i| i.time);
+    let old = ui.data(|d| d.get_temp::<Cache>(id)).filter(|c| c.1 == st.project.dir);
+    if let Some((t, _, files, settled)) = &old {
+        if now - t < 0.5 {
+            if !settled {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.5 - (now - t) + 0.02));
             }
+            return files.clone();
         }
-        if ui.button("Mounts").on_hover_text("connect game installs (Half-Life 2...)").clicked() {
-            st.show_settings = true;
-        }
-    });
-    // Breadcrumbs.
-    ui.horizontal_wrapped(|ui| {
-        let (scheme, rel) = st.asset_dir.split_once("://").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or_default();
-        if ui.link(format!("{}://", scheme)).clicked() {
-            st.asset_dir = format!("{}://", scheme);
-        }
-        let mut acc = String::new();
-        for part in rel.split('/').filter(|p| !p.is_empty()) {
-            acc = if acc.is_empty() { part.to_string() } else { format!("{}/{}", acc, part) };
-            ui.label("/");
-            if ui.link(part).clicked() {
-                st.asset_dir = format!("{}://{}", scheme, acc);
-            }
-        }
-    });
-    let in_project = st.asset_dir.starts_with("res://");
-    if in_project && st.playing.is_none() {
-        asset_toolbar(ui, st);
     }
-    ui.separator();
-    let entries = st.vfs.list(&st.asset_dir);
-    let preview_w = 150.0;
-    ui.horizontal_top(|ui| {
-        let list_w = (ui.available_width() - preview_w - 12.0).max(120.0);
-        egui::ScrollArea::vertical().id_salt("asset list").max_width(list_w).auto_shrink([false, false]).show(ui, |ui| ui.vertical(|ui| {
-            ui.set_width(list_w);
-            if entries.is_empty() {
-                ui.label(RichText::new("empty").color(theme::TEXT_DIM));
+    let mut out = Vec::new();
+    let mut todo = vec!["res://".to_string()];
+    while let Some(dir) = todo.pop() {
+        for e in st.vfs.list(&dir) {
+            if e.name.starts_with('.') || e.name == gex_core::project::PROJECT_FILE {
+                continue;
             }
-            let images: Vec<&gex_assets::vfs::Entry> = entries.iter().filter(|e| !e.is_dir && gex_assets::image_load::is_image(&e.name)).collect();
-            // Folders full of pictures show as a grid of thumbnails (the toggle switches back).
-            let grid = st.asset_grid && images.len() >= 4;
-            if images.len() >= 4 {
-                ui.horizontal(|ui| {
-                    ui.toggle_value(&mut st.asset_grid, "▦ thumbnails").on_hover_text("show pictures as a grid");
+            if e.is_dir {
+                todo.push(e.path);
+            } else if out.len() < 20000 {
+                out.push(e.path);
+            }
+        }
+    }
+    out.sort_by_key(|p| p.to_lowercase());
+    let files = std::sync::Arc::new(out);
+    let settled = old.is_some_and(|o| *o.2 == *files);
+    if !settled {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(520));
+    }
+    ui.data_mut(|d| d.insert_temp::<Cache>(id, (now, st.project.dir.clone(), files.clone(), settled)));
+    files
+}
+
+/// One file in the asset tree: a small picture for images, click to select, drag to use,
+/// double-click to open, right-click for more.
+fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, tex: &mut std::collections::HashMap<String, egui::TextureHandle>, path: &str, label: &str) {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let sel = st.asset_selected.as_deref() == Some(path);
+    let r = ui
+        .horizontal(|ui| {
+            if gex_assets::image_load::is_image(name) {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                // Pictures load when their row first scrolls into view.
+                if ui.is_rect_visible(rect) {
+                    let t = thumb(ui, st, tex, path);
+                    let size = t.size_vec2();
+                    let k = (16.0 / size.x).min(16.0 / size.y);
+                    ui.painter().image(t.id(), egui::Rect::from_center_size(rect.center(), size * k), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                }
+            }
+            ui.add(egui::Button::selectable(sel, label)).interact(egui::Sense::click_and_drag())
+        })
+        .inner;
+    r.dnd_set_drag_payload(AssetPath(path.to_string()));
+    if r.clicked() {
+        st.asset_selected = Some(path.to_string());
+    }
+    let in_project = path.starts_with("res://");
+    asset_context_menu(&r, st, &gex_assets::vfs::Entry { name: name.to_string(), path: path.to_string(), is_dir: false }, in_project);
+    if r.double_clicked() && in_project && st.playing.is_none() {
+        if name.ends_with(".jscene") {
+            st.open_windows.push(path.to_string());
+        } else if [".jlb", ".txt", ".vmt", ".wgsl", ".json", ".md"].iter().any(|x| name.ends_with(x)) {
+            st.open_script(path, None);
+        }
+    }
+}
+
+fn thumb<'a>(ui: &egui::Ui, st: &EditorState, tex: &'a mut std::collections::HashMap<String, egui::TextureHandle>, path: &str) -> &'a egui::TextureHandle {
+    tex.entry(path.to_string()).or_insert_with(|| {
+        let img = gex_assets::load_image(&st.vfs, path).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
+        let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
+        ui.ctx().load_texture(path.to_string(), ci, egui::TextureOptions::NEAREST)
+    })
+}
+
+/// A level of a group's tree: folders first, then files. `items` are (path parts below this
+/// level, full path).
+fn asset_level(ui: &mut egui::Ui, st: &mut EditorState, tex: &mut std::collections::HashMap<String, egui::TextureHandle>, salt: &str, items: &[(Vec<&str>, &str)], stems: bool) {
+    let mut folders: Vec<&str> = items.iter().filter(|(p, _)| p.len() > 1).map(|(p, _)| p[0]).collect();
+    folders.dedup();
+    for f in folders {
+        let inside: Vec<(Vec<&str>, &str)> = items.iter().filter(|(p, _)| p.len() > 1 && p[0] == f).map(|(p, full)| (p[1..].to_vec(), *full)).collect();
+        let salt = format!("{}/{}", salt, f);
+        egui::CollapsingHeader::new(f).id_salt(&salt).show(ui, |ui| asset_level(ui, st, tex, &salt, &inside, stems));
+    }
+    for (p, full) in items.iter().filter(|(p, _)| p.len() == 1) {
+        let label = if stems { p[0].rsplit_once('.').map_or(p[0], |x| x.0) } else { p[0] };
+        asset_row(ui, st, tex, full, label);
+    }
+}
+
+/// A folder outside the project (built-in art, a mounted game), listed as it's opened.
+fn asset_folder(ui: &mut egui::Ui, st: &mut EditorState, tex: &mut std::collections::HashMap<String, egui::TextureHandle>, dir: &str) {
+    let entries = st.vfs.list(dir);
+    for e in entries.iter().filter(|e| e.is_dir).take(2000) {
+        egui::CollapsingHeader::new(&e.name).id_salt(&e.path).show(ui, |ui| asset_folder(ui, st, tex, &e.path));
+    }
+    for e in entries.iter().filter(|e| !e.is_dir).take(2000) {
+        asset_row(ui, st, tex, &e.path, &e.name);
+    }
+}
+
+/// The asset tree: the project's files grouped by kind (only the kinds it has), a preview of
+/// the selected one underneath.
+pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::collections::HashMap<String, egui::TextureHandle>) {
+    let extras_id = egui::Id::new("assets show extras");
+    let mut extras: bool = ui.data(|d| d.get_temp(extras_id).unwrap_or(false));
+    let filter_id = egui::Id::new("assets filter");
+    let mut filter: String = ui.data(|d| d.get_temp(filter_id).unwrap_or_default());
+    ui.horizontal(|ui| {
+        if st.playing.is_none() {
+            ui.menu_button("+", |ui| {
+                ui.menu_button("New scene", |ui| {
+                    for (label, k) in [("2D", NodeKind::Node2D), ("3D", NodeKind::Node3D), ("UI / menu", NodeKind::Node)] {
+                        if ui.button(label).clicked() {
+                            if let Some(r) = st.new_scene_file("res://scenes", k) {
+                                let name = r.rsplit('/').next().unwrap_or("").to_string();
+                                set_dialog(ui.ctx(), AssetDialog::Rename(r, name));
+                            }
+                            ui.close();
+                        }
+                    }
                 });
-            }
-            for e in entries.iter().filter(|e| !grid || e.is_dir || !gex_assets::image_load::is_image(&e.name)).take(3000) {
-                let icon = if e.is_dir {
-                    "📁"
-                } else if e.name.ends_with(".jscene") {
-                    "🎬"
-                } else if e.name.ends_with(".jlb") {
-                    "📜"
-                } else if gex_assets::image_load::is_image(&e.name) {
-                    "🖼"
-                } else if e.name.ends_with(".wav") || e.name.ends_with(".mp3") || e.name.ends_with(".ogg") {
-                    "🔊"
-                } else if e.name.ends_with(".mdl") || e.name.ends_with(".bsp") {
-                    "🎮"
-                } else {
-                    "📄"
-                };
-                let sel = st.asset_selected.as_deref() == Some(&e.path);
-                let r = ui.add(egui::Button::selectable(sel, format!("{} {}", icon, e.name))).interact(egui::Sense::click_and_drag());
-                if !e.is_dir {
-                    r.dnd_set_drag_payload(AssetPath(e.path.clone()));
+                if ui.button("New script").clicked() {
+                    if let Some(r) = st.new_script_file("res://scripts") {
+                        let name = r.rsplit('/').next().unwrap_or("").to_string();
+                        set_dialog(ui.ctx(), AssetDialog::Rename(r, name));
+                    }
+                    ui.close();
                 }
-                if r.clicked() {
-                    st.asset_selected = Some(e.path.clone());
+                #[cfg(windows)]
+                if ui.button("Import files…").clicked() {
+                    if let Some(files) = rfd::FileDialog::new().pick_files() {
+                        st.asset_dir = "res://assets".into();
+                        st.import_files(&files);
+                    }
+                    ui.close();
                 }
-                asset_context_menu(&r, st, e, in_project);
-                if r.double_clicked() {
-                    if e.is_dir {
-                        st.asset_dir = e.path.clone();
-                    } else if e.name.ends_with(".jscene") {
-                        if st.playing.is_none() {
-                            st.open_scene(&e.path);
-                        }
-                    } else if [".jlb", ".txt", ".vmt", ".wgsl", ".json", ".md"].iter().any(|x| e.name.ends_with(x)) {
-                        if e.path.starts_with("res://") {
-                            st.open_script(&e.path, None);
-                        }
+                if ui.button("Open project folder").on_hover_text("In the file manager. Files dropped on the GEX window are imported too").clicked() {
+                    crate::files::reveal(&st.project.dir);
+                    ui.close();
+                }
+                ui.separator();
+                ui.checkbox(&mut extras, "Show built-in art and mounts").on_hover_text("Placeholder pictures that come with GEX, and connected game installs");
+                if let Some(last) = st.file_undo.last() {
+                    ui.separator();
+                    if ui.button(format!("Undo: {}", last.describe())).clicked() {
+                        st.undo_file_op();
+                        ui.close();
                     }
                 }
-            }
-            if grid {
-                let cell = 72.0;
-                let per_row = ((list_w / (cell + 6.0)).floor() as usize).max(1);
-                for row in images.chunks(per_row) {
-                    ui.horizontal(|ui| {
-                        for e in row {
-                            let tex = ctx_textures.entry(format!("thumb {}", e.path)).or_insert_with(|| {
-                                let img = gex_assets::load_image(&st.vfs, &e.path).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
-                                let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
-                                ui.ctx().load_texture(format!("thumb {}", e.path), ci, egui::TextureOptions::LINEAR)
-                            });
-                            let size = tex.size_vec2();
-                            let k = (cell / size.x).min(cell / size.y);
-                            let sel = st.asset_selected.as_deref() == Some(&e.path);
-                            let (rect, r) = ui.allocate_exact_size(egui::vec2(cell, cell), egui::Sense::click_and_drag());
-                            let p = ui.painter_at(rect);
-                            // A checkerboard behind, so dark, white and see-through pictures all show up.
-                            p.rect_filled(rect, 0.0, Color32::from_gray(if sel { 92 } else { 58 }));
-                            let sq = cell / 6.0;
-                            for cy in 0..6 {
-                                for cx in 0..6 {
-                                    if (cx + cy) % 2 == 0 {
-                                        let m = rect.min + egui::vec2(cx as f32 * sq, cy as f32 * sq);
-                                        p.rect_filled(egui::Rect::from_min_size(m, egui::vec2(sq, sq)), 0.0, Color32::from_gray(if sel { 110 } else { 76 }));
-                                    }
-                                }
-                            }
-                            let img_rect = egui::Rect::from_center_size(rect.center(), size * k * 0.9);
-                            p.image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                            if sel {
-                                p.rect_stroke(rect, 0.0, egui::Stroke::new(2.0, theme::ACCENT), egui::StrokeKind::Inside);
-                            }
-                            r.dnd_set_drag_payload(AssetPath(e.path.clone()));
-                            let r = r.on_hover_text(&e.name);
-                            if r.clicked() {
-                                st.asset_selected = Some(e.path.clone());
-                            }
-                            asset_context_menu(&r, st, e, in_project);
-                        }
-                    });
-                }
-            }
-            if entries.len() > 3000 {
-                ui.label(format!("… and {} more", entries.len() - 3000));
-            }
-        }));
-        ui.separator();
-        egui::ScrollArea::vertical().id_salt("asset preview").auto_shrink([true, false]).show(ui, |ui| ui.vertical(|ui| {
-            ui.set_width(preview_w);
-            let Some(sel) = st.asset_selected.clone() else {
-                ui.label(RichText::new("Select a file to preview it. Drag files onto the scene or onto texture fields. gex:// has ready-made placeholder art: shapes, patterns, icons, UI and more.").color(theme::TEXT_DIM).small());
-                return;
-            };
-            ui.label(RichText::new(sel.rsplit('/').next().unwrap_or("")).strong());
-            if gex_assets::image_load::is_image(&sel) {
-                let tex = ctx_textures.entry(sel.clone()).or_insert_with(|| {
-                    let img = gex_assets::load_image(&st.vfs, &sel).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
-                    let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
-                    ui.ctx().load_texture(sel.clone(), ci, egui::TextureOptions::NEAREST)
-                });
-                let size = tex.size_vec2();
-                let scale = (preview_w / size.x).min(preview_w / size.y).min(4.0);
-                ui.image((tex.id(), size * scale));
-                ui.label(RichText::new(format!("{}×{}", size.x, size.y)).small().color(theme::TEXT_DIM));
-                if let Some(id) = st.selected.filter(|_| st.playing.is_none()) {
-                    let kind = st.tree.nodes.get(id).map(|n| n.kind);
-                    let has_texture = st.tree.nodes.get(id).is_some_and(|n| n.props.contains_key("texture"));
-                    let _ = kind;
-                    if has_texture && ui.button("Use on selected").on_hover_text("set the selected node's texture to this").clicked() {
-                        st.will_change("texture");
-                        st.tree.nodes[id].props.insert("texture".into(), Variant::Res(sel.clone()));
-                    }
-                }
-            } else if gex_assets::model::is_model(&sel) {
-                st.previews.model(ui, &st.project, &sel, preview_w);
-                if let Some(id) = st.selected.filter(|_| st.playing.is_none()) {
-                    if st.tree.nodes.get(id).is_some_and(|n| n.kind == NodeKind::Mesh3D) && ui.button("Use on selected").clicked() {
-                        st.will_change("model");
-                        st.tree.nodes[id].props.insert("mesh".into(), Variant::Text(sel.clone()));
-                    }
-                }
-                ui.label(RichText::new("Drag into the 3D view to place it.").small().color(theme::TEXT_DIM));
-            } else if [".wav", ".mp3", ".ogg", ".flac"].iter().any(|e| sel.to_ascii_lowercase().ends_with(e)) {
-                st.previews.sound(ui, &st.vfs, &sel);
-            } else if sel.ends_with(".jscene") {
-                if st.playing.is_none() && ui.button("Instance into scene").clicked() {
-                    st.instance_scene(&sel);
-                }
-                if st.playing.is_none() && ui.button("Open").clicked() {
-                    st.open_scene(&sel);
-                }
-            }
-            if !st.vfs.redistributable(&sel) {
-                ui.label(RichText::new("From a mounted game install: read in place, never copied or exported.").small().color(theme::WARN));
-            }
-        }));
+            })
+            .response
+            .on_hover_text("New scene, new script, import");
+        }
+        ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(f32::INFINITY));
     });
+    ui.data_mut(|d| {
+        d.insert_temp(extras_id, extras);
+        d.insert_temp(filter_id, filter.clone());
+    });
+    asset_dialogs(ui, st);
+    let files = project_files(ui, st);
+    let needle = filter.trim().to_lowercase();
+    let shown: Vec<&String> = files.iter().filter(|p| needle.is_empty() || p.rsplit('/').next().unwrap_or(p).to_lowercase().contains(&needle)).collect();
+    let preview = st.asset_selected.clone().filter(|s| gex_assets::image_load::is_image(s) || gex_assets::model::is_model(s) || is_sound(s));
+    let preview_h = if preview.is_some() { 190.0 } else { 0.0 };
+    egui::ScrollArea::vertical().id_salt("asset tree").max_height((ui.available_height() - preview_h).max(60.0)).auto_shrink([false, false]).show(ui, |ui| {
+        if files.is_empty() && !extras {
+            ui.label(RichText::new("No assets yet. The + button above makes a scene or a script; files dropped on the window are imported.").color(theme::TEXT_DIM));
+        } else if shown.is_empty() && !needle.is_empty() {
+            ui.label(RichText::new("Nothing matches.").color(theme::TEXT_DIM));
+        }
+        let mut rest: Vec<&String> = shown.clone();
+        for (group, belongs) in ASSET_GROUPS.iter().copied().chain([("Other", (|_| true) as fn(&str) -> bool)]) {
+            let (mine, others): (Vec<&String>, Vec<&String>) = rest.into_iter().partition(|p| belongs(p));
+            rest = others;
+            if mine.is_empty() {
+                continue;
+            }
+            // Folders every file of the group shares aren't shown (scenes/ under Scenes).
+            let dirs: Vec<Vec<&str>> = mine.iter().map(|p| p.trim_start_matches("res://").split('/').collect::<Vec<_>>()).collect();
+            let mut common = dirs[0].len() - 1;
+            for d in &dirs {
+                common = common.min(d.len() - 1).min(d.iter().zip(&dirs[0]).take_while(|(a, b)| a == b).count());
+            }
+            let items: Vec<(Vec<&str>, &str)> = dirs.iter().zip(&mine).map(|(d, full)| (d[common..].to_vec(), full.as_str())).collect();
+            let mut h = egui::CollapsingHeader::new(group).id_salt(("asset group", group)).default_open(true);
+            if !needle.is_empty() {
+                h = h.open(Some(true));
+            }
+            h.show(ui, |ui| asset_level(ui, st, ctx_textures, group, &items, group != "Other"));
+        }
+        if extras {
+            for r in st.vfs.roots().into_iter().filter(|r| !r.path.starts_with("res://")) {
+                egui::CollapsingHeader::new(&r.name).id_salt(&r.path).show(ui, |ui| asset_folder(ui, st, ctx_textures, &r.path));
+            }
+        }
+    });
+    let Some(sel) = preview else { return };
+    ui.separator();
+    let w = ui.available_width().min(150.0);
+    ui.label(RichText::new(sel.rsplit('/').next().unwrap_or("")).small().color(theme::TEXT_DIM));
+    let editing = st.playing.is_none();
+    if gex_assets::image_load::is_image(&sel) {
+        let t = thumb(ui, st, ctx_textures, &sel);
+        let size = t.size_vec2();
+        let scale = (w / size.x).min(120.0 / size.y).min(4.0);
+        ui.image((t.id(), size * scale));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("{}×{}", size.x, size.y)).small().color(theme::TEXT_DIM));
+            if let Some(id) = st.selected.filter(|i| editing && st.tree.nodes.get(*i).is_some_and(|n| n.props.contains_key("texture"))) {
+                if ui.small_button("Use on selected").on_hover_text("Set the selected node's texture to this").clicked() {
+                    st.will_change("texture");
+                    st.tree.nodes[id].props.insert("texture".into(), Variant::Res(sel.clone()));
+                }
+            }
+        });
+    } else if gex_assets::model::is_model(&sel) {
+        st.previews.model(ui, &st.project, &sel, w.min(130.0));
+        if let Some(id) = st.selected.filter(|i| editing && st.tree.nodes.get(*i).is_some_and(|n| n.kind == NodeKind::Mesh3D)) {
+            if ui.small_button("Use on selected").clicked() {
+                st.will_change("model");
+                st.tree.nodes[id].props.insert("mesh".into(), Variant::Text(sel.clone()));
+            }
+        }
+    } else {
+        st.previews.sound(ui, &st.vfs, &sel);
+    }
+    if !st.vfs.redistributable(&sel) {
+        ui.label(RichText::new("From a mounted game: read in place, never copied or exported.").small().color(theme::WARN));
+    }
 }
 
 // ---------------------------------------------------------------- console
@@ -1088,7 +1303,6 @@ pub fn console(ui: &mut egui::Ui, st: &mut EditorState) {
 #[derive(Clone)]
 enum AssetDialog {
     Rename(String, String),
-    NewFolder(String),
     Delete(String),
 }
 
@@ -1100,40 +1314,8 @@ fn set_dialog(ctx: &egui::Context, d: AssetDialog) {
     ctx.data_mut(|m| m.insert_temp(dialog_id(), Some(d)));
 }
 
-fn asset_toolbar(ui: &mut egui::Ui, st: &mut EditorState) {
-    ui.horizontal_wrapped(|ui| {
-        let dir = st.asset_dir.clone();
-        if ui.button("+ Folder").clicked() {
-            set_dialog(ui.ctx(), AssetDialog::NewFolder(String::new()));
-        }
-        ui.menu_button("+ Scene", |ui| {
-            for (label, k) in [("2D scene", NodeKind::Node2D), ("3D scene", NodeKind::Node3D), ("UI / menu", NodeKind::Node)] {
-                if ui.button(label).clicked() {
-                    st.new_scene_file(&dir, k);
-                    ui.close();
-                }
-            }
-        });
-        if ui.button("+ Script").clicked() {
-            st.new_script_file(&dir);
-        }
-        #[cfg(windows)]
-        if ui.button("Import…").on_hover_text("copy files into this folder (or drop them on the window)").clicked() {
-            if let Some(files) = rfd::FileDialog::new().pick_files() {
-                st.import_files(&files);
-            }
-        }
-        if ui.button("Open folder").on_hover_text("open this folder in the file manager (drop files on the window to import them)").clicked() {
-            if let Some(p) = st.project.res_to_path(&dir) {
-                crate::files::reveal(&p);
-            }
-        }
-        if let Some(last) = st.file_undo.last() {
-            if ui.button("↶").on_hover_text(format!("undo file change: {}", last.describe())).clicked() {
-                st.undo_file_op();
-            }
-        }
-    });
+/// The rename / delete dialog, if one is open.
+fn asset_dialogs(ui: &mut egui::Ui, st: &mut EditorState) {
     // The open dialog, if any.
     let ctx = ui.ctx().clone();
     let Some(mut d) = ctx.data(|m| m.get_temp::<Option<AssetDialog>>(dialog_id())).flatten() else { return };
@@ -1141,34 +1323,29 @@ fn asset_toolbar(ui: &mut egui::Ui, st: &mut EditorState) {
     let mut done = false;
     let title = match &d {
         AssetDialog::Rename(..) => "Rename",
-        AssetDialog::NewFolder(_) => "New folder",
         AssetDialog::Delete(_) => "Delete",
     };
     egui::Window::new(title).collapsible(false).resizable(false).open(&mut open).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(&ctx, |ui| match &mut d {
         AssetDialog::Rename(res, name) => {
-            ui.label(RichText::new(res.as_str()).monospace().small());
+            // The name is shown and typed without its ending (.jscene, .png...).
+            let ext = res.rsplit('/').next().and_then(|n| n.rfind('.').filter(|i| *i > 0).map(|i| n[i..].to_string())).unwrap_or_default();
+            if !ext.is_empty() && name.ends_with(&ext) {
+                name.truncate(name.len() - ext.len());
+            }
             let r = ui.text_edit_singleline(name);
             r.request_focus();
             ui.label(RichText::new("Scenes and scripts that use it are updated too.").small().color(theme::TEXT_DIM));
-            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui.button("Rename").clicked() || enter {
-                match st.rename_asset(res, name) {
-                    Ok(_) => done = true,
-                    Err(e) => st.status = e,
-                }
-            }
-        }
-        AssetDialog::NewFolder(name) => {
-            let r = ui.text_edit_singleline(name);
-            r.request_focus();
-            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if ui.button("Create").clicked() || enter {
-                match crate::files::new_folder(&st.project, &st.asset_dir, name) {
-                    Ok(r) => {
-                        st.asset_dir = r;
-                        done = true;
+                let full = format!("{}{}", name.trim(), ext);
+                // The same name: nothing to do.
+                if res.rsplit('/').next() == Some(full.as_str()) {
+                    done = true;
+                } else {
+                    match st.rename_asset(res, &full) {
+                        Ok(_) => done = true,
+                        Err(e) => st.status = e,
                     }
-                    Err(e) => st.status = e,
                 }
             }
         }
