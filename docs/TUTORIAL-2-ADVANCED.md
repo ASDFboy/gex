@@ -29,7 +29,7 @@ A **Body2D** is a physics object. Its `body` property decides what kind:
 | `kinematic` | only when a script moves it, with `MOVE` | the player, moving platforms, enemies |
 | `static` | never | walls and floors (tilemaps are static on their own) |
 
-`MOVE(node, dx, dy)` moves a kinematic body by that much, sliding along anything solid, and
+`MOVE(object, dx, dy)` moves a kinematic body by that much, sliding along anything solid, and
 gives back TRUE when the body ends up standing on something. A player, then, is a few lines:
 
 ```
@@ -54,13 +54,13 @@ DEF on_physics(dt) {
 
 Put movement in `on_physics(dt)` (a steady 60 times a second) rather than `on_step(dt)`.
 
-Dynamic bodies: shove one with `IMPULSE(node, x, y)`, or set `self.vx` / `self.vy` on it
+Dynamic bodies: shove one with `IMPULSE(object, x, y)`, or set `self.vx` / `self.vy` on it
 directly. Their `on_floor` property says whether they're resting on something. `bounce`,
 `friction`, `density` and `gravity_scale` are in the Inspector; `fixed_rotation` stops a body
 tipping over.
 
 Look before you leap: `RAYCAST(x, y, dx, dy, length, ignore)` gives the first body along a line,
-as `[node:, x:, y:, nx:, ny:, distance:]`, or NULL:
+as `[object:, x:, y:, nx:, ny:, distance:]`, or NULL:
 
 ```
 >> Is there ground just ahead of this enemy's feet?
@@ -73,7 +73,7 @@ IF ahead == NULL { GLOBAL direction = 0 - direction }
 1. Make a tileset picture: tiles in a grid, all the same size (32×32 is the default).
 2. Add a **TileMap2D**, drop the picture on its `tileset`, and set `tile_width`/`tile_height`.
 3. With the tilemap selected, the Inspector shows the tileset as a palette. Click a tile, then
-   paint in the scene view. Shift-drag erases.
+   paint in the blueprint view. Shift-drag erases.
 
 Tiles are solid by default; `solid_tiles` like `"0-3, 7"` makes only those ids solid (so grass
 decorations can be walked through). `solid` off turns collision off for the whole map.
@@ -155,16 +155,16 @@ TRUE)` starts over.
 Sprite sheets cover frames; for everything else (a door sliding, a light pulsing, a title
 bouncing in, a boss's attack pattern) use an **Animator**.
 
-1. Select the node to animate and add a child **Animator** (+ Node → General). In the
+1. Select the object to animate and add a child **Animator** (+ Object → General). In the
    Inspector, press **Edit clips in the Timeline**.
 2. **+ Clip** makes a clip. Set its `length` and whether it loops.
-3. Under **+ Track**, pick a node (the Animator's parent, or anything under it) and a property
+3. Under **+ Track**, pick an object (the Animator's parent, or anything under it) and a property
    (`x`, `y`, `rotation`, `color`, `visible`, any number...), then **Add**.
 4. Move the playhead (drag the slider or click in a track), set the value in the Inspector or
-   the scene view, and press **+key** on the track. Do that at a few times and press ▶: the
+   the blueprint view, and press **+key** on the track. Do that at a few times and press ▶: the
    values blend between keys. Drag a key (the yellow diamond) to move it; right-click it to
    change its easing (`linear`, `in`, `out`, `in_out`, `step`) or delete it.
-5. Tick **autoplay** to start the clip with the scene, or play it from a script:
+5. Tick **autoplay** to start the clip with the blueprint, or play it from a script:
 
 ```
 DEF on_pressed_open() {
@@ -202,7 +202,7 @@ TWEEN("Door", "color", "#ff000000", 0.5)       >> fade a sprite out
 ```
 
 Eases: `linear`, `in`, `out` (the default), `in_out`, `back`, `bounce`, `elastic`. When one
-finishes, the node's scripts get `on_tween_end(property)`.
+finishes, the object's scripts get `on_tween_end(property)`.
 
 **Particles**: add a Particles2D. It plays right away in the editor, so tune it by eye:
 `rate`, `lifetime`, `speed`, `spread` (degrees each side of `direction`), `gravity`, `size` →
@@ -221,16 +221,16 @@ MUSIC("res://music/level1.ogg", 0.6)                 >> loops; MUSIC("") stops i
 VOLUME(0.8)                                          >> everything
 ```
 
-A **Sound** node holds a sound you start with `PLAY(node)` (or `autoplay`). Tick `spatial` and
+A **Sound** object holds a sound you start with `PLAY(object)` (or `autoplay`). Tick `spatial` and
 it gets quieter the farther it is from the camera: put it under a waterfall or an engine.
 
 ## UI
 
-UI nodes (Panel, Label, Button, TextInput, ProgressBar, Image) are drawn over the game in
+UI objects (Panel, Label, Button, TextInput, ProgressBar, Image) are drawn over the game in
 window pixels and ignore cameras. `anchor` pins one to a side or corner (`top_right`,
 `bottom`, `center`...) so it stays there whatever the window size.
 
-| Node | Its events |
+| Object | Its events |
 |---|---|
 | Button | `on_pressed()` on its own scripts; `on_pressed_<name>()` on every script |
 | TextInput | `on_text_changed(text)`, `on_text_submitted(text)` (Enter) |
@@ -275,8 +275,8 @@ DEF on_dead() {
 
 | | Lasts | Use for |
 |---|---|---|
-| outside variables | while the node exists | a node's own state |
-| `REMEMBER(name, value)` / `RECALL(name)` | until the game closes, across `CHANGE_SCENE` | lives, score, inventory |
+| outside variables | while the object exists | an object's own state |
+| `REMEMBER(name, value)` / `RECALL(name)` | until the game closes, across `CHANGE_BLUEPRINT` | lives, score, inventory |
 | `SAVE_DATA(name, value)` / `LOAD_DATA(name)` / `DELETE_DATA(name)` | on disk, between runs | save games, settings, high scores |
 
 Values can be numbers, text, TRUE/FALSE and tables (nested ones too):
@@ -284,12 +284,12 @@ Values can be numbers, text, TRUE/FALSE and tables (nested ones too):
 ```
 SAVE_DATA("slot1", [level: 3, hp: 80, items: ["key", "lamp"]])
 s = LOAD_DATA("slot1")
-IF s !== NULL { CHANGE_SCENE("res://scenes/level" + s.level + ".jscene") }
+IF s !== NULL { CHANGE_BLUEPRINT("res://blueprints/level" + s.level + ".jblueprint") }
 ```
 
 ## 3D
 
-3D positions are in metres with y up. A 3D scene needs:
+3D positions are in metres with y up. A 3D blueprint needs:
 
 1. A **Camera3D**: point it with its rotation (x tilts up/down, y turns left/right).
 2. A **Light3D**: `directional` for the sun (the first one casts shadows), `point` for a lamp,
@@ -301,19 +301,19 @@ IF s !== NULL { CHANGE_SCENE("res://scenes/level" + s.level + ".jscene") }
 In the 3D view, right-drag orbits, right-drag with WASD flies, middle-drag (or Shift+right-drag)
 pans, and the wheel zooms.
 
-Animated models (glTF with skins): `ANIMATIONS(node)` lists their animations, and
-`ANIMATE(node, "Run")` plays one. `anim_speed` and `anim_loop` are on the Mesh3D.
+Animated models (glTF with skins): `ANIMATIONS(object)` lists their animations, and
+`ANIMATE(object, "Run")` plays one. `anim_speed` and `anim_loop` are on the Mesh3D.
 
 Physics in 3D is the same as 2D: **Body3D** (`box`, `sphere` or `capsule`) with
-`MOVE(node, dx, dy, dz)`, `IMPULSE(node, x, y, z)`, and `RAYCAST_3D(x, y, z, dx, dy, dz,
+`MOVE(object, dx, dy, dz)`, `IMPULSE(object, x, y, z)`, and `RAYCAST_3D(x, y, z, dx, dy, dz,
 length, ignore)`. A Mesh3D with `collision` ticked becomes solid ground, model or map
 included. To show a dynamic box, make a Body3D with a Mesh3D child: the body moves, and the
 mesh goes along.
 
 ## First person
 
-The demo's `scenes/fps.jscene` is a complete first-person setup; copy its Player into your own
-scenes. How it's put together:
+The demo's `blueprints/fps.jblueprint` is a complete first-person setup; copy its Player into your own
+blueprints. How it's put together:
 
 - The player is a **Body3D**, `kinematic`, `shape` = `capsule`, with a **Camera3D** child
   ("Head") 0.7 m up.
@@ -350,7 +350,7 @@ export. Keep `hl2://` projects for yourself. More in [HL2.md](HL2.md).
 ## Debugging
 
 - `PRINT(anything)` writes to the Console.
-- While the game runs, select a node: the Inspector shows its live values, including the
+- While the game runs, select an object: the Inspector shows its live values, including the
   properties your scripts made (`self.hp`).
 - Click in a script's left margin to set a breakpoint (a red dot). When the game reaches that
   line it stops, opens the script there, and the Console's debugger shows the call stack, the
@@ -369,21 +369,21 @@ export. Keep `hl2://` projects for yourself. More in [HL2.md](HL2.md).
 
 ## Working faster in the editor
 
-- **Ctrl+F** finds text in every script and scene; click a result to open it there.
+- **Ctrl+F** finds text in every script and blueprint; click a result to open it there.
 - The Assets panel previews models (drag to turn them; it lists their animations) and plays
   sounds. Its **↶** button (or Edit → Undo file change) undoes the last rename, delete, new file
   or import.
 
 - **The command line**: press `:` anywhere outside a text box. `:w` saves, `:play`, `:stop`,
-  `:add Sprite2D`, `:e scenes/level2.jscene`, `:find Player`, `:rename Hero`, `:branch` (save
-  the selection as a scene), `:vim` (toggle Vim keys in the script editor), `:2d`, `:3d`,
+  `:add Sprite2D`, `:e blueprints/level2.jblueprint`, `:find Player`, `:rename Hero`, `:branch` (save
+  the selection as a blueprint), `:vim` (toggle Vim keys in the script editor), `:2d`, `:3d`,
   `:layout` (reset the panels).
 - **Vim keys** in the script editor (`:vim`): normal mode `hjkl w b e 0 $ gg G`, `dd yy p P x
   D`, `dw cw`, `i a I A o O`, `u` / Ctrl+R, and `:` for the command line.
 - **Script editor**: completion as you type (Tab or Enter takes it), F12 or Ctrl+click jumps to
   a function's definition, Ctrl+H finds and replaces.
 - **Files**: drop files on the window to import them; right-click in the Assets panel to
-  rename (every scene and script that uses the file is fixed) or delete (into the project's
+  rename (every blueprint and script that uses the file is fixed) or delete (into the project's
   hidden `.trash` folder, so nothing's lost).
-- **Scenes**: several open as tabs (Ctrl+W closes one). Drag to box-select in 2D; Ctrl+click
-  to add to a selection; Ctrl+C / Ctrl+V copies nodes between scenes.
+- **Blueprints**: several open as tabs (Ctrl+W closes one). Drag to box-select in 2D; Ctrl+click
+  to add to a selection; Ctrl+C / Ctrl+V copies objects between blueprints.

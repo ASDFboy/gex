@@ -29,7 +29,7 @@ DEF next_wave() {
 		IF side == 2 { x = 1280 }
 		IF side == 3 { y = 0 }
 		IF side == 4 { y = 720 }
-		r = SPAWN("res://scenes/rock.jscene", x, y)
+		r = SPAWN("res://blueprints/rock.jblueprint", x, y)
 		a = RANDOM(0, 359)
 		s = RANDOM(40, 90) + wave * 8
 		SET(r, "vx", COS(a) * s)
@@ -53,13 +53,13 @@ DEF on_rock_destroyed(size, x, y) {
 	BURST("Boom", size * 18)
 	SHAKE(size * 2, 0.25)
 	PLAY_SOUND("res://assets/boom.wav", 0.4 + size * 0.15, 1.3 - size * 0.15)
-	IF LEN(NODES("rocks")) <= 1 AND size == 1 {
+	IF LEN(OBJECTS("rocks")) <= 1 AND size == 1 {
 		TIMER("wave", 1.5, FALSE)
 	}
 }
 
 DEF on_timer_wave() {
-	IF LEN(NODES("rocks")) == 0 {
+	IF LEN(OBJECTS("rocks")) == 0 {
 		next_wave()
 	}
 }
@@ -78,6 +78,6 @@ DEF on_ship_hit() {
 
 DEF on_press_enter() {
 	IF ships <= 0 {
-		CHANGE_SCENE("res://scenes/asteroids.jscene", 0.3)
+		CHANGE_BLUEPRINT("res://blueprints/asteroids.jblueprint", 0.3)
 	}
 }

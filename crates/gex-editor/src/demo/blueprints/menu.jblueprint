@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Menu",
-    kind: Some(Node2D),
+    kind: Some(Object2D),
     scripts: ["res://scripts/menu.jlb"],
     children: [
       (name: "Box", kind: Some(Panel), transform: Some((position: (440.0, 140.0, 0.0))),

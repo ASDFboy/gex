@@ -1,5 +1,5 @@
 #![allow(deprecated)] // glam 0.33 moved the camera helpers; the old names still work.
-//! Cameras: the game's own (Camera2D / Camera3D nodes) or the editor's.
+//! Cameras: the game's own (Camera2D / Camera3D objects) or the editor's.
 
 use gex_core::glam::{Mat4, Vec2, Vec3, Vec4Swizzles};
 use gex_core::render::RenderList;
@@ -170,7 +170,7 @@ impl Cameras {
     }
 }
 
-/// Distance along a ray to a node's unit box (a cube primitive scaled by `model`).
+/// Distance along a ray to an object's unit box (a cube primitive scaled by `model`).
 pub fn ray_box(origin: Vec3, dir: Vec3, model: Mat4) -> Option<f32> {
     let inv = model.inverse();
     let o = inv.transform_point3(origin);

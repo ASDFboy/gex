@@ -14,9 +14,9 @@ IF GRAPHICS("shadows") { ... }
 all = PHYSICS()                        >> every physics setting, as a table
 ```
 
-These are the project-wide settings. Each node also has its own (see [NODES.md](NODES.md)):
+These are the project-wide settings. Each object also has its own (see [OBJECTS.md](OBJECTS.md)):
 a sprite's `blend` and `filter`, a mesh's `rim` and `fog`, a light's `softness`, a body's
-`linear_damping`... and the Environment node's own color settings multiply the project's.
+`linear_damping`... and the Environment object's own color settings multiply the project's.
 
 ## Graphics
 
@@ -45,7 +45,7 @@ a sprite's `blend` and `filter`, a mesh's `rim` and `fog`, a light's `softness`,
 | `max_lights` | `8` | The most 3D lights used at once (the shadow-casting sun counts first). (0 to 16) |
 | `specular` | `true` | Shiny highlights on 3D surfaces. |
 | `normal_maps` | `true` | Surface bumps from normal-map textures. |
-| `lights_2d` | `true` | 2D lighting (a Camera2D's ambient dark and Light2D nodes). |
+| `lights_2d` | `true` | 2D lighting (a Camera2D's ambient dark and Light2D objects). |
 
 ### Shadows
 
@@ -63,7 +63,7 @@ a sprite's `blend` and `filter`, a mesh's `rim` and `fog`, a light's `softness`,
 | Setting | Default | What it does |
 |---|---|---|
 | `sky` | `true` | Draws the Environment's sky (off shows the background color). |
-| `fog` | `true` | Fog from Environment nodes. |
+| `fog` | `true` | Fog from Environment objects. |
 | `bloom` | `true` | Glow around bright things (each Environment sets how much). |
 | `bloom_quality` | `1` | How many blur passes bloom uses: more is wider and smoother. (1 to 4) |
 | `particles` | `1.0` | How many particles emitters make, 0 to 1 of their rate (lower is faster). (0.0 to 1.0) |

@@ -1,4 +1,4 @@
-//! Draws UI nodes (Panel, Button, Label, TextInput, ProgressBar, Image) with egui on top of
+//! Draws UI objects (Panel, Button, Label, TextInput, ProgressBar, Image) with egui on top of
 //! the game view, and turns clicks and typing into events for the game.
 
 use std::collections::HashMap;
@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Stroke};
 use gex_core::glam::Vec2;
 use gex_core::render::UiItem;
-use gex_core::NodeKind;
+use gex_core::ObjectKind;
 use gex_script::UiEvent;
 
 fn c32(c: [f32; 4]) -> Color32 {
@@ -37,11 +37,11 @@ pub fn paint_ui(
         let fam = crate::text::family(ui.ctx(), vfs, it.text("font"));
         let font = |size: f64| egui::FontId::new(((size as f32) * scale).max(4.0), fam.clone());
         match it.kind {
-            NodeKind::Panel if !it.text("texture").is_empty() => {
+            ObjectKind::Panel if !it.text("texture").is_empty() => {
                 let tex = image(ui, images, vfs, it.text("texture"));
                 nine_slice(&painter, &tex, rect, it.num("slice", 0.0) as f32, scale, c32(it.color("color")));
             }
-            NodeKind::Panel => {
+            ObjectKind::Panel => {
                 let r = CornerRadius::same((it.num("radius", 4.0) as f32 * scale).clamp(0.0, 255.0) as u8);
                 painter.rect_filled(rect, r, c32(it.color("color")));
                 let b = it.num("border", 1.0) as f32 * scale;
@@ -49,7 +49,7 @@ pub fn paint_ui(
                     painter.rect_stroke(rect, r, Stroke::new(b, c32(it.color("border_color"))), egui::StrokeKind::Inside);
                 }
             }
-            NodeKind::Label => {
+            ObjectKind::Label => {
                 let align = match it.text("align") {
                     "center" => egui::Align2::CENTER_TOP,
                     "right" => egui::Align2::RIGHT_TOP,
@@ -64,9 +64,9 @@ pub fn paint_ui(
                 let wrap = it.props.contains_key("width").then(|| it.size.x * scale);
                 crate::text::paint_wrapped(&painter, at, align, it.text("text"), font(it.num("size", 18.0)), c32(it.color("color")), scale, wrap);
             }
-            NodeKind::Button => {
+            ObjectKind::Button => {
                 let disabled = it.props.get("disabled").is_some_and(|v| v.as_bool());
-                let id = ui.id().with(("ui button", it.node));
+                let id = ui.id().with(("ui button", it.object));
                 let resp = if live && !disabled { Some(ui.interact(rect, id, egui::Sense::click())) } else { None };
                 let mut fill = c32(it.color("color"));
                 if let Some(r) = &resp {
@@ -76,7 +76,7 @@ pub fn paint_ui(
                         fill = Color32::from_rgb(fill.r().saturating_add(25), fill.g().saturating_add(25), fill.b().saturating_add(25));
                     }
                     if r.clicked() {
-                        events.push(UiEvent::Pressed(it.node));
+                        events.push(UiEvent::Pressed(it.object));
                     }
                 }
                 if disabled {
@@ -90,14 +90,14 @@ pub fn paint_ui(
                 }
                 crate::text::paint(&painter, rect.center(), egui::Align2::CENTER_CENTER, it.text("text"), font(it.num("size", 16.0)), c32(it.color("text_color")), scale);
             }
-            NodeKind::ProgressBar => {
+            ObjectKind::ProgressBar => {
                 let f = (it.num("value", 0.5) / it.num("max", 1.0).max(1e-9)).clamp(0.0, 1.0) as f32;
                 painter.rect_filled(rect, CornerRadius::same(3), c32(it.color("back_color")));
                 let mut fill = rect;
                 fill.set_width(rect.width() * f);
                 painter.rect_filled(fill, CornerRadius::same(3), c32(it.color("color")));
             }
-            NodeKind::Image => {
+            ObjectKind::Image => {
                 let path = it.text("texture").to_string();
                 if path.is_empty() {
                     painter.rect_stroke(rect, 0.0, Stroke::new(1.0, Color32::GRAY), egui::StrokeKind::Inside);
@@ -106,10 +106,10 @@ pub fn paint_ui(
                     nine_slice(&painter, &tex, rect, it.num("slice", 0.0) as f32, scale, c32(it.color("color")));
                 }
             }
-            NodeKind::TextInput => {
+            ObjectKind::TextInput => {
                 let size = it.num("size", 16.0);
                 if live {
-                    let id = egui::Id::new(("ui text", it.node));
+                    let id = egui::Id::new(("ui text", it.object));
                     let mut text: String = ui.data_mut(|d| d.get_temp(id)).unwrap_or_else(|| it.text("text").to_string());
                     let has_focus = ui.memory(|m| m.has_focus(id.with("edit")));
                     if !has_focus {
@@ -121,10 +121,10 @@ pub fn paint_ui(
                         egui::TextEdit::singleline(&mut text).id(id.with("edit")).hint_text(it.text("placeholder")).font(font(size)),
                     );
                     if r.changed() {
-                        events.push(UiEvent::Changed(it.node, text.clone()));
+                        events.push(UiEvent::Changed(it.object, text.clone()));
                     }
                     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        events.push(UiEvent::Submitted(it.node, text.clone()));
+                        events.push(UiEvent::Submitted(it.object, text.clone()));
                     }
                     ui.data_mut(|d| d.insert_temp(id, text));
                 } else {

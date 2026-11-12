@@ -1,4 +1,4 @@
-//! Built-in primitive meshes. Unit sized and centered: scale the node to resize them.
+//! Built-in primitive meshes. Unit sized and centered: scale the object to resize them.
 
 use bytemuck::{Pod, Zeroable};
 

@@ -4,7 +4,7 @@
 use egui_wgpu::wgpu;
 use gex_core::glam::Vec3;
 use gex_core::render::extract;
-use gex_core::{Node, NodeKind, SceneTree, Variant};
+use gex_core::{Object, ObjectKind, BlueprintTree, Variant};
 use gex_render::{Cameras, Overlay, Renderer};
 
 fn main() {
@@ -16,16 +16,16 @@ fn main() {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
-    let mut tree = SceneTree::new();
-    let root = tree.add(None, Node::new("R", NodeKind::Node3D));
-    let mut m = Node::new("Map", NodeKind::Mesh3D);
+    let mut tree = BlueprintTree::new();
+    let root = tree.add(None, Object::new("R", ObjectKind::Object3D));
+    let mut m = Object::new("Map", ObjectKind::Mesh3D);
     m.props.insert("mesh".into(), Variant::Text(format!("res://{}", map)));
     tree.add(Some(root), m);
-    let mut c = Node::new("Cam", NodeKind::Camera3D);
+    let mut c = Object::new("Cam", ObjectKind::Camera3D);
     c.transform.position = Vec3::new(x, z + 64.0, -y) * 0.0254;
     c.transform.rotation = Vec3::new(-5.0, yaw - 90.0, 0.0);
     tree.add(Some(root), c);
-    let mut env = Node::new("Env", NodeKind::Environment);
+    let mut env = Object::new("Env", ObjectKind::Environment);
     env.props.insert("bloom".into(), Variant::Num(std::env::var("BLOOM").ok().and_then(|b| b.parse().ok()).unwrap_or(0.0)));
     tree.add(Some(root), env);
     let list = extract(&tree);

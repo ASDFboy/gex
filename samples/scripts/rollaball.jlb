@@ -9,7 +9,7 @@ DEF on_create() {
 	FOR i IN 1 TO total {
 		a = i * 360 / total
 		r = 4 + (i % 3) * 2
-		SPAWN("res://scenes/gem.jscene", COS(a) * r, 0.7, SIN(a) * r)
+		SPAWN("res://blueprints/gem.jblueprint", COS(a) * r, 0.7, SIN(a) * r)
 	}
 }
 
@@ -39,5 +39,5 @@ DEF on_gem_collected(x, y, z) {
 }
 
 DEF on_press_enter() {
-	CHANGE_SCENE("res://scenes/rollaball.jscene", 0.4)
+	CHANGE_BLUEPRINT("res://blueprints/rollaball.jblueprint", 0.4)
 }

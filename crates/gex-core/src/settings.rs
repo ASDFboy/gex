@@ -193,7 +193,7 @@ macro_rules! settings {
 }
 
 settings! {
-    /// How the game looks, project-wide. Environment nodes and each node's own look
+    /// How the game looks, project-wide. Environment objects and each object's own look
     /// settings work on top of these.
     Graphics {
         ("Picture", render_scale, f32, 1.0, 0.25, 2.0, [], "How many pixels are drawn for each pixel on screen: below 1 is faster and softer, above 1 is sharper (and slower)."),
@@ -207,7 +207,7 @@ settings! {
         ("Lighting", max_lights, u32, 8, 0, 16, [], "The most 3D lights used at once (the shadow-casting sun counts first)."),
         ("Lighting", specular, bool, true, 0, 0, [], "Shiny highlights on 3D surfaces."),
         ("Lighting", normal_maps, bool, true, 0, 0, [], "Surface bumps from normal-map textures."),
-        ("Lighting", lights_2d, bool, true, 0, 0, [], "2D lighting (a Camera2D's ambient dark and Light2D nodes)."),
+        ("Lighting", lights_2d, bool, true, 0, 0, [], "2D lighting (a Camera2D's ambient dark and Light2D objects)."),
         ("Shadows", shadows, bool, true, 0, 0, [], "Shadows from the sun (the first directional Light3D with shadows on)."),
         ("Shadows", shadow_resolution, u32, 2048, 256, 8192, [], "Pixels across each shadow map: higher is sharper and uses more memory."),
         ("Shadows", shadow_quality, String, "medium".into(), 0, 0, ["low", "medium", "high"], "How many samples soften each shadow edge: 4, 9 or 16."),
@@ -215,7 +215,7 @@ settings! {
         ("Shadows", shadow_bias, f32, 0.002, 0.0, 0.05, [], "Pushes shadows back a little so surfaces don't shadow themselves (acne). Too much and shadows float."),
         ("Shadows", shadow_distance_scale, f32, 1.0, 0.1, 4.0, [], "Multiplies every Environment's shadow distance: lower is sharper and shorter."),
         ("Effects", sky, bool, true, 0, 0, [], "Draws the Environment's sky (off shows the background color)."),
-        ("Effects", fog, bool, true, 0, 0, [], "Fog from Environment nodes."),
+        ("Effects", fog, bool, true, 0, 0, [], "Fog from Environment objects."),
         ("Effects", bloom, bool, true, 0, 0, [], "Glow around bright things (each Environment sets how much)."),
         ("Effects", bloom_quality, u32, 1, 1, 4, [], "How many blur passes bloom uses: more is wider and smoother."),
         ("Effects", particles, f32, 1.0, 0.0, 1.0, [], "How many particles emitters make, 0 to 1 of their rate (lower is faster)."),

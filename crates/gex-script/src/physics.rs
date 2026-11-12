@@ -1,5 +1,5 @@
-//! Physics for Body2D / Body3D nodes, with rapier. The node tree stays the source of
-//! truth: before each step, bodies are made, removed or teleported to match their nodes;
+//! Physics for Body2D / Body3D objects, with rapier. The object tree stays the source of
+//! truth: before each step, bodies are made, removed or teleported to match their objects;
 //! after it, dynamic bodies write their position and velocity back.
 //!
 //! 2D works in pixels (y down) in the tree and in metres inside rapier (50 px = 1 m).
@@ -9,11 +9,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
-use gex_core::{NodeId, NodeKind, SceneTree, Variant};
+use gex_core::{ObjectId, ObjectKind, BlueprintTree, Variant};
 
 pub const PIXELS_PER_METRE: f32 = 50.0;
 
-/// Collision layers by name. A node's `layer` names what it is ("player", "enemies"; empty
+/// Collision layers by name. An object's `layer` names what it is ("player", "enemies"; empty
 /// means "default"), and its `mask` what it bumps into (empty means everything). Names get a
 /// bit each the first time they're seen (up to 32).
 #[derive(Debug)]
@@ -60,9 +60,9 @@ impl Layers {
         }
     }
 
-    /// A node's (what it is, what it collides with).
-    pub fn of(&self, tree: &SceneTree, id: NodeId) -> (u32, u32) {
-        let n = &tree.nodes[id];
+    /// An object's (what it is, what it collides with).
+    pub fn of(&self, tree: &BlueprintTree, id: ObjectId) -> (u32, u32) {
+        let n = &tree.objects[id];
         (self.bits(n.text("layer"), 1), self.bits(n.text("mask"), u32::MAX))
     }
 
@@ -81,32 +81,32 @@ fn groups3(g: (u32, u32)) -> rapier3d::prelude::InteractionGroups {
     InteractionGroups::new(Group::from_bits_retain(g.0), Group::from_bits_retain(g.1), InteractionTestMode::And)
 }
 
-/// A static shape that isn't a node of its own (tilemap tiles): world-space 2D box.
+/// A static shape that isn't an object of its own (tilemap tiles): world-space 2D box.
 #[derive(Clone, Copy, Debug)]
 pub struct StaticBox2 {
-    pub owner: NodeId,
+    pub owner: ObjectId,
     pub center: Vec2,
     pub half: Vec2,
 }
 
-/// A static triangle mesh in world space (Mesh3D nodes with collision on): owner, vertices, triangles.
-pub type StaticMesh = (NodeId, Arc<Vec<Vec3>>, Arc<Vec<[u32; 3]>>);
+/// A static triangle mesh in world space (Mesh3D objects with collision on): owner, vertices, triangles.
+pub type StaticMesh = (ObjectId, Arc<Vec<Vec3>>, Arc<Vec<[u32; 3]>>);
 
 pub struct RayHit {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub point: Vec3,
     pub normal: Vec3,
     pub distance: f32,
 }
 
-fn num(tree: &SceneTree, id: NodeId, k: &str, d: f64) -> f32 {
-    tree.nodes[id].num(k, d) as f32
+fn num(tree: &BlueprintTree, id: ObjectId, k: &str, d: f64) -> f32 {
+    tree.objects[id].num(k, d) as f32
 }
 
 /// Everything about a body that, when changed, means building it again.
-fn shape_key(tree: &SceneTree, id: NodeId, scale: Vec3, settings: &PhysicsSettings) -> String {
-    let n = &tree.nodes[id];
-    // Rounded: a turned node's scale comes back out of its matrix with noise in the last
+fn shape_key(tree: &BlueprintTree, id: ObjectId, scale: Vec3, settings: &PhysicsSettings) -> String {
+    let n = &tree.objects[id];
+    // Rounded: a turned object's scale comes back out of its matrix with noise in the last
     // digits, and that must not count as a new shape (the body would be rebuilt every step).
     let r = |v: f32| (v * 1000.0).round() / 1000.0;
     let mut s = format!("{:?}|{}", [r(scale.x), r(scale.y), r(scale.z)], settings.sleeping);
@@ -117,8 +117,8 @@ fn shape_key(tree: &SceneTree, id: NodeId, scale: Vec3, settings: &PhysicsSettin
 }
 
 /// The body settings that change in place (no rebuild), as one comparable text.
-fn params_key(tree: &SceneTree, id: NodeId, settings: &PhysicsSettings) -> String {
-    let n = &tree.nodes[id];
+fn params_key(tree: &BlueprintTree, id: ObjectId, settings: &PhysicsSettings) -> String {
+    let n = &tree.objects[id];
     let mut s = format!("{}|{}|{}", settings.linear_damping, settings.angular_damping, settings.ccd);
     for k in ["gravity_scale", "friction", "bounce", "linear_damping", "angular_damping", "ccd", "enabled", "fixed_rotation", "lock_x", "lock_y", "lock_z"] {
         s.push_str(&format!("|{:?}", n.props.get(k)));
@@ -140,8 +140,8 @@ struct BodyParams {
 }
 
 impl BodyParams {
-    fn of(tree: &SceneTree, id: NodeId, s: &PhysicsSettings) -> BodyParams {
-        let n = &tree.nodes[id];
+    fn of(tree: &BlueprintTree, id: ObjectId, s: &PhysicsSettings) -> BodyParams {
+        let n = &tree.objects[id];
         let b = |k: &str| n.prop(k).is_some_and(|v| v.as_bool());
         BodyParams {
             gravity_scale: num(tree, id, "gravity_scale", 1.0),
@@ -161,17 +161,17 @@ impl BodyParams {
     }
 }
 
-fn can_sleep(tree: &SceneTree, id: NodeId, s: &PhysicsSettings) -> bool {
-    s.sleeping && tree.nodes[id].prop("can_sleep").is_none_or(|v| v.as_bool())
+fn can_sleep(tree: &BlueprintTree, id: ObjectId, s: &PhysicsSettings) -> bool {
+    s.sleeping && tree.objects[id].prop("can_sleep").is_none_or(|v| v.as_bool())
 }
 
 /// A 3D body's spin settings (degrees per second) as an angular velocity (radians).
-fn spin3(tree: &SceneTree, id: NodeId) -> Vec3 {
+fn spin3(tree: &BlueprintTree, id: ObjectId) -> Vec3 {
     Vec3::new(num(tree, id, "spin_x", 0.0), num(tree, id, "spin_y", 0.0), num(tree, id, "spin_z", 0.0)) * (std::f32::consts::PI / 180.0)
 }
 
-fn parent_matrix(tree: &SceneTree, id: NodeId) -> Mat4 {
-    tree.nodes[id].parent.map(|p| tree.global_matrix(p)).unwrap_or(Mat4::IDENTITY)
+fn parent_matrix(tree: &BlueprintTree, id: ObjectId) -> Mat4 {
+    tree.objects[id].parent.map(|p| tree.global_matrix(p)).unwrap_or(Mat4::IDENTITY)
 }
 
 // ---------------------------------------------------------------- 2D
@@ -187,7 +187,7 @@ struct Entry2 {
     key: String,
     params: String,
     spin: f32,
-    /// Where the node was last seen or put (what a script would have to change to move it).
+    /// Where the object was last seen or put (what a script would have to change to move it).
     pos: Vec2,
     angle: f32,
     vel: Vec2,
@@ -197,14 +197,14 @@ struct Entry2 {
 
 pub struct World2 {
     world: d2::PhysicsWorld,
-    bodies: HashMap<NodeId, Entry2>,
-    owners: HashMap<d2::ColliderHandle, NodeId>,
+    bodies: HashMap<ObjectId, Entry2>,
+    owners: HashMap<d2::ColliderHandle, ObjectId>,
     statics: Vec<d2::ColliderHandle>,
     statics_key: String,
     controller: d2::KinematicCharacterController,
 }
 
-fn pose2(tree: &SceneTree, id: NodeId) -> (Vec2, f32, Vec3) {
+fn pose2(tree: &BlueprintTree, id: ObjectId) -> (Vec2, f32, Vec3) {
     let m = tree.global_matrix(id);
     let (scale, rot, pos) = m.to_scale_rotation_translation();
     (pos.truncate(), rot.to_euler(EulerRot::YXZ).2, scale.abs())
@@ -240,7 +240,7 @@ impl World2 {
         };
     }
 
-    fn apply_params(&mut self, id: NodeId, p: &BodyParams) {
+    fn apply_params(&mut self, id: ObjectId, p: &BodyParams) {
         let Some(e) = self.bodies.get(&id) else { return };
         let b = &mut self.world.bodies[e.body];
         b.set_gravity_scale(p.gravity_scale, true);
@@ -256,8 +256,8 @@ impl World2 {
         }
     }
 
-    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers, settings: &PhysicsSettings) {
-        let n = &tree.nodes[id];
+    fn build(&mut self, tree: &BlueprintTree, id: ObjectId, key: String, layers: &Layers, settings: &PhysicsSettings) {
+        let n = &tree.objects[id];
         let (pos, angle, scale) = pose2(tree, id);
         let p = pos / PIXELS_PER_METRE;
         let builder = match n.text("body") {
@@ -292,7 +292,7 @@ impl World2 {
         self.apply_params(id, &BodyParams::of(tree, id, settings));
     }
 
-    fn remove(&mut self, id: NodeId) {
+    fn remove(&mut self, id: ObjectId) {
         if let Some(e) = self.bodies.remove(&id) {
             self.owners.remove(&e.collider);
             self.world.remove_body(e.body);
@@ -321,10 +321,10 @@ impl World2 {
     }
 
     /// Makes the physics match the tree.
-    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers, settings: &PhysicsSettings) {
+    fn sync(&mut self, tree: &BlueprintTree, ids: &[ObjectId], layers: &Layers, settings: &PhysicsSettings) {
         self.configure(settings);
-        let alive: HashSet<NodeId> = ids.iter().copied().collect();
-        let gone: Vec<NodeId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
+        let alive: HashSet<ObjectId> = ids.iter().copied().collect();
+        let gone: Vec<ObjectId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
         for g in gone {
             self.remove(g);
         }
@@ -362,10 +362,10 @@ impl World2 {
         }
     }
 
-    /// A script (or the editor) changed a body's node. A dynamic body nudged a short way is
+    /// A script (or the editor) changed a body's object. A dynamic body nudged a short way is
     /// pushed there, stopping and sliding at what's in the way, so walking it into a wall
     /// doesn't put it through the wall; a jump further than its own size is a teleport.
-    fn moved_by_script(&mut self, id: NodeId, pos: Vec2, angle: f32) {
+    fn moved_by_script(&mut self, id: ObjectId, pos: Vec2, angle: f32) {
         let Some(e) = self.bodies.get(&id) else { return };
         let (body, collider, seen, seen_angle) = (e.body, e.collider, e.pos, e.angle);
         let b = &self.world.bodies[body];
@@ -404,12 +404,12 @@ impl World2 {
         e.angle = angle;
     }
 
-    /// Puts a body's node where the body is (world pixels, radians).
-    fn place(tree: &mut SceneTree, id: NodeId, pos: Vec2, angle: f32) {
+    /// Puts a body's object where the body is (world pixels, radians).
+    fn place(tree: &mut BlueprintTree, id: ObjectId, pos: Vec2, angle: f32) {
         let pm = parent_matrix(tree, id);
         let local = pm.inverse().transform_point3(pos.extend(0.0));
         let parent_angle = pm.to_scale_rotation_translation().1.to_euler(EulerRot::YXZ).2;
-        let n = &mut tree.nodes[id];
+        let n = &mut tree.objects[id];
         n.transform.position.x = local.x;
         n.transform.position.y = local.y;
         n.transform.rotation.z = (angle - parent_angle).to_degrees();
@@ -420,12 +420,12 @@ impl World2 {
         (Vec2::new(t.x, t.y), b.rotation().angle())
     }
 
-    fn step(&mut self, tree: &mut SceneTree) {
+    fn step(&mut self, tree: &mut BlueprintTree) {
         for e in self.bodies.values_mut() {
             e.from = Self::body_pose(&self.world.bodies[e.body]);
         }
         self.world.step();
-        let floor: HashSet<NodeId> = self.floor_contacts();
+        let floor: HashSet<ObjectId> = self.floor_contacts();
         for (id, e) in self.bodies.iter_mut() {
             let b = &self.world.bodies[e.body];
             if !b.is_dynamic() {
@@ -434,7 +434,7 @@ impl World2 {
             let (pos, angle) = Self::body_pose(b);
             let v = b.linvel() * PIXELS_PER_METRE;
             Self::place(tree, *id, pos, angle);
-            let n = &mut tree.nodes[*id];
+            let n = &mut tree.objects[*id];
             n.props.insert("vx".into(), Variant::Num(v.x as f64));
             n.props.insert("vy".into(), Variant::Num(v.y as f64));
             let spin = b.angvel().to_degrees();
@@ -449,7 +449,7 @@ impl World2 {
 
     /// Between physics steps: shows each moving body part of the way (`alpha`, 0..1) from
     /// where it was before the last step to where it is, so motion is smooth at any frame rate.
-    fn present(&mut self, tree: &mut SceneTree, alpha: f32) {
+    fn present(&mut self, tree: &mut BlueprintTree, alpha: f32) {
         for (id, e) in self.bodies.iter_mut() {
             let b = &self.world.bodies[e.body];
             if !b.is_dynamic() || b.is_sleeping() || !tree.contains(*id) {
@@ -468,7 +468,7 @@ impl World2 {
     }
 
     /// Bodies resting on something (a contact whose normal points against gravity).
-    fn floor_contacts(&self) -> HashSet<NodeId> {
+    fn floor_contacts(&self) -> HashSet<ObjectId> {
         let g = Vec2::new(self.world.gravity.x, self.world.gravity.y).normalize_or(Vec2::Y);
         let mut out = HashSet::new();
         for pair in self.world.contact_pairs() {
@@ -495,7 +495,7 @@ impl World2 {
         out
     }
 
-    fn touching(&self, out: &mut Vec<(NodeId, NodeId)>) {
+    fn touching(&self, out: &mut Vec<(ObjectId, ObjectId)>) {
         for pair in self.world.contact_pairs() {
             if pair.has_any_active_contact() {
                 if let (Some(a), Some(b)) = (self.owners.get(&pair.collider1), self.owners.get(&pair.collider2)) {
@@ -509,7 +509,7 @@ impl World2 {
 
     /// Moves a kinematic body, sliding along what it hits. Gives the new world position
     /// and whether it ended up on the floor.
-    fn move_body(&mut self, id: NodeId, delta: Vec2) -> Option<(Vec2, bool)> {
+    fn move_body(&mut self, id: ObjectId, delta: Vec2) -> Option<(Vec2, bool)> {
         let e = self.bodies.get_mut(&id)?;
         let col = self.world.colliders.get(e.collider)?;
         let filter = d2::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors().groups(col.collision_groups());
@@ -539,7 +539,7 @@ impl World2 {
         Some((p, m.grounded))
     }
 
-    fn impulse(&mut self, id: NodeId, v: Vec2) {
+    fn impulse(&mut self, id: ObjectId, v: Vec2) {
         if let Some(e) = self.bodies.get(&id) {
             let b = &mut self.world.bodies[e.body];
             let m = b.mass();
@@ -547,7 +547,7 @@ impl World2 {
         }
     }
 
-    fn raycast(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
+    fn raycast(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<ObjectId>, mask: u32) -> Option<RayHit> {
         let dir = dir.normalize_or_zero();
         if dir == Vec2::ZERO {
             return None;
@@ -560,7 +560,7 @@ impl World2 {
         let (h, hit) = self.world.cast_ray_and_get_normal(&ray, max / PIXELS_PER_METRE, true, filter)?;
         let p = ray.point_at(hit.time_of_impact) * PIXELS_PER_METRE;
         Some(RayHit {
-            node: *self.owners.get(&h)?,
+            object: *self.owners.get(&h)?,
             point: Vec3::new(p.x, p.y, 0.0),
             normal: Vec3::new(hit.normal.x, hit.normal.y, 0.0),
             distance: hit.time_of_impact * PIXELS_PER_METRE,
@@ -581,7 +581,7 @@ struct Entry3 {
     key: String,
     params: String,
     spin: Vec3,
-    /// Where the node was last seen or put (what a script would have to change to move it).
+    /// Where the object was last seen or put (what a script would have to change to move it).
     pos: Vec3,
     rot: Quat,
     vel: Vec3,
@@ -598,18 +598,18 @@ struct Ragdoll {
 }
 
 pub struct World3 {
-    ragdolls: HashMap<NodeId, Ragdoll>,
-    /// Static triangle meshes by node: which vertex list they were made from, and the collider.
-    static_meshes: HashMap<NodeId, (usize, d3::ColliderHandle)>,
+    ragdolls: HashMap<ObjectId, Ragdoll>,
+    /// Static triangle meshes by object: which vertex list they were made from, and the collider.
+    static_meshes: HashMap<ObjectId, (usize, d3::ColliderHandle)>,
     world: d3::PhysicsWorld,
-    bodies: HashMap<NodeId, Entry3>,
-    owners: HashMap<d3::ColliderHandle, NodeId>,
+    bodies: HashMap<ObjectId, Entry3>,
+    owners: HashMap<d3::ColliderHandle, ObjectId>,
     statics: Vec<d3::ColliderHandle>,
     statics_key: String,
     controller: d3::KinematicCharacterController,
 }
 
-fn pose3(tree: &SceneTree, id: NodeId) -> (Vec3, Quat, Vec3) {
+fn pose3(tree: &BlueprintTree, id: ObjectId) -> (Vec3, Quat, Vec3) {
     let (s, r, t) = tree.global_matrix(id).to_scale_rotation_translation();
     (t, r, s.abs())
 }
@@ -617,7 +617,7 @@ fn pose3(tree: &SceneTree, id: NodeId) -> (Vec3, Quat, Vec3) {
 /// A static mesh-less box for 3D (map brushes and the like).
 #[derive(Clone, Copy, Debug)]
 pub struct StaticBox3 {
-    pub owner: NodeId,
+    pub owner: ObjectId,
     pub center: Vec3,
     pub half: Vec3,
 }
@@ -649,7 +649,7 @@ impl World3 {
         };
     }
 
-    fn apply_params(&mut self, id: NodeId, p: &BodyParams) {
+    fn apply_params(&mut self, id: ObjectId, p: &BodyParams) {
         let Some(e) = self.bodies.get(&id) else { return };
         let b = &mut self.world.bodies[e.body];
         b.set_gravity_scale(p.gravity_scale, true);
@@ -665,8 +665,8 @@ impl World3 {
         }
     }
 
-    fn build(&mut self, tree: &SceneTree, id: NodeId, key: String, layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>, settings: &PhysicsSettings) {
-        let n = &tree.nodes[id];
+    fn build(&mut self, tree: &BlueprintTree, id: ObjectId, key: String, layers: &Layers, hulls: &HashMap<ObjectId, (String, Arc<Vec<Vec3>>)>, settings: &PhysicsSettings) {
+        let n = &tree.objects[id];
         let (pos, rot, scale) = pose3(tree, id);
         let builder = match n.text("body") {
             "static" => d3::RigidBodyBuilder::fixed(),
@@ -702,7 +702,7 @@ impl World3 {
         self.apply_params(id, &BodyParams::of(tree, id, settings));
     }
 
-    fn remove(&mut self, id: NodeId) {
+    fn remove(&mut self, id: ObjectId) {
         if let Some(e) = self.bodies.remove(&id) {
             self.owners.remove(&e.collider);
             self.world.remove_body(e.body);
@@ -725,8 +725,8 @@ impl World3 {
             }
         }
         // Meshes one by one, so a moving door doesn't rebuild the whole map.
-        let live: HashSet<NodeId> = meshes.iter().map(|m| m.0).collect();
-        let gone: Vec<NodeId> = self.static_meshes.keys().filter(|k| !live.contains(k)).copied().collect();
+        let live: HashSet<ObjectId> = meshes.iter().map(|m| m.0).collect();
+        let gone: Vec<ObjectId> = self.static_meshes.keys().filter(|k| !live.contains(k)).copied().collect();
         for g in gone {
             if let Some((_, h)) = self.static_meshes.remove(&g) {
                 self.owners.remove(&h);
@@ -750,10 +750,10 @@ impl World3 {
         }
     }
 
-    fn sync(&mut self, tree: &SceneTree, ids: &[NodeId], layers: &Layers, hulls: &HashMap<NodeId, (String, Arc<Vec<Vec3>>)>, settings: &PhysicsSettings) {
+    fn sync(&mut self, tree: &BlueprintTree, ids: &[ObjectId], layers: &Layers, hulls: &HashMap<ObjectId, (String, Arc<Vec<Vec3>>)>, settings: &PhysicsSettings) {
         self.configure(settings);
-        let alive: HashSet<NodeId> = ids.iter().copied().collect();
-        let gone: Vec<NodeId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
+        let alive: HashSet<ObjectId> = ids.iter().copied().collect();
+        let gone: Vec<ObjectId> = self.bodies.keys().filter(|k| !alive.contains(k)).copied().collect();
         for g in gone {
             self.remove(g);
         }
@@ -794,8 +794,8 @@ impl World3 {
         }
     }
 
-    /// A script (or the editor) changed a body's node: see the 2D one.
-    fn moved_by_script(&mut self, id: NodeId, pos: Vec3, rot: Quat) {
+    /// A script (or the editor) changed a body's object: see the 2D one.
+    fn moved_by_script(&mut self, id: ObjectId, pos: Vec3, rot: Quat) {
         let Some(e) = self.bodies.get(&id) else { return };
         let (body, collider, seen, seen_rot) = (e.body, e.collider, e.pos, e.rot);
         let b = &self.world.bodies[body];
@@ -834,18 +834,18 @@ impl World3 {
         e.rot = rot;
     }
 
-    /// Puts a body's node where the body is (world space).
-    fn place(tree: &mut SceneTree, id: NodeId, pos: Vec3, rot: Quat) {
+    /// Puts a body's object where the body is (world space).
+    fn place(tree: &mut BlueprintTree, id: ObjectId, pos: Vec3, rot: Quat) {
         let pm = parent_matrix(tree, id);
         let local = pm.inverse() * Mat4::from_rotation_translation(rot, pos);
         let (_, lr, lt) = local.to_scale_rotation_translation();
         let (y, x, z) = lr.to_euler(EulerRot::YXZ);
-        let n = &mut tree.nodes[id];
+        let n = &mut tree.objects[id];
         n.transform.position = lt;
         n.transform.rotation = Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
     }
 
-    fn step(&mut self, tree: &mut SceneTree) {
+    fn step(&mut self, tree: &mut BlueprintTree) {
         for e in self.bodies.values_mut() {
             let b = &self.world.bodies[e.body];
             e.from = (b.translation(), *b.rotation());
@@ -861,7 +861,7 @@ impl World3 {
             let rot = *b.rotation();
             let v = b.linvel();
             Self::place(tree, *id, pos, rot);
-            let n = &mut tree.nodes[*id];
+            let n = &mut tree.objects[*id];
             n.props.insert("vx".into(), Variant::Num(v.x as f64));
             n.props.insert("vy".into(), Variant::Num(v.y as f64));
             n.props.insert("vz".into(), Variant::Num(v.z as f64));
@@ -870,7 +870,7 @@ impl World3 {
                 n.props.insert(k.into(), Variant::Num(a.to_degrees() as f64));
             }
             n.props.insert("on_floor".into(), Variant::Bool(floor.contains(id)));
-            // What the node now says (after the trip through degrees), so only a real
+            // What the object now says (after the trip through degrees), so only a real
             // change by a script counts as one.
             let (p, r, _) = pose3(tree, *id);
             e.pos = p;
@@ -881,7 +881,7 @@ impl World3 {
     }
 
     /// Between physics steps: see the 2D one.
-    fn present(&mut self, tree: &mut SceneTree, alpha: f32) {
+    fn present(&mut self, tree: &mut BlueprintTree, alpha: f32) {
         for (id, e) in self.bodies.iter_mut() {
             let b = &self.world.bodies[e.body];
             if !b.is_dynamic() || b.is_sleeping() || !tree.contains(*id) {
@@ -896,7 +896,7 @@ impl World3 {
 
     /// Turns a posed skeleton into physics bodies. `joints` are each joint's world transform
     /// now, `parents` the skeleton's parent links, `inverse_bind` its bind matrices.
-    fn make_ragdoll(&mut self, id: NodeId, joints: &[Mat4], parents: &[Option<usize>], inverse_bind: &[Mat4], groups: (u32, u32), velocity: Vec3) {
+    fn make_ragdoll(&mut self, id: ObjectId, joints: &[Mat4], parents: &[Option<usize>], inverse_bind: &[Mat4], groups: (u32, u32), velocity: Vec3) {
         self.remove_ragdoll(id);
         let n = joints.len();
         let pos: Vec<Vec3> = joints.iter().map(|m| m.w_axis.truncate()).collect();
@@ -973,7 +973,7 @@ impl World3 {
         self.ragdolls.insert(id, Ragdoll { follow, bodies, inverse_bind: inverse_bind.to_vec() });
     }
 
-    fn remove_ragdoll(&mut self, id: NodeId) {
+    fn remove_ragdoll(&mut self, id: ObjectId) {
         if let Some(r) = self.ragdolls.remove(&id) {
             for b in r.bodies {
                 self.world.remove_body(b);
@@ -982,10 +982,10 @@ impl World3 {
         }
     }
 
-    /// A ragdoll's joint matrices now, in the space of its node (`node_world`).
-    fn ragdoll_pose(&self, id: NodeId, node_world: Mat4) -> Option<Vec<Mat4>> {
+    /// A ragdoll's joint matrices now, in the space of its object (`object_world`).
+    fn ragdoll_pose(&self, id: ObjectId, object_world: Mat4) -> Option<Vec<Mat4>> {
         let r = self.ragdolls.get(&id)?;
-        let inv = node_world.inverse();
+        let inv = object_world.inverse();
         Some(
             r.follow
                 .iter()
@@ -998,7 +998,7 @@ impl World3 {
         )
     }
 
-    fn floor_contacts(&self) -> HashSet<NodeId> {
+    fn floor_contacts(&self) -> HashSet<ObjectId> {
         let g = self.world.gravity.normalize_or(Vec3::NEG_Y);
         let mut out = HashSet::new();
         for pair in self.world.contact_pairs() {
@@ -1024,7 +1024,7 @@ impl World3 {
         out
     }
 
-    fn touching(&self, out: &mut Vec<(NodeId, NodeId)>) {
+    fn touching(&self, out: &mut Vec<(ObjectId, ObjectId)>) {
         for pair in self.world.contact_pairs() {
             if pair.has_any_active_contact() {
                 if let (Some(a), Some(b)) = (self.owners.get(&pair.collider1), self.owners.get(&pair.collider2)) {
@@ -1036,7 +1036,7 @@ impl World3 {
         }
     }
 
-    fn move_body(&mut self, id: NodeId, delta: Vec3) -> Option<(Vec3, bool)> {
+    fn move_body(&mut self, id: ObjectId, delta: Vec3) -> Option<(Vec3, bool)> {
         let e = self.bodies.get_mut(&id)?;
         let col = self.world.colliders.get(e.collider)?;
         let filter = d3::QueryFilter::default().exclude_rigid_body(e.body).exclude_sensors().groups(col.collision_groups());
@@ -1064,7 +1064,7 @@ impl World3 {
         Some((new_t, m.grounded))
     }
 
-    fn impulse(&mut self, id: NodeId, v: Vec3) {
+    fn impulse(&mut self, id: ObjectId, v: Vec3) {
         if let Some(e) = self.bodies.get(&id) {
             let b = &mut self.world.bodies[e.body];
             let m = b.mass();
@@ -1079,7 +1079,7 @@ impl World3 {
         }
     }
 
-    fn raycast(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
+    fn raycast(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<ObjectId>, mask: u32) -> Option<RayHit> {
         let dir = dir.normalize_or_zero();
         if dir == Vec3::ZERO {
             return None;
@@ -1090,7 +1090,7 @@ impl World3 {
             filter = filter.exclude_rigid_body(e.body);
         }
         let (h, hit) = self.world.cast_ray_and_get_normal(&ray, max, true, filter)?;
-        Some(RayHit { node: *self.owners.get(&h)?, point: ray.point_at(hit.time_of_impact), normal: hit.normal, distance: hit.time_of_impact })
+        Some(RayHit { object: *self.owners.get(&h)?, point: ray.point_at(hit.time_of_impact), normal: hit.normal, distance: hit.time_of_impact })
     }
 }
 
@@ -1108,7 +1108,7 @@ pub struct Physics {
     pub meshes_3d: Vec<StaticMesh>,
     pub layers: Layers,
     /// Points for Body3D "hull" shapes (from their model), in the body's own space: key, points.
-    pub hulls: HashMap<NodeId, (String, Arc<Vec<Vec3>>)>,
+    pub hulls: HashMap<ObjectId, (String, Arc<Vec<Vec3>>)>,
 }
 
 impl Physics {
@@ -1117,13 +1117,13 @@ impl Physics {
     }
 
     /// Matches bodies to the tree (making them the first time they're seen).
-    pub fn sync(&mut self, tree: &SceneTree) {
+    pub fn sync(&mut self, tree: &BlueprintTree) {
         let mut b2 = Vec::new();
         let mut b3 = Vec::new();
         for id in tree.walk() {
-            match tree.nodes[id].kind {
-                NodeKind::Body2D => b2.push(id),
-                NodeKind::Body3D => b3.push(id),
+            match tree.objects[id].kind {
+                ObjectKind::Body2D => b2.push(id),
+                ObjectKind::Body3D => b3.push(id),
                 _ => {}
             }
         }
@@ -1138,7 +1138,7 @@ impl Physics {
             let w = self.w3.get_or_insert_with(|| World3::new(s));
             w.set_statics(&self.statics_3d, &self.meshes_3d);
             w.sync(tree, &b3, &self.layers, &self.hulls, s);
-            let gone: Vec<NodeId> = w.ragdolls.keys().filter(|id| !tree.contains(**id)).copied().collect();
+            let gone: Vec<ObjectId> = w.ragdolls.keys().filter(|id| !tree.contains(**id)).copied().collect();
             for g in gone {
                 w.remove_ragdoll(g);
             }
@@ -1146,7 +1146,7 @@ impl Physics {
     }
 
     /// One fixed step (1/60 s).
-    pub fn step(&mut self, tree: &mut SceneTree) {
+    pub fn step(&mut self, tree: &mut BlueprintTree) {
         self.sync(tree);
         if let Some(w) = &mut self.w2 {
             w.step(tree);
@@ -1158,7 +1158,7 @@ impl Physics {
 
     /// After the frame's steps: shows moving bodies `alpha` (0..1) of the way into the step
     /// that's still to come, so motion is smooth whatever the frame rate.
-    pub fn present(&mut self, tree: &mut SceneTree, alpha: f32) {
+    pub fn present(&mut self, tree: &mut BlueprintTree, alpha: f32) {
         let alpha = alpha.clamp(0.0, 1.0);
         if let Some(w) = &mut self.w2 {
             w.present(tree, alpha);
@@ -1168,8 +1168,8 @@ impl Physics {
         }
     }
 
-    /// Pairs of nodes whose bodies touch now (both orders are not included).
-    pub fn touching(&self) -> Vec<(NodeId, NodeId)> {
+    /// Pairs of objects whose bodies touch now (both orders are not included).
+    pub fn touching(&self) -> Vec<(ObjectId, ObjectId)> {
         let mut out = Vec::new();
         if let Some(w) = &self.w2 {
             w.touching(&mut out);
@@ -1181,17 +1181,17 @@ impl Physics {
     }
 
     /// Moves a body by `delta` (2D: pixels; 3D: metres), stopping and sliding at walls.
-    /// Updates the node, and gives whether it's on the floor afterwards.
-    pub fn move_node(&mut self, tree: &mut SceneTree, id: NodeId, delta: Vec3) -> Result<bool, String> {
-        let kind = tree.nodes[id].kind;
-        if !matches!(kind, NodeKind::Body2D | NodeKind::Body3D) {
+    /// Updates the object, and gives whether it's on the floor afterwards.
+    pub fn move_object(&mut self, tree: &mut BlueprintTree, id: ObjectId, delta: Vec3) -> Result<bool, String> {
+        let kind = tree.objects[id].kind;
+        if !matches!(kind, ObjectKind::Body2D | ObjectKind::Body3D) {
             // Not a body: just move it.
-            tree.nodes[id].transform.position += delta;
+            tree.objects[id].transform.position += delta;
             return Ok(false);
         }
         self.sync(tree);
         let pm = parent_matrix(tree, id);
-        let (world_pos, grounded) = if kind == NodeKind::Body2D {
+        let (world_pos, grounded) = if kind == ObjectKind::Body2D {
             let w = self.w2.as_mut().ok_or("no 2D physics")?;
             let (p, g) = w.move_body(id, delta.truncate()).ok_or("that body isn't in the physics world")?;
             (p.extend(tree.global_matrix(id).w_axis.z), g)
@@ -1200,8 +1200,8 @@ impl Physics {
             w.move_body(id, delta).ok_or("that body isn't in the physics world")?
         };
         let local = pm.inverse().transform_point3(world_pos);
-        let n = &mut tree.nodes[id];
-        if kind == NodeKind::Body2D {
+        let n = &mut tree.objects[id];
+        if kind == ObjectKind::Body2D {
             n.transform.position.x = local.x;
             n.transform.position.y = local.y;
         } else {
@@ -1211,10 +1211,10 @@ impl Physics {
         Ok(grounded)
     }
 
-    pub fn impulse(&mut self, tree: &SceneTree, id: NodeId, v: Vec3) {
+    pub fn impulse(&mut self, tree: &BlueprintTree, id: ObjectId, v: Vec3) {
         self.sync(tree);
-        match tree.nodes[id].kind {
-            NodeKind::Body2D => {
+        match tree.objects[id].kind {
+            ObjectKind::Body2D => {
                 if let Some(w) = &mut self.w2 {
                     w.impulse(id, v.truncate());
                 }
@@ -1227,36 +1227,36 @@ impl Physics {
         }
     }
 
-    /// Makes a skinned model's node a ragdoll (see World3::make_ragdoll).
+    /// Makes a skinned model's object a ragdoll (see World3::make_ragdoll).
     #[allow(clippy::too_many_arguments)]
-    pub fn ragdoll(&mut self, tree: &SceneTree, id: NodeId, joints: &[Mat4], parents: &[Option<usize>], inverse_bind: &[Mat4], velocity: Vec3) {
+    pub fn ragdoll(&mut self, tree: &BlueprintTree, id: ObjectId, joints: &[Mat4], parents: &[Option<usize>], inverse_bind: &[Mat4], velocity: Vec3) {
         let groups = self.layers.of(tree, id);
         let s = &self.settings;
         let w = self.w3.get_or_insert_with(|| World3::new(s));
         w.make_ragdoll(id, joints, parents, inverse_bind, groups, velocity);
     }
 
-    pub fn end_ragdoll(&mut self, id: NodeId) {
+    pub fn end_ragdoll(&mut self, id: ObjectId) {
         if let Some(w) = &mut self.w3 {
             w.remove_ragdoll(id);
         }
     }
 
-    pub fn is_ragdoll(&self, id: NodeId) -> bool {
+    pub fn is_ragdoll(&self, id: ObjectId) -> bool {
         self.w3.as_ref().is_some_and(|w| w.ragdolls.contains_key(&id))
     }
 
-    /// Joint matrices for every ragdoll whose node still exists.
-    pub fn ragdoll_poses(&self, tree: &SceneTree) -> Vec<(NodeId, Vec<Mat4>)> {
+    /// Joint matrices for every ragdoll whose object still exists.
+    pub fn ragdoll_poses(&self, tree: &BlueprintTree) -> Vec<(ObjectId, Vec<Mat4>)> {
         let Some(w) = &self.w3 else { return Vec::new() };
         w.ragdolls.keys().filter(|id| tree.contains(**id)).filter_map(|id| w.ragdoll_pose(*id, tree.global_matrix(*id)).map(|p| (*id, p))).collect()
     }
 
-    pub fn raycast_2d(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
+    pub fn raycast_2d(&self, from: Vec2, dir: Vec2, max: f32, ignore: Option<ObjectId>, mask: u32) -> Option<RayHit> {
         self.w2.as_ref()?.raycast(from, dir, max, ignore, mask)
     }
 
-    pub fn raycast_3d(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<NodeId>, mask: u32) -> Option<RayHit> {
+    pub fn raycast_3d(&self, from: Vec3, dir: Vec3, max: f32, ignore: Option<ObjectId>, mask: u32) -> Option<RayHit> {
         self.w3.as_ref()?.raycast(from, dir, max, ignore, mask)
     }
 }

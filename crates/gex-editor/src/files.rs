@@ -1,5 +1,5 @@
 //! Project file operations for the Assets panel: new folders, importing, renaming (fixing every
-//! reference in scenes and scripts) and deleting (into a hidden .trash folder, so it can be undone
+//! reference in blueprints and scripts) and deleting (into a hidden .trash folder, so it can be undone
 //! by hand).
 
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ fn text_files(dir: &Path, out: &mut Vec<PathBuf>) {
         }
         if p.is_dir() {
             text_files(&p, out);
-        } else if matches!(p.extension().and_then(|x| x.to_str()), Some("jscene" | "jlb" | "jproj" | "txt" | "json" | "vmt")) {
+        } else if matches!(p.extension().and_then(|x| x.to_str()), Some("jblueprint" | "jlb" | "jproj" | "txt" | "json" | "vmt")) {
             out.push(p);
         }
     }
@@ -115,7 +115,7 @@ pub fn replace_ref(text: &str, old: &str, new: &str) -> Option<String> {
 }
 
 /// Renames a file or folder and fixes every `"res://..."` that pointed at it in the project's
-/// scenes, scripts and settings. Gives the new path and the files it fixed.
+/// blueprints, scripts and settings. Gives the new path and the files it fixed.
 pub fn rename(p: &Project, old: &str, new_name: &str) -> Result<(String, Vec<String>), String> {
     let from = p.res_to_path(old).ok_or("not a project file")?;
     if !from.exists() {
@@ -151,18 +151,18 @@ pub fn rename(p: &Project, old: &str, new_name: &str) -> Result<(String, Vec<Str
     Ok((new, fixed))
 }
 
-/// The project's scene files and scripts that mention this path.
+/// The project's blueprint files and scripts that mention this path.
 pub fn users(p: &Project, res: &str) -> Vec<String> {
     let mut files = Vec::new();
     text_files(&p.dir, &mut files);
     files.into_iter().filter(|f| std::fs::read_to_string(f).is_ok_and(|t| t.contains(res))).filter_map(|f| p.path_to_res(&f)).filter(|r| r != res && !r.starts_with(&format!("{}/", res))).collect()
 }
 
-/// The project's scene files (not hidden ones).
-pub fn scene_files(p: &Project) -> Vec<PathBuf> {
+/// The project's blueprint files (not hidden ones).
+pub fn blueprint_files(p: &Project) -> Vec<PathBuf> {
     let mut files = Vec::new();
     text_files(&p.dir, &mut files);
-    files.retain(|f| f.extension().is_some_and(|e| e == "jscene"));
+    files.retain(|f| f.extension().is_some_and(|e| e == "jblueprint"));
     files
 }
 
@@ -232,17 +232,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let p = crate::templates::create_demo(&dir).unwrap();
         let mut st = crate::state::EditorState::new(p);
-        let main = std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap();
+        let main = std::fs::read_to_string(dir.join("blueprints/main.jblueprint")).unwrap();
         assert!(main.contains("res://scripts/player.jlb"));
-        // Moving into a new folder: the scene follows.
+        // Moving into a new folder: the blueprint follows.
         let folder = st.new_folder("res://").unwrap();
         let moved = st.move_asset("res://scripts/player.jlb", &folder).unwrap();
         assert_eq!(moved, format!("{}/player.jlb", folder));
-        // Deleting: the open scene loses the script (undoable there), and so do files on disk.
+        // Deleting: the open blueprint loses the script (undoable there), and so do files on disk.
         st.delete_asset(&moved).unwrap();
-        assert!(!st.tree.nodes.iter().any(|(_, n)| n.scripts.iter().any(|s| s.contains("player.jlb"))));
+        assert!(!st.tree.objects.iter().any(|(_, n)| n.scripts.iter().any(|s| s.contains("player.jlb"))));
         st.save_all();
-        assert!(!std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap().contains("player.jlb"));
+        assert!(!std::fs::read_to_string(dir.join("blueprints/main.jblueprint")).unwrap().contains("player.jlb"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -253,13 +253,13 @@ mod tests {
         let p = crate::templates::create_demo(&dir).unwrap();
         let (new, fixed) = rename(&p, "res://scripts/player.jlb", "hero_moves.jlb").unwrap();
         assert_eq!(new, "res://scripts/hero_moves.jlb");
-        assert!(fixed.contains(&"res://scenes/main.jscene".to_string()), "{:?}", fixed);
-        let main = std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap();
+        assert!(fixed.contains(&"res://blueprints/main.jblueprint".to_string()), "{:?}", fixed);
+        let main = std::fs::read_to_string(dir.join("blueprints/main.jblueprint")).unwrap();
         assert!(main.contains("res://scripts/hero_moves.jlb") && !main.contains("res://scripts/player.jlb"));
         // A folder rename fixes everything under it, and the game still loads.
         rename(&p, "res://assets", "art").unwrap();
-        assert!(std::fs::read_to_string(dir.join("scenes/platformer.jscene")).unwrap().contains("res://art/tiles.png"));
-        let tree = gex_core::scene::load(&std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap(), &|r: &str| p.read_text(r)).unwrap();
+        assert!(std::fs::read_to_string(dir.join("blueprints/platformer.jblueprint")).unwrap().contains("res://art/tiles.png"));
+        let tree = gex_core::blueprint::load(&std::fs::read_to_string(dir.join("blueprints/main.jblueprint")).unwrap(), &|r: &str| p.read_text(r)).unwrap();
         assert!(tree.find_path(None, "Level/Player").is_some());
         // Import copies, picking a free name.
         let ext = dir.join("outside.txt");
@@ -280,26 +280,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         crate::templates::create_demo(&dir).unwrap();
         let mut st = crate::state::EditorState::new(Project::open(&dir).unwrap());
-        st.open_scene("res://scenes/main.jscene");
+        st.open_blueprint("res://blueprints/main.jblueprint");
         st.open_script("res://scripts/player.jlb", None);
-        assert!(!st.scene_dirty());
+        assert!(!st.blueprint_dirty());
         st.rename_asset("res://scripts", "code").unwrap();
         let player = st.tree.find_path(None, "Level/Player").unwrap();
-        assert_eq!(st.tree.nodes[player].scripts, vec!["res://code/player.jlb".to_string()]);
+        assert_eq!(st.tree.objects[player].scripts, vec!["res://code/player.jlb".to_string()]);
         assert!(st.scripts.contains_key("res://code/player.jlb"));
         assert_eq!(st.renamed_scripts, vec![("res://scripts/player.jlb".to_string(), "res://code/player.jlb".to_string())]);
-        assert!(!st.scene_dirty(), "the open scene matches the fixed file");
+        assert!(!st.blueprint_dirty(), "the open blueprint matches the fixed file");
         st.delete_asset("res://code/player.jlb").unwrap();
         assert!(!st.scripts.contains_key("res://code/player.jlb"));
-        assert!(st.delete_asset("res://scenes/main.jscene").is_err(), "open scenes can't be deleted");
+        assert!(st.delete_asset("res://blueprints/main.jblueprint").is_err(), "open blueprints can't be deleted");
         // Undo: the delete, then the rename, then a new script.
         st.undo_file_op();
         assert!(dir.join("code/player.jlb").exists(), "put back from the trash");
         st.undo_file_op();
         assert!(dir.join("scripts/player.jlb").exists() && !dir.join("code").exists());
         let player = st.tree.find_path(None, "Level/Player").unwrap();
-        assert_eq!(st.tree.nodes[player].scripts, vec!["res://scripts/player.jlb".to_string()]);
-        assert!(std::fs::read_to_string(dir.join("scenes/main.jscene")).unwrap().contains("res://scripts/player.jlb"));
+        assert_eq!(st.tree.objects[player].scripts, vec!["res://scripts/player.jlb".to_string()]);
+        assert!(std::fs::read_to_string(dir.join("blueprints/main.jblueprint")).unwrap().contains("res://scripts/player.jlb"));
         assert!(st.file_undo.is_empty());
         let made = st.new_script_file("res://scripts").unwrap();
         assert!(st.project.res_to_path(&made).unwrap().exists());

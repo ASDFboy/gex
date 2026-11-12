@@ -19,7 +19,7 @@ use gex_assets::Vfs;
 use gex_core::glam::{Mat4, Vec3};
 use gex_core::render::{Blend, LightKind, RenderList};
 use gex_core::settings::Graphics;
-use gex_core::NodeId;
+use gex_core::ObjectId;
 use wgpu::util::DeviceExt;
 
 pub use camera::{Cameras, EditorCamera2D, EditorCamera3D};
@@ -182,7 +182,7 @@ struct Target {
 enum Geo {
     Prim(&'static str),
     Part(String, usize),
-    Skinned(NodeId, String, usize),
+    Skinned(ObjectId, String, usize),
 }
 
 /// Sprites drawn together: texture, pixel filtering, blend, first instance, count.
@@ -259,7 +259,7 @@ pub struct Renderer {
     meshes: HashMap<&'static str, GpuMesh>,
     quad: GpuMesh,
     models: HashMap<String, Result<GpuModel, String>>,
-    skinned: HashMap<(NodeId, String), Vec<wgpu::Buffer>>,
+    skinned: HashMap<(ObjectId, String), Vec<wgpu::Buffer>>,
     /// (path, pixel filtering) → texture, or the reason it couldn't load.
     textures: HashMap<(String, bool), Result<Tex, String>>,
     white_linear: Tex,
@@ -935,8 +935,8 @@ impl Renderer {
                 Some(Ok(m)) => m.parts.get(*i).map(|p| (&p.mesh.vb, &p.mesh.ib, p.mesh.count)),
                 _ => None,
             },
-            Geo::Skinned(node, path, i) => {
-                let vb = self.skinned.get(&(*node, path.clone()))?.get(*i)?;
+            Geo::Skinned(object, path, i) => {
+                let vb = self.skinned.get(&(*object, path.clone()))?.get(*i)?;
                 match self.models.get(path) {
                     Some(Ok(m)) => m.parts.get(*i).map(|p| (vb, &p.mesh.ib, p.mesh.count)),
                     _ => None,
@@ -1034,7 +1034,7 @@ impl Renderer {
                     let br = (data.max - data.min).length() * 0.5 * scale.max_element() * if skinned { 1.5 } else { 1.0 };
                     let visible = in_view(bc, br);
                     if skinned && visible {
-                        // Pose on the CPU and upload this node's own vertices.
+                        // Pose on the CPU and upload this object's own vertices.
                         let anim = data.animation(&m.animation);
                         let joints = if let Some(p) = &m.pose {
                             p.to_vec()
@@ -1043,7 +1043,7 @@ impl Renderer {
                         } else {
                             data.pose(anim, m.anim_time)
                         };
-                        let key = (m.node, m.mesh.clone());
+                        let key = (m.object, m.mesh.clone());
                         let bufs = self.skinned.entry(key).or_insert_with(|| {
                             data.parts
                                 .iter()
@@ -1074,7 +1074,7 @@ impl Renderer {
                         let c = [color[0] * pc[0], color[1] * pc[1], color[2] * pc[2], color[3] * pc[3]];
                         let texture = if m.texture.is_empty() { part.texture.clone() } else { m.texture.clone() };
                         draws.push(Draw3 {
-                            geo: if skinned { Geo::Skinned(m.node, m.mesh.clone(), i) } else { Geo::Part(m.mesh.clone(), i) },
+                            geo: if skinned { Geo::Skinned(m.object, m.mesh.clone(), i) } else { Geo::Part(m.mesh.clone(), i) },
                             lightmap: if has_lm { m.mesh.clone() } else { String::new() },
                             texture,
                             normal: m.normal_map.clone(),
@@ -1144,7 +1144,7 @@ impl Renderer {
         }
         let default_sun = list.lights.is_empty();
         if default_sun {
-            // No lights in the scene: a soft default so things are visible.
+            // No lights in the blueprint: a soft default so things are visible.
             lights[0] = LightU { pos: [0.0; 4], dir: Vec3::new(-0.4, -1.0, -0.6).normalize().extend(0.0).into(), color: [0.85, 0.85, 0.85, 10.0], extra: [0.1, 2.0, 1.0, -1.0] };
             n = 1;
         }
@@ -1259,7 +1259,7 @@ impl Renderer {
                 }
             };
             for s in &list.sprites {
-                // Unit quad → sprite rectangle (optionally centered), then the node's transform.
+                // Unit quad → sprite rectangle (optionally centered), then the object's transform.
                 let off = if s.centered { Vec3::new(-0.5 * s.size.x, -0.5 * s.size.y, 0.0) } else { Vec3::ZERO };
                 let local = Mat4::from_translation(off) * Mat4::from_scale(Vec3::new(s.size.x, s.size.y, 1.0));
                 let pixel = s.pixel.unwrap_or(sprite_pixel);
@@ -1568,8 +1568,8 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         queue.submit([enc.finish()]);
-        // Forget skinned buffers of nodes that weren't drawn.
-        let live: std::collections::HashSet<(NodeId, String)> = list.meshes.iter().map(|m| (m.node, m.mesh.clone())).collect();
+        // Forget skinned buffers of objects that weren't drawn.
+        let live: std::collections::HashSet<(ObjectId, String)> = list.meshes.iter().map(|m| (m.object, m.mesh.clone())).collect();
         self.skinned.retain(|k, _| live.contains(k));
         new_target
     }

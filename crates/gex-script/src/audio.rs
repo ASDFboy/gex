@@ -68,8 +68,8 @@ pub struct Audio {
     device: Option<rodio::MixerDeviceSink>,
     tried: bool,
     players: HashMap<u64, rodio::Player>,
-    /// Sound node → the sound it's playing.
-    pub by_node: HashMap<gex_core::NodeId, u64>,
+    /// Sound object → the sound it's playing.
+    pub by_object: HashMap<gex_core::ObjectId, u64>,
     music: Option<rodio::Player>,
     /// Each playing sound's balance.
     pans: HashMap<u64, Arc<AtomicU32>>,
@@ -81,7 +81,7 @@ pub struct Audio {
 
 impl Default for Audio {
     fn default() -> Self {
-        Audio { device: None, tried: false, players: HashMap::new(), by_node: HashMap::new(), music: None, pans: HashMap::new(), next: 1, master: 1.0, cache: HashMap::new() }
+        Audio { device: None, tried: false, players: HashMap::new(), by_object: HashMap::new(), music: None, pans: HashMap::new(), next: 1, master: 1.0, cache: HashMap::new() }
     }
 }
 
@@ -162,7 +162,7 @@ impl Audio {
         if let Some(m) = self.music.take() {
             m.stop();
         }
-        self.by_node.clear();
+        self.by_object.clear();
     }
 
     pub fn playing(&self, id: u64) -> bool {
@@ -199,7 +199,7 @@ impl Audio {
         self.players.retain(|_, p| !p.empty());
         let live: std::collections::HashSet<u64> = self.players.keys().copied().collect();
         self.pans.retain(|k, _| live.contains(k));
-        self.by_node.retain(|_, id| live.contains(id));
+        self.by_object.retain(|_, id| live.contains(id));
     }
 }
 

@@ -14,7 +14,7 @@ DEF on_press_p() {
 DEF should_flap() {
 	gap = 330
 	nearest = 99999
-	FOR p IN NODES("pipes") {
+	FOR p IN OBJECTS("pipes") {
 		x = GET(p, "x")
 		IF x > self.x - 60 AND x < nearest {
 			nearest = x

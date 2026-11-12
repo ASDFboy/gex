@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 
 use gex_core::project::Project;
 use gex_core::render::RenderList;
-use gex_core::{scene, SceneTree};
+use gex_core::{blueprint, BlueprintTree};
 
 use crate::world::{FrameInput, Game, LogKind, LogLine};
 pub use jlb::host::Breakpoints;
@@ -24,7 +24,7 @@ pub enum ToGame {
 
 pub enum FromGame {
     /// `tree` (a copy for the editor's inspector) comes about ten times a second.
-    Frame { list: RenderList, tree: Option<SceneTree>, logs: Vec<LogLine>, stats: crate::world::FrameStats },
+    Frame { list: RenderList, tree: Option<BlueprintTree>, logs: Vec<LogLine>, stats: crate::world::FrameStats },
     /// A breakpoint (or a step) stopped the game; it waits for `resume` / `step`.
     Paused(Paused),
     Stopped { logs: Vec<LogLine> },
@@ -64,12 +64,12 @@ pub struct GameHandle {
 impl GameHandle {
     /// Starts a game over a copy of `tree` (ids stay the same as the editor's, so the
     /// selection carries over into play mode).
-    pub fn start(project: Project, tree: SceneTree) -> GameHandle {
+    pub fn start(project: Project, tree: BlueprintTree) -> GameHandle {
         Self::start_with(project, tree, Arc::new(Breakpoints::default()))
     }
 
     /// Starts a game that stops at these breakpoints (which can change while it runs).
-    pub fn start_with(project: Project, tree: SceneTree, breakpoints: Arc<Breakpoints>) -> GameHandle {
+    pub fn start_with(project: Project, tree: BlueprintTree, breakpoints: Arc<Breakpoints>) -> GameHandle {
         let (tx, game_rx) = channel::<ToGame>();
         let (game_tx, rx) = channel::<FromGame>();
         let (debug, debug_rx) = channel::<Debug>();
@@ -175,7 +175,7 @@ fn pause_hook(bp: Arc<Breakpoints>, tx: Sender<FromGame>, debug: Arc<std::sync::
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<ToGame>, tx: Sender<FromGame>, bp: Arc<Breakpoints>, debug_rx: Receiver<Debug>) {
+fn run(project: Project, tree: BlueprintTree, cancel: Arc<AtomicBool>, rx: Receiver<ToGame>, tx: Sender<FromGame>, bp: Arc<Breakpoints>, debug_rx: Receiver<Debug>) {
     let debug = Arc::new(std::sync::Mutex::new(debug_rx));
     let mut game = Game::new(project.clone(), tree, Some(cancel.clone()));
     let mut frames: u64 = 0;
@@ -192,14 +192,14 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
-                let next = game.st.borrow_mut().change_scene.take();
+                let next = game.st.borrow_mut().change_blueprint.take();
                 if let Some(res) = next {
                     let mut logs = game.take_logs();
                     let (shared, fade, full, title) = {
                         let st = game.st.borrow();
                         (st.shared.clone(), st.fade.clone(), st.fullscreen, st.window_title.clone())
                     };
-                    match project.read_text(&res).map_err(|e| e).and_then(|t| scene::load(&t, &|p: &str| project.read_text(p)).map_err(|e| e.0)) {
+                    match project.read_text(&res).map_err(|e| e).and_then(|t| blueprint::load(&t, &|p: &str| project.read_text(p)).map_err(|e| e.0)) {
                         Ok(t) => {
                             game = Game::new(project.clone(), t, Some(cancel.clone()));
                             game.set_pause_hook(pause_hook(bp.clone(), tx.clone(), debug.clone(), cancel.clone()));
@@ -208,9 +208,9 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                             st.fullscreen = full;
                             st.window_title = title;
                             // The fade comes back in from its color.
-                            st.fade = fade.map(|f| crate::world::Fade { to_scene: None, time: 0.0, ..f });
+                            st.fade = fade.map(|f| crate::world::Fade { to_blueprint: None, time: 0.0, ..f });
                         }
-                        Err(e) => logs.push(LogLine { kind: LogKind::Error, text: format!("CHANGE_SCENE {}: {}", res, e), file: None, line: 0 }),
+                        Err(e) => logs.push(LogLine { kind: LogKind::Error, text: format!("CHANGE_BLUEPRINT {}: {}", res, e), file: None, line: 0 }),
                     }
                     game.st.borrow_mut().logs.extend(logs);
                 }
@@ -218,7 +218,7 @@ fn run(project: Project, tree: SceneTree, cancel: Arc<AtomicBool>, rx: Receiver<
                 let list = game.render_list();
                 let mut stats = std::mem::take(&mut game.stats);
                 stats.total_ms = started.elapsed().as_secs_f32() * 1000.0;
-                stats.nodes = game.tree().nodes.len();
+                stats.objects = game.tree().objects.len();
                 stats.sprites = list.sprites.len();
                 stats.meshes = list.meshes.len();
                 frames += 1;

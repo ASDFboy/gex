@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Runner",
-    kind: Some(Node3D),
+    kind: Some(Object3D),
     scripts: ["res://scripts/runner.jlb", "res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Sky", kind: Some(Environment),
@@ -14,7 +14,7 @@
       (name: "Track", kind: Some(Mesh3D), transform: Some((position: (0.0, 0.0, -40.0), scale: (8.0, 1.0, 120.0))),
         props: {"mesh": Text("plane"), "texture": Res("res://assets/grid.png"), "uv_scale_x": Num(4.0), "uv_scale_y": Num(60.0), "emissive": Num(0.6)},
         scripts: ["res://scripts/track.jlb"]),
-      (name: "Player", kind: Some(Node3D), transform: Some((position: (0.0, 0.5, 0.0))),
+      (name: "Player", kind: Some(Object3D), transform: Some((position: (0.0, 0.5, 0.0))),
         scripts: ["res://scripts/runner_player.jlb"],
         children: [
           (name: "Look", kind: Some(Mesh3D), transform: Some((scale: (0.8, 0.8, 0.8))), props: {"color": Color((0.3, 1.0, 0.95, 1.0)), "emissive": Num(1.0), "specular": Num(0.8)}),

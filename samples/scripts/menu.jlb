@@ -5,9 +5,9 @@ DEF on_create() {
 	TWEEN("Title", "y", 60, 0.8, "bounce")
 }
 
-DEF go(scene) {
+DEF go(blueprint) {
 	PLAY_SOUND("res://assets/blip.wav", 0.6)
-	CHANGE_SCENE("res://scenes/" + scene + ".jscene", 0.5)
+	CHANGE_BLUEPRINT("res://blueprints/" + blueprint + ".jblueprint", 0.5)
 }
 
 DEF on_pressed_breakout() { go("breakout") }

@@ -1,5 +1,5 @@
 >> The menu: each Button runs on_pressed_<its name>() on every script that has it.
->> CHANGE_SCENE's second input fades out and back in over that many seconds.
+>> CHANGE_BLUEPRINT's second input fades out and back in over that many seconds.
 
 DEF on_create() {
 	>> The title drops in and bounces (TWEEN slides any number or color).
@@ -12,17 +12,17 @@ DEF on_create() {
 }
 
 DEF on_pressed_coins() {
-	CHANGE_SCENE("res://scenes/main.jscene", 0.6)
+	CHANGE_BLUEPRINT("res://blueprints/main.jblueprint", 0.6)
 }
 
 DEF on_pressed_platformer() {
-	CHANGE_SCENE("res://scenes/platformer.jscene", 0.6)
+	CHANGE_BLUEPRINT("res://blueprints/platformer.jblueprint", 0.6)
 }
 
 DEF on_pressed_world() {
-	CHANGE_SCENE("res://scenes/world3d.jscene", 0.6)
+	CHANGE_BLUEPRINT("res://blueprints/world3d.jblueprint", 0.6)
 }
 
 DEF on_pressed_fps() {
-	CHANGE_SCENE("res://scenes/fps.jscene", 0.6)
+	CHANGE_BLUEPRINT("res://blueprints/fps.jblueprint", 0.6)
 }

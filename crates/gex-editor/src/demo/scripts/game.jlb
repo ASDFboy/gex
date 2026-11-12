@@ -21,13 +21,13 @@ DEF on_coin_taken(which) {
 }
 
 DEF on_timer_spawn() {
-	IF LEN(NODES("coins")) < 6 {
-		SPAWN("res://scenes/coin.jscene", RANDOM(60, 1220), RANDOM(120, 600))
+	IF LEN(OBJECTS("coins")) < 6 {
+		SPAWN("res://blueprints/coin.jblueprint", RANDOM(60, 1220), RANDOM(120, 600))
 	}
 }
 
 DEF on_press_tab() {
-	CHANGE_SCENE("res://scenes/world3d.jscene")
+	CHANGE_BLUEPRINT("res://blueprints/world3d.jblueprint")
 }
 
 >> A condition event: on_rich() runs once, the moment when_rich() turns TRUE.

@@ -1,30 +1,30 @@
-# Nodes
+# Objects
 
-Every scene is a tree of nodes. Add one with the **+** button in the Hierarchy (or `:add Kind`),
+Every blueprint is a tree of objects. Add one with the **+** button in the Hierarchy (or `:add Kind`),
 and change its properties in the Inspector. Any property can be read and changed from a script
 (`self.width = 64`, `SET("Door", "color", "#ff0000")`); a property you invent (`self.hp = 3`)
-just becomes a new property on that node.
+just becomes a new property on that object.
 
-Positions: 2D nodes use pixels with y going down; 3D nodes use metres with y going up.
+Positions: 2D objects use pixels with y going down; 3D objects use metres with y going up.
 Rotations are in degrees. A child moves, turns and scales with its parent.
 
 ## General
 
 | Kind | What it is | Main properties |
 |---|---|---|
-| `Node` | an empty node: a folder, or a holder for scripts (game managers) | |
-| `Animator` | plays clips made in the Timeline: property values (position, color, any number, text or switch) keyed over time, on its parent and the nodes under it | `clips` (the .anim file the Timeline saves), `autoplay` (a clip to start with), `speed`. Scripts use `PLAY_CLIP`, `STOP_CLIP`, `CLIP_PLAYING` and get `on_clip_end(clip)`. Put it under the thing it animates. |
+| `Object` | an empty object: a folder, or a holder for scripts (game managers) | |
+| `Animator` | plays clips made in the Timeline: property values (position, color, any number, text or switch) keyed over time, on its parent and the objects under it | `clips` (the .anim file the Timeline saves), `autoplay` (a clip to start with), `speed`. Scripts use `PLAY_CLIP`, `STOP_CLIP`, `CLIP_PLAYING` and get `on_clip_end(clip)`. Put it under the thing it animates. |
 | `Sound` | a sound you can start and stop | `stream` (a .wav/.ogg/.mp3/.flac file), `volume`, `pitch`, `loop`, `autoplay`; `spatial` makes it quieter the farther it is from the camera (silent at `range`: 0 = 25 m in 3D, 1000 px in 2D) and moves it left or right to where it is; `pan` (-1 left to 1 right) when not spatial; `echo` (0 to 1) and `echo_delay` (seconds) for caves and halls. Put it under the thing making the noise. |
 
 ## 2D
 
 | Kind | What it is | Main properties |
 |---|---|---|
-| `Node2D` | an empty 2D node to group others | |
+| `Object2D` | an empty 2D object to group others | |
 | `Sprite2D` | a picture or a colored rectangle | `texture`, `width`, `height`, `color` (tint), `layer` (higher draws on top), `flip_h`, `flip_v`, `parallax_x/y`, `repeat_x/y` |
 | `Label2D` | text in the world (moves with the camera) | `text`, `size`, `color`, `font` |
-| `Camera2D` | what the game shows; follows its parent | `zoom`, `current`, `smoothing` (0 = locked on, higher = catches up faster), `limits` with `limit_left/top/right/bottom` (the view stays inside), `ambient` (below white darkens the scene for Light2Ds) |
-| `Light2D` | a light in a dark 2D scene | `color`, `energy`, `radius`, `texture` (a soft glow if empty) |
+| `Camera2D` | what the game shows; follows its parent | `zoom`, `current`, `smoothing` (0 = locked on, higher = catches up faster), `limits` with `limit_left/top/right/bottom` (the view stays inside), `ambient` (below white darkens the blueprint for Light2Ds) |
+| `Light2D` | a light in a dark 2D blueprint | `color`, `energy`, `radius`, `texture` (a soft glow if empty) |
 | `Collider2D` | an area that reports overlaps (pickups, triggers) with other colliders and bodies | `width`, `height`, `layer`, `mask` |
 | `Body2D` | a physics object | `body` (dynamic / kinematic / static), `shape` (box / circle), `width`, `height`, `radius`, `friction`, `bounce`, `density`, `gravity_scale`, `fixed_rotation`; live: `vx`, `vy`, `on_floor` |
 | `TileMap2D` | a grid of tiles from one tileset picture | `tileset`, `tile_width`, `tile_height`, `solid`, `solid_tiles` |
@@ -39,21 +39,21 @@ of the way, so it looks far off: 0.5 for distant hills, 0 for a sky that never m
 tiles it sideways forever, which is how scrolling backgrounds are made.
 
 **2D lighting.** Set the Camera2D's `ambient` to a dark color (night blue, say) and add Light2D
-nodes: each one lights a soft circle. UI and text aren't darkened.
+objects: each one lights a soft circle. UI and text aren't darkened.
 
 **Particles.** They play in the editor too, so you can tune them by eye. Leave `emitting` on for
-a steady stream (smoke, a trail behind the player), or turn it off and call `BURST(node, 40)`
+a steady stream (smoke, a trail behind the player), or turn it off and call `BURST(object, 40)`
 for one-off effects (an explosion, a coin pickup). Particles stay where they were thrown out, so a
 moving emitter leaves a trail.
 
 **Tilemaps.** Select a TileMap2D and the Inspector shows its tileset as a palette: click a tile,
-then paint in the scene view (Shift-drag erases). Tile ids count left to right, top to bottom,
+then paint in the blueprint view (Shift-drag erases). Tile ids count left to right, top to bottom,
 from 0. Solid tiles collide with bodies; `solid_tiles` like `"0-3, 7"` limits which ones.
 `FIND_PATH` walks around the solid tiles.
 
 ## UI
 
-UI nodes are drawn on top of the game at fixed screen positions (they ignore cameras). Position
+UI objects are drawn on top of the game at fixed screen positions (they ignore cameras). Position
 is the top-left corner; `anchor` (`top_left`, `top`, `top_right`, `left`, `center`, `right`,
 `bottom_left`, `bottom`, `bottom_right`) pins it to a side of the screen so it stays put when the
 window changes size.
@@ -82,7 +82,7 @@ one small frame image makes boxes of any size.
 
 | Kind | What it is | Main properties |
 |---|---|---|
-| `Node3D` | an empty 3D node to group others | |
+| `Object3D` | an empty 3D object to group others | |
 | `Mesh3D` | a shape or a model | `mesh` (`cube`, `sphere`, `plane`, `quad`, or a model file: .glb/.gltf, .obj, and from a Source game .mdl or a .bsp map), `color`, `texture`, `uv_scale_x/y`, `cast_shadows`, `collision`; material: `normal_map`, `specular` (0 matte to 1 glossy), `emissive` (glows; with bloom, it shines), `unlit`, `shader` (see [SHADERS.md](SHADERS.md)); models: `animation`, `anim_speed`, `anim_loop`, `anim_blend` (seconds to crossfade into a new animation) |
 | `Sprite3D` | a picture in 3D: faces the camera (`billboard`) or stands like a sign | `texture`, `width`, `height`, `color`, `billboard`, `unlit` |
 | `Label3D` | text over a point in 3D (names over heads, signs) | `text`, `size` (screen pixels), `color`, `font` |
@@ -93,19 +93,19 @@ one small frame image makes boxes of any size.
 | `Collider3D` | a 3D area that reports what enters it (triggers, pickups, damage zones) | `shape` (box / sphere), `width`, `height`, `depth`, `radius`, `layer`, `mask` |
 | `Environment` | the sky, ambient light, fog, shadows and glow | `sky_top`, `sky_horizon`, `ground`, `sky_texture` (a panorama), `ambient`, `ambient_energy`, `fog_color`, `fog_start`, `fog_end`, `shadow_distance` (how far shadows reach, in metres), `bloom` (glow around bright things, 0 = off), `bloom_threshold`; `sky_energy`, `fog_mode` (linear: `fog_start` to `fog_end`; exp: thickens by `fog_density`), `shadow_split` (how much of the shadow distance gets the sharp shadows); color, on top of the project's: `exposure`, `contrast`, `saturation`, `tint`, `vignette` |
 
-Drag a model, picture or sound from the Assets panel into the scene view to make the right node
+Drag a model, picture or sound from the Assets panel into the blueprint view to make the right object
 for it.
 
-## Each node's own look
+## Each object's own look
 
-Every node that draws has look settings of its own (the **Look** section of the Inspector),
+Every object that draws has look settings of its own (the **Look** section of the Inspector),
 working on top of the project's graphics settings ([SETTINGS.md](SETTINGS.md)). Scripts change
 them like any property: `self.opacity = 0.5`, `SET("Ghost", "blend", "add")`.
 
 | Property | On | What it does |
 |---|---|---|
 | `opacity` | everything that draws, and UI | 1 solid, 0 invisible (it still runs and collides) |
-| `modulate` | Node2D, Node3D, bodies | a color multiplied into the node and everything under it; its alpha fades the whole group |
+| `modulate` | Object2D, Object3D, bodies | a color multiplied into the object and everything under it; its alpha fades the whole group |
 | `blend` | sprites, tilemaps, 2D particles, meshes, Sprite3D | `normal`; `add` glows (fire, lasers, magic); `multiply` darkens (shadows, stains, tinted glass) |
 | `filter` | sprites, tilemaps, particles, meshes, Sprite3D | `pixel` (blocky texels), `smooth`, or `project` (the project's setting) |
 | `lit` | sprites, tilemaps, 2D particles | darkened by 2D lighting; off keeps full brightness (drawn above lit sprites) |
@@ -150,11 +150,11 @@ things touch only when each is in the other's mask. Some uses:
 
 `RAYCAST` and `RAYCAST_3D` take the same kind of list as a last input to choose what a ray can hit.
 
-## Scenes inside scenes
+## Blueprints inside blueprints
 
-Save any branch as its own `.jscene` (right-click → **Save branch as scene**), then drop that file
-into other scenes as many times as you like (drag it from the Assets panel into the scene view,
-or **Instance into scene** in its preview): every copy follows the original file. Nodes inside a
+Save any branch as its own `.jblueprint` (right-click → **Save branch as blueprint**), then drop that file
+into other blueprints as many times as you like (drag it from the Assets panel into the blueprint view,
+or **Instance into blueprint** in its preview): every copy follows the original file. Objects inside a
 copy show greyed in the Hierarchy; select one and change it in the Inspector to change that copy
-only (only the differences are saved). Right-click a copy → **Open its scene** to change them all,
-or **Make local** to cut it loose from the file. `SPAWN("res://scenes/enemy.jscene", x, y)` adds one while the game runs.
+only (only the differences are saved). Right-click a copy → **Open its blueprint** to change them all,
+or **Make local** to cut it loose from the file. `SPAWN("res://blueprints/enemy.jblueprint", x, y)` adds one while the game runs.

@@ -1,4 +1,4 @@
-//! Everything the editor knows: the open project, the scene being edited, selection,
+//! Everything the editor knows: the open project, the blueprint being edited, selection,
 //! undo history, open scripts, the running game.
 
 use std::collections::{HashMap, HashSet};
@@ -8,7 +8,7 @@ use std::time::Instant;
 use gex_assets::Vfs;
 use gex_core::project::Project;
 use gex_core::render::RenderList;
-use gex_core::{scene, NodeId, SceneTree};
+use gex_core::{blueprint, ObjectId, BlueprintTree};
 use gex_render::{EditorCamera2D, EditorCamera3D, Renderer};
 use gex_script::thread::{FromGame, GameHandle};
 use gex_script::{LogKind, LogLine};
@@ -37,8 +37,8 @@ impl Script {
 pub enum FileOp {
     Renamed { old: String, new: String },
     /// Moved to the project's .trash folder.
-    /// `fixed`: scene files that used it and were changed, as they were before.
-    /// `open`: open scenes it was taken out of, with how deep their undo history was after.
+    /// `fixed`: blueprint files that used it and were changed, as they were before.
+    /// `open`: open blueprints it was taken out of, with how deep their undo history was after.
     Trashed { res: String, at: PathBuf, fixed: Vec<(PathBuf, String)>, open: Vec<(String, usize)> },
     /// New files (imported or made).
     Created(Vec<String>),
@@ -59,7 +59,7 @@ impl FileOp {
 pub struct Playing {
     pub handle: GameHandle,
     pub list: RenderList,
-    pub tree: SceneTree,
+    pub tree: BlueprintTree,
     pub last: Instant,
     pub keys: HashSet<String>,
     /// Keys pressed since the last frame request (so a quick tap isn't missed).
@@ -83,7 +83,7 @@ pub struct Playing {
     pub lock_suspended: bool,
 }
 
-/// What dragging a selected node does in the scene view.
+/// What dragging a selected object does in the blueprint view.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tool {
     Move,
@@ -91,14 +91,14 @@ pub enum Tool {
     Scale,
 }
 
-/// A scene that's open but not the one being edited right now.
-pub struct SceneDoc {
-    pub tree: SceneTree,
-    pub scene_res: Option<String>,
-    pub scene_saved: String,
-    pub selected: Option<NodeId>,
-    pub undo: Vec<SceneTree>,
-    pub redo: Vec<SceneTree>,
+/// A blueprint that's open but not the one being edited right now.
+pub struct BlueprintDoc {
+    pub tree: BlueprintTree,
+    pub blueprint_res: Option<String>,
+    pub blueprint_saved: String,
+    pub selected: Option<ObjectId>,
+    pub undo: Vec<BlueprintTree>,
+    pub redo: Vec<BlueprintTree>,
     pub mode_3d: bool,
     pub cam2: EditorCamera2D,
     pub cam3: EditorCamera3D,
@@ -107,23 +107,23 @@ pub struct SceneDoc {
 pub struct EditorState {
     pub project: Project,
     pub vfs: Vfs,
-    pub tree: SceneTree,
-    pub scene_res: Option<String>,
-    pub scene_saved: String,
-    pub selected: Option<NodeId>,
-    /// Every selected node (`selected` is the main one, shown in the inspector).
-    pub selection: Vec<NodeId>,
-    /// Other open scenes (the one being edited is in the fields above).
-    pub docs: Vec<SceneDoc>,
+    pub tree: BlueprintTree,
+    pub blueprint_res: Option<String>,
+    pub blueprint_saved: String,
+    pub selected: Option<ObjectId>,
+    /// Every selected object (`selected` is the main one, shown in the inspector).
+    pub selection: Vec<ObjectId>,
+    /// Other open blueprints (the one being edited is in the fields above).
+    pub docs: Vec<BlueprintDoc>,
     pub tool: Tool,
-    undo: Vec<SceneTree>,
-    redo: Vec<SceneTree>,
+    undo: Vec<BlueprintTree>,
+    redo: Vec<BlueprintTree>,
     last_change: Option<(String, Instant)>,
     pub logs: Vec<LogLine>,
     pub scripts: HashMap<String, Script>,
     /// Scripts the dock should open as tabs.
     pub open_requests: Vec<String>,
-    /// Scenes to open as windows in the workspace.
+    /// Blueprints to open as windows in the workspace.
     pub open_windows: Vec<String>,
     pub playing: Option<Playing>,
     pub renderer: Option<Renderer>,
@@ -138,7 +138,7 @@ pub struct EditorState {
     pub show_colliders: bool,
     /// Painting tiles into the selected TileMap2D with this tile (-1 erases).
     pub tile_brush: Option<i32>,
-    /// Textures for UI Image nodes and tile palettes.
+    /// Textures for UI Image objects and tile palettes.
     pub ui_images: std::collections::HashMap<String, eframe::egui::TextureHandle>,
     /// The 2D camera has been fitted to the game window once.
     pub cam_fitted: bool,
@@ -153,9 +153,9 @@ pub struct EditorState {
     pub game_breakpoints: std::sync::Arc<gex_script::thread::Breakpoints>,
     /// Vim keys in the script editor.
     pub vim_enabled: bool,
-    /// Particles2D previews in the scene view (not while playing).
-    pub preview_particles: HashMap<NodeId, gex_script::particles::Emitter>,
-    pub preview_particles_3d: HashMap<NodeId, gex_script::particles::Emitter3>,
+    /// Particles2D previews in the blueprint view (not while playing).
+    pub preview_particles: HashMap<ObjectId, gex_script::particles::Emitter>,
+    pub preview_particles_3d: HashMap<ObjectId, gex_script::particles::Emitter3>,
     pub particle_clock: Instant,
     pub search: crate::tools::Search,
     /// Script tabs whose file was renamed: (old, new), for the dock to follow.
@@ -183,9 +183,9 @@ impl EditorState {
         let mut st = EditorState {
             project,
             vfs,
-            tree: SceneTree::new(),
-            scene_res: None,
-            scene_saved: String::new(),
+            tree: BlueprintTree::new(),
+            blueprint_res: None,
+            blueprint_saved: String::new(),
             selected: None,
             selection: Vec::new(),
             docs: Vec::new(),
@@ -236,11 +236,11 @@ impl EditorState {
         for w in st.vfs.warnings() {
             st.log(LogKind::Error, w);
         }
-        let main = st.project.config.main_scene.clone();
+        let main = st.project.config.main_blueprint.clone();
         if st.project.res_to_path(&main).is_some_and(|p| p.is_file()) {
-            st.open_scene(&main);
+            st.open_blueprint(&main);
         } else {
-            st.tree.add(None, gex_core::Node::new("Root", gex_core::NodeKind::Node2D));
+            st.tree.add(None, gex_core::Object::new("Root", gex_core::ObjectKind::Object2D));
         }
         st
     }
@@ -263,31 +263,31 @@ impl EditorState {
         }
     }
 
-    // ---------- scenes ----------
+    // ---------- blueprints ----------
 
-    /// Opens a scene in its own tab (or switches to it if it's open).
-    pub fn open_scene(&mut self, res: &str) {
-        if self.scene_res.as_deref() == Some(res) {
+    /// Opens a blueprint in its own tab (or switches to it if it's open).
+    pub fn open_blueprint(&mut self, res: &str) {
+        if self.blueprint_res.as_deref() == Some(res) {
             return;
         }
-        if let Some(i) = self.docs.iter().position(|d| d.scene_res.as_deref() == Some(res)) {
-            self.switch_scene(i);
+        if let Some(i) = self.docs.iter().position(|d| d.blueprint_res.as_deref() == Some(res)) {
+            self.switch_blueprint(i);
             return;
         }
-        if self.scene_res.is_some() || self.tree.nodes.len() > 1 {
+        if self.blueprint_res.is_some() || self.tree.objects.len() > 1 {
             let doc = self.take_doc();
             self.docs.push(doc);
         }
-        self.load_scene(res);
+        self.load_blueprint(res);
     }
 
-    fn take_doc(&mut self) -> SceneDoc {
+    fn take_doc(&mut self) -> BlueprintDoc {
         self.preview_particles.clear();
         self.preview_particles_3d.clear();
-        SceneDoc {
+        BlueprintDoc {
             tree: std::mem::take(&mut self.tree),
-            scene_res: self.scene_res.take(),
-            scene_saved: std::mem::take(&mut self.scene_saved),
+            blueprint_res: self.blueprint_res.take(),
+            blueprint_saved: std::mem::take(&mut self.blueprint_saved),
             selected: self.selected.take(),
             undo: std::mem::take(&mut self.undo),
             redo: std::mem::take(&mut self.redo),
@@ -297,10 +297,10 @@ impl EditorState {
         }
     }
 
-    fn put_doc(&mut self, d: SceneDoc) {
+    fn put_doc(&mut self, d: BlueprintDoc) {
         self.tree = d.tree;
-        self.scene_res = d.scene_res;
-        self.scene_saved = d.scene_saved;
+        self.blueprint_res = d.blueprint_res;
+        self.blueprint_saved = d.blueprint_saved;
         self.selected = d.selected;
         self.selection = d.selected.into_iter().collect();
         self.undo = d.undo;
@@ -311,8 +311,8 @@ impl EditorState {
         self.last_change = None;
     }
 
-    /// Makes another open scene the one being edited.
-    pub fn switch_scene(&mut self, i: usize) {
+    /// Makes another open blueprint the one being edited.
+    pub fn switch_blueprint(&mut self, i: usize) {
         if i >= self.docs.len() || self.playing.is_some() {
             return;
         }
@@ -322,25 +322,25 @@ impl EditorState {
         self.put_doc(d);
     }
 
-    /// Runs `f` with another open scene as the one being edited, then puts things back (the
-    /// workspace's windows edit scenes this way). Loads the scene if it isn't open. Not while
+    /// Runs `f` with another open blueprint as the one being edited, then puts things back (the
+    /// workspace's windows edit blueprints this way). Loads the blueprint if it isn't open. Not while
     /// playing.
-    pub fn with_scene<R>(&mut self, res: &str, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
-        if self.scene_res.as_deref() == Some(res) {
+    pub fn with_blueprint<R>(&mut self, res: &str, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+        if self.blueprint_res.as_deref() == Some(res) {
             return Some(f(self));
         }
         if self.playing.is_some() {
             return None;
         }
-        let i = match self.docs.iter().position(|d| d.scene_res.as_deref() == Some(res)) {
+        let i = match self.docs.iter().position(|d| d.blueprint_res.as_deref() == Some(res)) {
             Some(i) => i,
             None => {
                 let text = self.project.read_text(res).ok()?;
-                let tree = scene::load(&text, &self.reader()).ok()?;
-                let saved = scene::save(&tree, &self.reader()).unwrap_or_default();
-                let mode_3d = tree.walk().iter().any(|id| tree.nodes[*id].kind.is_3d());
+                let tree = blueprint::load(&text, &self.reader()).ok()?;
+                let saved = blueprint::save(&tree, &self.reader()).unwrap_or_default();
+                let mode_3d = tree.walk().iter().any(|id| tree.objects[*id].kind.is_3d());
                 let selected = tree.root;
-                self.docs.push(SceneDoc { tree, scene_res: Some(res.to_string()), scene_saved: saved, selected, undo: Vec::new(), redo: Vec::new(), mode_3d, cam2: Default::default(), cam3: Default::default() });
+                self.docs.push(BlueprintDoc { tree, blueprint_res: Some(res.to_string()), blueprint_saved: saved, selected, undo: Vec::new(), redo: Vec::new(), mode_3d, cam2: Default::default(), cam3: Default::default() });
                 self.docs.len() - 1
             }
         };
@@ -357,12 +357,12 @@ impl EditorState {
         Some(r)
     }
 
-    /// The scene being edited, taken out (without the side effects of switching tabs).
-    fn swap_out(&mut self) -> SceneDoc {
-        SceneDoc {
+    /// The blueprint being edited, taken out (without the side effects of switching tabs).
+    fn swap_out(&mut self) -> BlueprintDoc {
+        BlueprintDoc {
             tree: std::mem::take(&mut self.tree),
-            scene_res: self.scene_res.take(),
-            scene_saved: std::mem::take(&mut self.scene_saved),
+            blueprint_res: self.blueprint_res.take(),
+            blueprint_saved: std::mem::take(&mut self.blueprint_saved),
             selected: self.selected.take(),
             undo: std::mem::take(&mut self.undo),
             redo: std::mem::take(&mut self.redo),
@@ -372,25 +372,25 @@ impl EditorState {
         }
     }
 
-    /// Whether an open scene has unsaved changes.
+    /// Whether an open blueprint has unsaved changes.
     pub fn is_dirty(&self, res: &str) -> bool {
-        if self.scene_res.as_deref() == Some(res) {
-            return self.scene_dirty();
+        if self.blueprint_res.as_deref() == Some(res) {
+            return self.blueprint_dirty();
         }
-        self.docs.iter().find(|d| d.scene_res.as_deref() == Some(res)).is_some_and(|d| scene::save(&d.tree, &self.reader()).map(|t| t != d.scene_saved).unwrap_or(false))
+        self.docs.iter().find(|d| d.blueprint_res.as_deref() == Some(res)).is_some_and(|d| blueprint::save(&d.tree, &self.reader()).map(|t| t != d.blueprint_saved).unwrap_or(false))
     }
 
-    /// Closes one open scene by path (unsaved changes are lost).
-    pub fn close_scene_res(&mut self, res: &str) {
-        if self.scene_res.as_deref() == Some(res) {
-            self.close_scene();
+    /// Closes one open blueprint by path (unsaved changes are lost).
+    pub fn close_blueprint_res(&mut self, res: &str) {
+        if self.blueprint_res.as_deref() == Some(res) {
+            self.close_blueprint();
         } else {
-            self.docs.retain(|d| d.scene_res.as_deref() != Some(res));
+            self.docs.retain(|d| d.blueprint_res.as_deref() != Some(res));
         }
     }
 
-    /// Closes the scene being edited (unsaved changes are lost), switching to another.
-    pub fn close_scene(&mut self) {
+    /// Closes the blueprint being edited (unsaved changes are lost), switching to another.
+    pub fn close_blueprint(&mut self) {
         if self.docs.is_empty() || self.playing.is_some() {
             return;
         }
@@ -398,58 +398,58 @@ impl EditorState {
         self.put_doc(d);
     }
 
-    fn load_scene(&mut self, res: &str) {
+    fn load_blueprint(&mut self, res: &str) {
         let text = match self.project.read_text(res) {
             Ok(t) => t,
             Err(e) => return self.log(LogKind::Error, format!("couldn't open {}: {}", res, e)),
         };
-        let loaded = scene::load(&text, &self.reader());
+        let loaded = blueprint::load(&text, &self.reader());
         match loaded {
             Ok(t) => {
                 self.tree = t;
-                self.scene_res = Some(res.to_string());
+                self.blueprint_res = Some(res.to_string());
                 self.selected = self.tree.root;
                 self.selection = self.selected.into_iter().collect();
                 self.cam_fitted = false;
                 self.undo.clear();
                 self.redo.clear();
-                self.scene_saved = self.scene_text().unwrap_or_default();
-                self.mode_3d = self.tree.walk().iter().any(|id| self.tree.nodes[*id].kind.is_3d());
+                self.blueprint_saved = self.blueprint_text().unwrap_or_default();
+                self.mode_3d = self.tree.walk().iter().any(|id| self.tree.objects[*id].kind.is_3d());
                 self.status = format!("opened {}", res);
             }
             Err(e) => self.log(LogKind::Error, format!("{}: {}", res, e)),
         }
     }
 
-    pub fn scene_text(&self) -> Result<String, String> {
-        scene::save(&self.tree, &self.reader()).map_err(|e| e.0)
+    pub fn blueprint_text(&self) -> Result<String, String> {
+        blueprint::save(&self.tree, &self.reader()).map_err(|e| e.0)
     }
 
-    pub fn scene_dirty(&self) -> bool {
-        self.scene_text().map(|t| t != self.scene_saved).unwrap_or(true)
+    pub fn blueprint_dirty(&self) -> bool {
+        self.blueprint_text().map(|t| t != self.blueprint_saved).unwrap_or(true)
     }
 
-    pub fn save_scene(&mut self) {
-        let res = match &self.scene_res {
+    pub fn save_blueprint(&mut self) {
+        let res = match &self.blueprint_res {
             Some(r) => r.clone(),
             None => {
-                let r = "res://scenes/untitled.jscene".to_string();
-                self.scene_res = Some(r.clone());
+                let r = "res://blueprints/untitled.jblueprint".to_string();
+                self.blueprint_res = Some(r.clone());
                 r
             }
         };
-        // Other open scenes with copies of this one: describe them against the file as it was,
+        // Other open blueprints with copies of this one: describe them against the file as it was,
         // so after saving they can be rebuilt from the new file with their own changes kept.
         let users: Vec<(usize, Option<String>)> = {
             let read = self.reader();
             self.docs
                 .iter()
                 .enumerate()
-                .filter(|(_, d)| d.tree.nodes.iter().any(|(_, n)| n.instance_of.as_deref() == Some(res.as_str())))
-                .map(|(i, d)| (i, scene::save(&d.tree, &read).ok()))
+                .filter(|(_, d)| d.tree.objects.iter().any(|(_, n)| n.instance_of.as_deref() == Some(res.as_str())))
+                .map(|(i, d)| (i, blueprint::save(&d.tree, &read).ok()))
                 .collect()
         };
-        let result = self.scene_text().and_then(|text| {
+        let result = self.blueprint_text().and_then(|text| {
             let p = self.project.res_to_path(&res).ok_or("not a project path")?;
             if let Some(d) = p.parent() {
                 std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
@@ -459,11 +459,11 @@ impl EditorState {
         });
         match result {
             Ok(t) => {
-                self.scene_saved = t;
+                self.blueprint_saved = t;
                 self.status = format!("saved {}", res);
                 for (i, before) in users {
                     let Some(text) = before else { continue };
-                    let rebuilt = scene::load(&text, &|p: &str| self.project.read_text(p));
+                    let rebuilt = blueprint::load(&text, &|p: &str| self.project.read_text(p));
                     if let Ok(tree) = rebuilt {
                         let d = &mut self.docs[i];
                         d.undo.push(std::mem::replace(&mut d.tree, tree));
@@ -477,7 +477,7 @@ impl EditorState {
     }
 
     pub fn save_all(&mut self) {
-        self.save_scene();
+        self.save_blueprint();
         let dirty: Vec<String> = self.scripts.values().filter(|s| s.dirty()).map(|s| s.res.clone()).collect();
         for r in dirty {
             self.save_script(&r);
@@ -526,35 +526,35 @@ impl EditorState {
         }
     }
 
-    // ---------- nodes ----------
+    // ---------- objects ----------
 
-    /// Adds a node from the "+ Node" menu: at the top of the scene, in the middle of the view.
-    /// Colliders are the exception: they go on the selected node, fitted to it.
-    pub fn add_node(&mut self, kind: gex_core::NodeKind) -> NodeId {
-        use gex_core::NodeKind as K;
-        let on_selected = matches!(kind, K::Collider2D | K::Collider3D) && self.selected.is_some_and(|s| Some(s) != self.tree.root && !matches!(self.tree.nodes[s].kind, K::Collider2D | K::Collider3D));
+    /// Adds an object from the "+ Object" menu: at the top of the blueprint, in the middle of the view.
+    /// Colliders are the exception: they go on the selected object, fitted to it.
+    pub fn add_object(&mut self, kind: gex_core::ObjectKind) -> ObjectId {
+        use gex_core::ObjectKind as K;
+        let on_selected = matches!(kind, K::Collider2D | K::Collider3D) && self.selected.is_some_and(|s| Some(s) != self.tree.root && !matches!(self.tree.objects[s].kind, K::Collider2D | K::Collider3D));
         let parent = if on_selected { self.selected } else { self.tree.root };
         self.add_child(parent, kind)
     }
 
-    /// Adds a node under a parent. Under the scene's root it appears in the middle of the view;
+    /// Adds an object under a parent. Under the blueprint's root it appears in the middle of the view;
     /// under anything else it sits on its parent.
-    pub fn add_child(&mut self, parent: Option<NodeId>, kind: gex_core::NodeKind) -> NodeId {
+    pub fn add_child(&mut self, parent: Option<ObjectId>, kind: gex_core::ObjectKind) -> ObjectId {
         self.will_change("add");
-        let mut n = gex_core::Node::new(kind.name(), kind);
+        let mut n = gex_core::Object::new(kind.name(), kind);
         let root = self.tree.root;
         let mut parent = parent.or(root);
         if kind.is_ui() {
             n.transform.position = gex_core::glam::Vec3::new(40.0, 40.0, 0.0);
-            parent = parent.filter(|s| self.tree.nodes[*s].kind.is_ui()).or(root);
+            parent = parent.filter(|s| self.tree.objects[*s].kind.is_ui()).or(root);
         } else if parent == root {
             if kind.is_2d() && !self.mode_3d {
                 let parent_m = parent.map(|p| self.tree.global_matrix(p)).unwrap_or_default();
                 n.transform.position = parent_m.inverse().transform_point3(self.cam2.center.extend(0.0));
             }
-        } else if let (gex_core::NodeKind::Collider2D, Some(p)) = (kind, parent) {
+        } else if let (gex_core::ObjectKind::Collider2D, Some(p)) = (kind, parent) {
             // A collider starts the size of what it's on.
-            let pn = &self.tree.nodes[p];
+            let pn = &self.tree.objects[p];
             for k in ["width", "height"] {
                 if let Some(v) = pn.prop(k).and_then(gex_core::Variant::as_f64) {
                     n.props.insert(k.into(), gex_core::Variant::Num(v));
@@ -566,16 +566,16 @@ impl EditorState {
         id
     }
 
-    pub fn instance_scene(&mut self, res: &str) -> Option<NodeId> {
-        if Some(res) == self.scene_res.as_deref() {
-            self.log(LogKind::Error, "a scene can't contain itself");
+    pub fn instance_blueprint(&mut self, res: &str) -> Option<ObjectId> {
+        if Some(res) == self.blueprint_res.as_deref() {
+            self.log(LogKind::Error, "a blueprint can't contain itself");
             return None;
         }
         self.will_change("instance");
         let parent = self.selected.or(self.tree.root);
         let reader = |p: &str| self.project.read_text(p);
         let mut tree = std::mem::take(&mut self.tree);
-        let r = scene::instance(&mut tree, parent, res, &reader);
+        let r = blueprint::instance(&mut tree, parent, res, &reader);
         self.tree = tree;
         match r {
             Ok(id) => {
@@ -589,28 +589,28 @@ impl EditorState {
         }
     }
 
-    /// Saves a branch as its own scene file, then puts an instance of that file where the
-    /// branch was (so the branch can be reused in other scenes and stays in sync).
-    pub fn save_branch_as_scene(&mut self, id: NodeId) -> Option<String> {
+    /// Saves a branch as its own blueprint file, then puts an instance of that file where the
+    /// branch was (so the branch can be reused in other blueprints and stays in sync).
+    pub fn save_branch_as_blueprint(&mut self, id: ObjectId) -> Option<String> {
         let n = self.tree.get(id)?;
         if n.from_instance {
-            self.status = "this node belongs to an instanced scene; open that scene to change it".into();
+            self.status = "this object belongs to an instanced blueprint; open that blueprint to change it".into();
             return None;
         }
         let slug: String = n.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
         let slug = if slug.trim_matches('_').is_empty() { "branch".to_string() } else { slug };
-        let mut res = format!("res://scenes/{}.jscene", slug);
+        let mut res = format!("res://blueprints/{}.jblueprint", slug);
         let mut k = 2;
         while self.project.res_to_path(&res).is_some_and(|p| p.exists()) {
-            res = format!("res://scenes/{}_{}.jscene", slug, k);
+            res = format!("res://blueprints/{}_{}.jblueprint", slug, k);
             k += 1;
         }
         // The branch on its own, with its root at the origin.
-        let mut sub = SceneTree::new();
+        let mut sub = BlueprintTree::new();
         let root = sub.copy_subtree(&self.tree, id, None);
-        sub.nodes[root].transform = Default::default();
-        sub.nodes[root].parent = None;
-        let saved = scene::save(&sub, &self.reader());
+        sub.objects[root].transform = Default::default();
+        sub.objects[root].parent = None;
+        let saved = blueprint::save(&sub, &self.reader());
         let text = match saved {
             Ok(t) => t,
             Err(e) => {
@@ -626,20 +626,20 @@ impl EditorState {
             self.log(LogKind::Error, format!("{}: {}", path.display(), e));
             return None;
         }
-        self.will_change("branch to scene");
+        self.will_change("branch to blueprint");
         let (name, transform, visible, parent) = {
-            let n = &self.tree.nodes[id];
+            let n = &self.tree.objects[id];
             (n.name.clone(), n.transform, n.visible, n.parent)
         };
-        let index = parent.and_then(|p| self.tree.nodes[p].children.iter().position(|c| *c == id));
+        let index = parent.and_then(|p| self.tree.objects[p].children.iter().position(|c| *c == id));
         let reader = |p: &str| self.project.read_text(p);
         let mut tree = std::mem::take(&mut self.tree);
-        let made = scene::instance(&mut tree, parent, &res, &reader);
+        let made = blueprint::instance(&mut tree, parent, &res, &reader);
         self.tree = tree;
         match made {
             Ok(new_id) => {
                 self.tree.remove(id);
-                let n = &mut self.tree.nodes[new_id];
+                let n = &mut self.tree.objects[new_id];
                 n.name = name;
                 n.transform = transform;
                 n.visible = visible;
@@ -660,8 +660,8 @@ impl EditorState {
         }
     }
 
-    /// Turns an instance into ordinary nodes of this scene (it stops following its file).
-    pub fn make_local(&mut self, id: NodeId) {
+    /// Turns an instance into ordinary objects of this blueprint (it stops following its file).
+    pub fn make_local(&mut self, id: ObjectId) {
         if self.tree.get(id).is_none_or(|n| n.instance_of.is_none()) {
             return;
         }
@@ -669,9 +669,9 @@ impl EditorState {
         let mut all = Vec::new();
         self.tree.walk_from(id, &mut all);
         for n in all {
-            let node = &mut self.tree.nodes[n];
-            node.instance_of = None;
-            node.from_instance = false;
+            let object = &mut self.tree.objects[n];
+            object.instance_of = None;
+            object.from_instance = false;
         }
     }
 
@@ -690,8 +690,8 @@ impl EditorState {
                 s.strip_prefix(old).filter(|r| r.starts_with('/')).map(|r| format!("{}{}", new, r))
             }
         };
-        let fix_tree = |t: &mut SceneTree| {
-            for (_, n) in t.nodes.iter_mut() {
+        let fix_tree = |t: &mut BlueprintTree| {
+            for (_, n) in t.objects.iter_mut() {
                 for sc in n.scripts.iter_mut() {
                     if let Some(x) = swap(sc) {
                         *sc = x;
@@ -719,16 +719,16 @@ impl EditorState {
         };
         fix_tree(&mut self.tree);
         self.undo.iter_mut().chain(self.redo.iter_mut()).for_each(fix_tree);
-        fix_text(&mut self.scene_saved);
-        if let Some(x) = self.scene_res.as_deref().and_then(swap) {
-            self.scene_res = Some(x);
+        fix_text(&mut self.blueprint_saved);
+        if let Some(x) = self.blueprint_res.as_deref().and_then(swap) {
+            self.blueprint_res = Some(x);
         }
         for d in &mut self.docs {
             fix_tree(&mut d.tree);
             d.undo.iter_mut().chain(d.redo.iter_mut()).for_each(fix_tree);
-            fix_text(&mut d.scene_saved);
-            if let Some(x) = d.scene_res.as_deref().and_then(swap) {
-                d.scene_res = Some(x);
+            fix_text(&mut d.blueprint_saved);
+            if let Some(x) = d.blueprint_res.as_deref().and_then(swap) {
+                d.blueprint_res = Some(x);
             }
         }
         let keys: Vec<String> = self.scripts.keys().cloned().collect();
@@ -770,8 +770,8 @@ impl EditorState {
         if self.playing.is_some() {
             return Err("stop the game first".into());
         }
-        if self.scene_res.as_deref() == Some(res) || self.docs.iter().any(|d| d.scene_res.as_deref() == Some(res)) {
-            return Err("close that scene first".into());
+        if self.blueprint_res.as_deref() == Some(res) || self.docs.iter().any(|d| d.blueprint_res.as_deref() == Some(res)) {
+            return Err("close that blueprint first".into());
         }
         let to = crate::files::trash(&self.project, res)?;
         self.scripts.retain(|k, _| k != res && !k.starts_with(&format!("{}/", res)));
@@ -787,18 +787,18 @@ impl EditorState {
     }
 
     /// After a file or folder is deleted: takes its instances, attached scripts and uses out of
-    /// every scene. Open scenes change in the editor (undoable there); the others on disk.
+    /// every blueprint. Open blueprints change in the editor (undoable there); the others on disk.
     /// Gives the changed files as they were, for undo.
     fn forget_asset(&mut self, res: &str) -> (Vec<(PathBuf, String)>, Vec<(String, usize)>) {
         let inside = format!("{}/", res);
         let gone = |s: &str| s == res || s.starts_with(&inside);
-        let open: Vec<String> = self.scene_res.iter().chain(self.docs.iter().filter_map(|d| d.scene_res.as_ref())).cloned().collect();
+        let open: Vec<String> = self.blueprint_res.iter().chain(self.docs.iter().filter_map(|d| d.blueprint_res.as_ref())).cloned().collect();
         let mut n = 0;
         let mut changed_open = Vec::new();
         for r in &open {
-            let depth = self.with_scene(r, |st| {
-                let uses = |t: &SceneTree| {
-                    t.nodes.iter().any(|(id, x)| {
+            let depth = self.with_blueprint(r, |st| {
+                let uses = |t: &BlueprintTree| {
+                    t.objects.iter().any(|(id, x)| {
                         x.scripts.iter().any(|s| gone(s))
                             || (x.instance_of.as_deref().is_some_and(gone) && !x.from_instance && Some(id) != t.root)
                             || x.props.values().any(|v| matches!(v, gex_core::Variant::Res(p) | gex_core::Variant::Text(p) if p.contains("://") && gone(p)))
@@ -809,11 +809,11 @@ impl EditorState {
                 }
                 st.will_change("asset deleted");
                 st.last_change = None;
-                let roots: Vec<NodeId> = st.tree.nodes.iter().filter(|(id, x)| x.instance_of.as_deref().is_some_and(gone) && !x.from_instance && Some(*id) != st.tree.root).map(|(id, _)| id).collect();
+                let roots: Vec<ObjectId> = st.tree.objects.iter().filter(|(id, x)| x.instance_of.as_deref().is_some_and(gone) && !x.from_instance && Some(*id) != st.tree.root).map(|(id, _)| id).collect();
                 for id in roots {
                     st.tree.remove(id);
                 }
-                for (_, x) in st.tree.nodes.iter_mut() {
+                for (_, x) in st.tree.objects.iter_mut() {
                     x.scripts.retain(|s| !gone(s));
                     for v in x.props.values_mut() {
                         if let gex_core::Variant::Res(p) | gex_core::Variant::Text(p) = v {
@@ -833,23 +833,23 @@ impl EditorState {
             }
         }
         let mut fixed = Vec::new();
-        for path in crate::files::scene_files(&self.project) {
+        for path in crate::files::blueprint_files(&self.project) {
             if self.project.path_to_res(&path).is_some_and(|r| open.contains(&r)) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let Ok(mut file) = scene::parse(&text) else { continue };
-            if scene::remove_refs(&mut file, &gone) && std::fs::write(&path, scene::to_text(&file)).is_ok() {
+            let Ok(mut file) = blueprint::parse(&text) else { continue };
+            if blueprint::remove_refs(&mut file, &gone) && std::fs::write(&path, blueprint::to_text(&file)).is_ok() {
                 fixed.push((path, text));
             }
         }
         if n + fixed.len() > 0 {
-            self.log(LogKind::Info, format!("took it out of {} scene(s) that used it", n + fixed.len()));
+            self.log(LogKind::Info, format!("took it out of {} blueprint(s) that used it", n + fixed.len()));
         }
         (fixed, changed_open)
     }
 
-    /// Moves a file or folder into another project folder (scenes and scripts using it follow).
+    /// Moves a file or folder into another project folder (blueprints and scripts using it follow).
     pub fn move_asset(&mut self, res: &str, dir: &str) -> Result<String, String> {
         let name = res.rsplit('/').next().unwrap_or(res);
         let to = if dir.ends_with("://") { format!("{}{}", dir, name) } else { format!("{}/{}", dir.trim_end_matches('/'), name) };
@@ -894,24 +894,24 @@ impl EditorState {
         }
     }
 
-    /// A new empty scene file in a folder, opened in a tab.
-    pub fn new_scene_file(&mut self, dir: &str, kind: gex_core::NodeKind) -> Option<String> {
+    /// A new empty blueprint file in a folder, opened in a tab.
+    pub fn new_blueprint_file(&mut self, dir: &str, kind: gex_core::ObjectKind) -> Option<String> {
         let _ = std::fs::create_dir_all(self.project.res_to_path(dir)?);
-        // The first scene is where the game starts.
-        let main = self.project.config.main_scene.clone();
+        // The first blueprint is where the game starts.
+        let main = self.project.config.main_blueprint.clone();
         let first = !self.project.res_to_path(&main).is_some_and(|p| p.is_file());
-        let res = crate::files::free_name(&self.project, dir, if first { "main.jscene" } else { "new_scene.jscene" })?;
+        let res = crate::files::free_name(&self.project, dir, if first { "main.jblueprint" } else { "new_blueprint.jblueprint" })?;
         let path = self.project.res_to_path(&res)?;
         let root = if kind.is_3d() { "World" } else { "Main" };
         if first {
-            self.project.config.main_scene = res.clone();
+            self.project.config.main_blueprint = res.clone();
             let _ = self.project.save();
         }
-        if let Err(e) = std::fs::write(&path, gex_core::scene::new_scene_text(root, kind)) {
+        if let Err(e) = std::fs::write(&path, gex_core::blueprint::new_blueprint_text(root, kind)) {
             self.log(LogKind::Error, e.to_string());
             return None;
         }
-        self.open_scene(&res);
+        self.open_blueprint(&res);
         self.file_undo.push(FileOp::Created(vec![res.clone()]));
         Some(res)
     }
@@ -921,7 +921,7 @@ impl EditorState {
         let _ = std::fs::create_dir_all(self.project.res_to_path(dir)?);
         let res = crate::files::free_name(&self.project, dir, "new_script.jlb")?;
         let path = self.project.res_to_path(&res)?;
-        if let Err(e) = std::fs::write(&path, ">> Attach this to a node in the Events panel.\n\nDEF on_create() {\n\t\n}\n") {
+        if let Err(e) = std::fs::write(&path, ">> Attach this to an object in the Events panel.\n\nDEF on_create() {\n\t\n}\n") {
             self.log(LogKind::Error, e.to_string());
             return None;
         }
@@ -967,13 +967,13 @@ impl EditorState {
                 Some(to) => {
                     let _ = std::fs::create_dir_all(to.parent().unwrap());
                     std::fs::rename(at, &to).map_err(|e| e.to_string()).map(|_| {
-                        // The scenes that used it get it back: files on disk, and open scenes
+                        // The blueprints that used it get it back: files on disk, and open blueprints
                         // that haven't been changed since.
                         for (path, text) in fixed {
                             let _ = std::fs::write(path, text);
                         }
-                        for (scene, depth) in open {
-                            self.with_scene(scene, |st| {
+                        for (blueprint, depth) in open {
+                            self.with_blueprint(blueprint, |st| {
                                 if st.undo.len() == *depth {
                                     st.undo();
                                     st.redo.pop();
@@ -1005,14 +1005,14 @@ impl EditorState {
         }
     }
 
-    /// Selects just this node.
-    pub fn select(&mut self, id: Option<NodeId>) {
+    /// Selects just this object.
+    pub fn select(&mut self, id: Option<ObjectId>) {
         self.selected = id;
         self.selection = id.into_iter().collect();
     }
 
-    /// Adds or removes a node from the selection (Ctrl+click).
-    pub fn toggle_select(&mut self, id: NodeId) {
+    /// Adds or removes an object from the selection (Ctrl+click).
+    pub fn toggle_select(&mut self, id: ObjectId) {
         if let Some(i) = self.selection.iter().position(|s| *s == id) {
             self.selection.remove(i);
             if self.selected == Some(id) {
@@ -1024,14 +1024,14 @@ impl EditorState {
         }
     }
 
-    pub fn is_selected(&self, id: NodeId) -> bool {
+    pub fn is_selected(&self, id: ObjectId) -> bool {
         self.selected == Some(id) || self.selection.contains(&id)
     }
 
-    /// The selected nodes that still exist, without any whose parent is also selected.
-    pub fn selected_roots(&self) -> Vec<NodeId> {
+    /// The selected objects that still exist, without any whose parent is also selected.
+    pub fn selected_roots(&self) -> Vec<ObjectId> {
         let tree = &self.tree;
-        let mut all: Vec<NodeId> = self.selection.iter().copied().chain(self.selected).filter(|i| tree.contains(*i)).collect();
+        let mut all: Vec<ObjectId> = self.selection.iter().copied().chain(self.selected).filter(|i| tree.contains(*i)).collect();
         all.sort();
         all.dedup();
         let set = all.clone();
@@ -1044,15 +1044,15 @@ impl EditorState {
             return;
         }
         if ids.iter().any(|i| Some(*i) == self.tree.root) {
-            self.status = "the root node can't be deleted".into();
+            self.status = "the root object can't be deleted".into();
             return;
         }
-        if ids.iter().any(|i| self.tree.nodes[*i].from_instance) {
-            self.status = "nodes inside an instanced scene can't be deleted here (hide them, or edit that scene)".into();
+        if ids.iter().any(|i| self.tree.objects[*i].from_instance) {
+            self.status = "objects inside an instanced blueprint can't be deleted here (hide them, or edit that blueprint)".into();
             return;
         }
         self.will_change("delete");
-        let parent = self.tree.nodes[ids[0]].parent;
+        let parent = self.tree.objects[ids[0]].parent;
         for id in ids {
             self.tree.remove(id);
         }
@@ -1061,44 +1061,44 @@ impl EditorState {
 
     pub fn duplicate_selected(&mut self) {
         let ids = self.selected_roots();
-        if ids.is_empty() || ids.iter().any(|i| self.tree.nodes[*i].parent.is_none()) {
+        if ids.is_empty() || ids.iter().any(|i| self.tree.objects[*i].parent.is_none()) {
             return;
         }
         self.will_change("duplicate");
         let copy = self.tree.clone();
         let mut new = Vec::new();
         for id in ids {
-            let parent = self.tree.nodes[id].parent;
+            let parent = self.tree.objects[id].parent;
             new.push(self.tree.copy_subtree(&copy, id, parent));
         }
         self.selected = new.last().copied();
         self.selection = new;
     }
 
-    /// The selected nodes as text (for the clipboard): a list of scene-file node entries.
+    /// The selected objects as text (for the clipboard): a list of blueprint-file object entries.
     pub fn copy_text(&self) -> Option<String> {
         let ids = self.selected_roots();
         if ids.is_empty() {
             return None;
         }
         let read = self.reader();
-        let descs: Vec<scene::NodeDesc> = ids.iter().filter_map(|i| scene::describe(&self.tree, *i, &read).ok()).collect();
+        let descs: Vec<blueprint::ObjectDesc> = ids.iter().filter_map(|i| blueprint::describe(&self.tree, *i, &read).ok()).collect();
         ron::ser::to_string_pretty(&descs, ron::ser::PrettyConfig::new().struct_names(false)).ok()
     }
 
-    /// Pastes nodes copied with `copy_text` (here or from another scene) next to the selection.
+    /// Pastes objects copied with `copy_text` (here or from another blueprint) next to the selection.
     pub fn paste_text(&mut self, text: &str) -> bool {
-        let Ok(descs) = ron::from_str::<Vec<scene::NodeDesc>>(text) else { return false };
+        let Ok(descs) = ron::from_str::<Vec<blueprint::ObjectDesc>>(text) else { return false };
         if descs.is_empty() || self.playing.is_some() {
             return false;
         }
         self.will_change("paste");
-        let parent = self.selected.and_then(|s| self.tree.nodes.get(s).and_then(|n| n.parent)).or(self.tree.root);
-        let file = scene::SceneFile { format: scene::FORMAT, root: scene::NodeDesc { name: "Paste".into(), kind: Some(gex_core::NodeKind::Node), children: descs, ..Default::default() } };
-        let Ok(tmp) = scene::load(&scene::to_text(&file), &self.reader()) else { return false };
+        let parent = self.selected.and_then(|s| self.tree.objects.get(s).and_then(|n| n.parent)).or(self.tree.root);
+        let file = blueprint::BlueprintFile { format: blueprint::FORMAT, root: blueprint::ObjectDesc { name: "Paste".into(), kind: Some(gex_core::ObjectKind::Object), children: descs, ..Default::default() } };
+        let Ok(tmp) = blueprint::load(&blueprint::to_text(&file), &self.reader()) else { return false };
         let troot = tmp.root.unwrap();
         let mut new = Vec::new();
-        for c in tmp.nodes[troot].children.clone() {
+        for c in tmp.objects[troot].children.clone() {
             new.push(self.tree.copy_subtree(&tmp, c, parent));
         }
         self.selected = new.last().copied();
@@ -1196,23 +1196,23 @@ impl EditorState {
         }
     }
 
-    /// Makes a new script file for a node and attaches it.
-    pub fn new_script_for(&mut self, id: NodeId) -> Option<String> {
-        let base: String = self.tree.nodes[id]
+    /// Makes a new script file for an object and attaches it.
+    pub fn new_script_for(&mut self, id: ObjectId) -> Option<String> {
+        let base: String = self.tree.objects[id]
             .name
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
             .collect();
         let base = if base.is_empty() { "script".to_string() } else { base };
-        // Next to the scene it's for (no folders are made for you).
-        let dir = self.scene_res.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d.trim_end_matches('/').to_string()).filter(|d| d.len() > "res:/".len()).unwrap_or_else(|| "res:/".into());
+        // Next to the blueprint it's for (no folders are made for you).
+        let dir = self.blueprint_res.as_deref().and_then(|r| r.rsplit_once('/')).map(|(d, _)| d.trim_end_matches('/').to_string()).filter(|d| d.len() > "res:/".len()).unwrap_or_else(|| "res:/".into());
         let mut res = format!("{}/{}.jlb", dir, base);
         let mut i = 2;
         while self.project.res_to_path(&res).is_some_and(|p| p.exists()) {
             res = format!("{}/{}_{}.jlb", dir, base, i);
             i += 1;
         }
-        let text = format!(">> {}'s script. `self` is the node.\n", self.tree.nodes[id].name);
+        let text = format!(">> {}'s script. `self` is the object.\n", self.tree.objects[id].name);
         let p = self.project.res_to_path(&res)?;
         let _ = std::fs::create_dir_all(p.parent()?);
         if let Err(e) = std::fs::write(&p, text) {
@@ -1220,7 +1220,7 @@ impl EditorState {
             return None;
         }
         self.will_change("script");
-        self.tree.nodes[id].scripts.push(res.clone());
+        self.tree.objects[id].scripts.push(res.clone());
         self.open_script(&res, None);
         Some(res)
     }
@@ -1254,8 +1254,8 @@ impl EditorState {
         if self.playing.is_some() {
             return;
         }
-        if self.scene_res.is_none() {
-            self.status = "nothing to play yet: make a scene first (+ in Assets)".into();
+        if self.blueprint_res.is_none() {
+            self.status = "nothing to play yet: make a blueprint first (+ in Assets)".into();
             return;
         }
         // Scripts run from disk, so unsaved edits are saved first.
@@ -1364,7 +1364,7 @@ impl EditorState {
     }
 
     /// The tree to show in the hierarchy/inspector: the live game's while playing.
-    pub fn view_tree(&self) -> &SceneTree {
+    pub fn view_tree(&self) -> &BlueprintTree {
         match &self.playing {
             Some(p) => &p.tree,
             None => &self.tree,
@@ -1375,7 +1375,7 @@ impl EditorState {
 impl EditorState {
     /// Makes a standalone copy of the game in `dest`: the GEX program (renamed after the
     /// game) and the project's own files in dest/game. Files from mounted game installs are
-    /// never copied; scenes or scripts that use them are listed as warnings.
+    /// never copied; blueprints or scripts that use them are listed as warnings.
     /// Exports for this computer, named after the project.
     #[allow(dead_code)]
     pub fn export_game(&mut self, dest: &Path) -> Result<Vec<String>, String> {
@@ -1450,7 +1450,7 @@ impl EditorState {
                     std::fs::write(&out, text).map_err(|e| e.to_string())?;
                     continue;
                 }
-                if fname.ends_with(".jscene") || fname.ends_with(".jlb") {
+                if fname.ends_with(".jblueprint") || fname.ends_with(".jlb") {
                     let text = std::fs::read_to_string(&p).unwrap_or_default();
                     for s in &schemes {
                         if text.contains(s.as_str()) {

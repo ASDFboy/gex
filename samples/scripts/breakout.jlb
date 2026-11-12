@@ -11,7 +11,7 @@ DEF on_create() {
 DEF build_wall() {
 	FOR row IN 1 TO 6 {
 		FOR col IN 1 TO 14 {
-			b = SPAWN("res://scenes/brick.jscene", 107 + (col - 1) * 82, 110 + (row - 1) * 32)
+			b = SPAWN("res://blueprints/brick.jblueprint", 107 + (col - 1) * 82, 110 + (row - 1) * 32)
 			SET(b, "color", colors[row])
 			>> Higher rows are worth more.
 			SET(b, "points", (7 - row) * 10)
@@ -40,7 +40,7 @@ DEF on_press_p() {
 DEF on_brick_broken(points) {
 	GLOBAL score += points
 	SET("Score", "text", "Score: " + score)
-	IF LEN(NODES("bricks")) <= 1 {
+	IF LEN(OBJECTS("bricks")) <= 1 {
 		SET("Message", "text", "Wall cleared! Here comes another...")
 		SET("Message", "visible", TRUE)
 		TIMER("rebuild", 1.5, FALSE)
@@ -63,7 +63,7 @@ DEF on_ball_lost() {
 		GLOBAL score = 0
 		SET("Score", "text", "Score: 0")
 		SET("Lives", "text", "Lives: 3")
-		FOR b IN NODES("bricks") { DESTROY(b) }
+		FOR b IN OBJECTS("bricks") { DESTROY(b) }
 		TIMER("rebuild", 0.1, FALSE)
 	} ELSE {
 		SET("Message", "text", "Space or click to launch  (P: autopilot)")

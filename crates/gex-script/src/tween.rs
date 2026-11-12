@@ -1,6 +1,6 @@
-//! TWEEN: slide a node property (a number, a position, a color) to a new value over time.
+//! TWEEN: slide an object property (a number, a position, a color) to a new value over time.
 
-use gex_core::{NodeId, SceneTree, Variant};
+use gex_core::{ObjectId, BlueprintTree, Variant};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Val {
@@ -10,7 +10,7 @@ pub enum Val {
 
 #[derive(Clone, Debug)]
 pub struct Tween {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub prop: String,
     pub from: Val,
     pub to: Val,
@@ -66,7 +66,7 @@ pub fn ease(kind: &str, t: f64) -> f64 {
 }
 
 /// A property's value now, if it's something a tween can move.
-pub fn read(tree: &SceneTree, id: NodeId, k: &str) -> Option<Val> {
+pub fn read(tree: &BlueprintTree, id: ObjectId, k: &str) -> Option<Val> {
     let n = tree.get(id)?;
     let t = &n.transform;
     let f = |x: f32| Some(Val::Num(x as f64));
@@ -88,7 +88,7 @@ pub fn read(tree: &SceneTree, id: NodeId, k: &str) -> Option<Val> {
     }
 }
 
-fn write(tree: &mut SceneTree, id: NodeId, k: &str, v: Val) {
+fn write(tree: &mut BlueprintTree, id: ObjectId, k: &str, v: Val) {
     let Some(n) = tree.get_mut(id) else { return };
     let t = &mut n.transform;
     match v {
@@ -115,14 +115,14 @@ fn write(tree: &mut SceneTree, id: NodeId, k: &str, v: Val) {
     }
 }
 
-/// Moves every tween on; gives the ones that finished (node, property).
-pub fn update(tree: &mut SceneTree, tweens: &mut Vec<Tween>, dt: f64, frozen: &[NodeId]) -> Vec<(NodeId, String)> {
+/// Moves every tween on; gives the ones that finished (object, property).
+pub fn update(tree: &mut BlueprintTree, tweens: &mut Vec<Tween>, dt: f64, frozen: &[ObjectId]) -> Vec<(ObjectId, String)> {
     let mut done = Vec::new();
     tweens.retain_mut(|tw| {
-        if !tree.contains(tw.node) {
+        if !tree.contains(tw.object) {
             return false;
         }
-        if frozen.contains(&tw.node) {
+        if frozen.contains(&tw.object) {
             return true;
         }
         tw.time += dt;
@@ -132,10 +132,10 @@ pub fn update(tree: &mut SceneTree, tweens: &mut Vec<Tween>, dt: f64, frozen: &[
             (Val::Color(a), Val::Color(b)) => Val::Color([0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * k as f32)),
             _ => tw.to,
         };
-        write(tree, tw.node, &tw.prop, v);
+        write(tree, tw.object, &tw.prop, v);
         if tw.time >= tw.length {
-            write(tree, tw.node, &tw.prop, tw.to);
-            done.push((tw.node, tw.prop.clone()));
+            write(tree, tw.object, &tw.prop, tw.to);
+            done.push((tw.object, tw.prop.clone()));
             false
         } else {
             true

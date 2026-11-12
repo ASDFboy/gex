@@ -1,6 +1,6 @@
 //! The GameMaker-style layout (the default): a row of tabs along the top. Workspace tabs are
-//! canvases of floating windows: a scene window (its nodes and their properties, like an
-//! object), linked to its events, linked to the scripts they open. Each opened scene gets a
+//! canvases of floating windows: a blueprint window (its objects and their properties, like an
+//! object), linked to its events, linked to the scripts they open. Each opened blueprint gets a
 //! tab of its own (like a room) to place and edit instances: the instance list and inspector
 //! on the left, the view in the middle. The assets and the console sit beside every tab.
 //!
@@ -16,11 +16,11 @@ use crate::{code, panels, theme, viewport};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum WinKind {
-    /// A scene as a template: its nodes, and the properties of the one picked (`node` is its
-    /// path in the scene, "" for the root).
-    Scene { res: String, node: String },
-    /// The events (on_... functions) of a node's scripts.
-    Events { res: String, node: String },
+    /// A blueprint as a template: its objects, and the properties of the one picked (`object` is its
+    /// path in the blueprint, "" for the root).
+    Blueprint { res: String, object: String },
+    /// The events (on_... functions) of an object's scripts.
+    Events { res: String, object: String },
     Script { res: String },
     /// Timeline or Profiler.
     Tool { name: String },
@@ -110,7 +110,7 @@ impl Workspace {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TopTab {
     Workspace(usize),
-    Scene(String),
+    Blueprint(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -122,9 +122,9 @@ pub struct Layout {
     pub next_id: u64,
     pub show_assets: bool,
     pub show_console: bool,
-    /// The scene being edited last frame (to notice it changing from elsewhere).
+    /// The blueprint being edited last frame (to notice it changing from elsewhere).
     #[serde(skip)]
-    pub last_scene: Option<String>,
+    pub last_blueprint: Option<String>,
     /// While the game plays: the tab to go back to when it stops.
     #[serde(skip)]
     tab_before_play: Option<usize>,
@@ -146,7 +146,7 @@ impl Default for Layout {
             next_id: 1,
             show_assets: true,
             show_console: true,
-            last_scene: None,
+            last_blueprint: None,
             tab_before_play: None,
             was_playing: false,
             file_ops_seen: 0,
@@ -191,8 +191,8 @@ impl Layout {
         }
     }
 
-    pub fn open_scene_tab(&mut self, res: &str) {
-        let t = TopTab::Scene(res.to_string());
+    pub fn open_blueprint_tab(&mut self, res: &str) {
+        let t = TopTab::Blueprint(res.to_string());
         match self.tabs.iter().position(|x| *x == t) {
             Some(i) => self.active = i,
             None => {
@@ -230,7 +230,7 @@ impl Layout {
             return id;
         }
         let size = match kind {
-            WinKind::Scene { .. } => [320.0, 520.0],
+            WinKind::Blueprint { .. } => [320.0, 520.0],
             WinKind::Events { .. } => [260.0, 320.0],
             WinKind::Script { .. } => [720.0, 520.0],
             WinKind::Tool { .. } => [640.0, 300.0],
@@ -262,27 +262,27 @@ impl Layout {
         self.show_workspace(wi);
     }
 
-    /// Opens a scene's window in the current workspace and shows that workspace.
-    pub fn open_scene_window(&mut self, res: &str) {
+    /// Opens a blueprint's window in the current workspace and shows that workspace.
+    pub fn open_blueprint_window(&mut self, res: &str) {
         let wi = self.current_workspace();
-        let fresh = !self.workspaces[wi].windows.iter().any(|w| matches!(&w.kind, WinKind::Scene { res: r, .. } if r == res));
-        let id = self.open_window(wi, WinKind::Scene { res: res.to_string(), node: String::new() }, None);
+        let fresh = !self.workspaces[wi].windows.iter().any(|w| matches!(&w.kind, WinKind::Blueprint { res: r, .. } if r == res));
+        let id = self.open_window(wi, WinKind::Blueprint { res: res.to_string(), object: String::new() }, None);
         if fresh {
             // Its events come with it, like an object's in GameMaker.
-            self.open_window(wi, WinKind::Events { res: res.to_string(), node: String::new() }, Some(id));
+            self.open_window(wi, WinKind::Events { res: res.to_string(), object: String::new() }, Some(id));
         }
         self.show_workspace(wi);
     }
 }
 
 /// The editor body in the GameMaker-style layout.
-/// The scene being edited changed from elsewhere (Assets, an "open" button, :e): show its tab.
-fn follow_scene(l: &mut Layout, st: &EditorState) {
-    if st.scene_res != l.last_scene {
-        if let Some(r) = st.scene_res.clone() {
-            l.open_scene_tab(&r);
+/// The blueprint being edited changed from elsewhere (Assets, an "open" button, :e): show its tab.
+fn follow_blueprint(l: &mut Layout, st: &EditorState) {
+    if st.blueprint_res != l.last_blueprint {
+        if let Some(r) = st.blueprint_res.clone() {
+            l.open_blueprint_tab(&r);
         }
-        l.last_scene = st.scene_res.clone();
+        l.last_blueprint = st.blueprint_res.clone();
     }
 }
 
@@ -308,27 +308,27 @@ fn follow_files(l: &mut Layout, st: &EditorState) {
     };
     let gone = |r: &str| r.starts_with("res://") && !st.project.res_to_path(r).is_some_and(|p| p.is_file());
     for t in &mut l.tabs {
-        if let TopTab::Scene(r) = t {
+        if let TopTab::Blueprint(r) = t {
             fix(r);
         }
     }
     let mut seen: Vec<TopTab> = Vec::new();
     l.tabs.retain(|t| {
-        let keep = !seen.contains(t) && !matches!(t, TopTab::Scene(r) if gone(r));
+        let keep = !seen.contains(t) && !matches!(t, TopTab::Blueprint(r) if gone(r));
         seen.push(t.clone());
         keep
     });
     for w in &mut l.workspaces {
         for x in &mut w.windows {
             match &mut x.kind {
-                WinKind::Scene { res, .. } | WinKind::Events { res, .. } | WinKind::Script { res } => fix(res),
+                WinKind::Blueprint { res, .. } | WinKind::Events { res, .. } | WinKind::Script { res } => fix(res),
                 WinKind::Tool { .. } => {}
             }
         }
-        w.windows.retain(|x| !matches!(&x.kind, WinKind::Scene { res, .. } | WinKind::Events { res, .. } | WinKind::Script { res } if gone(res)));
+        w.windows.retain(|x| !matches!(&x.kind, WinKind::Blueprint { res, .. } | WinKind::Events { res, .. } | WinKind::Script { res } if gone(res)));
     }
     let here = here.map(|mut t| {
-        if let TopTab::Scene(r) = &mut t {
+        if let TopTab::Blueprint(r) = &mut t {
             fix(r);
         }
         t
@@ -338,16 +338,16 @@ fn follow_files(l: &mut Layout, st: &EditorState) {
 
 pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<&egui_wgpu::RenderState>, viewport_tex: &mut Option<egui::TextureId>, previews: &mut std::collections::HashMap<String, egui::TextureHandle>) {
     follow_files(l, st);
-    follow_scene(l, st);
+    follow_blueprint(l, st);
     for r in std::mem::take(&mut st.open_windows) {
-        l.open_scene_window(&r);
+        l.open_blueprint_window(&r);
     }
-    // Play shows the game (its scene's tab); Stop goes back to where you were.
+    // Play shows the game (its blueprint's tab); Stop goes back to where you were.
     let playing = st.playing.is_some();
     if playing && !l.was_playing {
-        if let Some(r) = st.scene_res.clone() {
+        if let Some(r) = st.blueprint_res.clone() {
             let before = l.active;
-            l.open_scene_tab(&r);
+            l.open_blueprint_tab(&r);
             l.tab_before_play = (l.active != before).then_some(before);
         }
     } else if !playing && l.was_playing {
@@ -384,11 +384,11 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         tab_strip(ui, l, st);
-        // Again: the Assets and Console panels above may have just opened a scene.
-        follow_scene(l, st);
+        // Again: the Assets and Console panels above may have just opened a blueprint.
+        follow_blueprint(l, st);
         match l.tabs.get(l.active).cloned() {
             Some(TopTab::Workspace(wi)) => canvas(ui, l, wi, st),
-            Some(TopTab::Scene(res)) => scene_tab(ui, l, st, &res, rs, viewport_tex),
+            Some(TopTab::Blueprint(res)) => blueprint_tab(ui, l, st, &res, rs, viewport_tex),
             None => {}
         }
     });
@@ -406,11 +406,11 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
             let active = i == l.active;
             let (label, dirty) = match t {
                 TopTab::Workspace(w) => (l.workspaces[*w].name.clone(), false),
-                TopTab::Scene(r) => (r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jscene").to_string(), st.is_dirty(r)),
+                TopTab::Blueprint(r) => (r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jblueprint").to_string(), st.is_dirty(r)),
             };
             let closeable = match t {
                 TopTab::Workspace(_) => l.tabs.iter().filter(|t| matches!(t, TopTab::Workspace(_))).count() > 1,
-                TopTab::Scene(_) => true,
+                TopTab::Blueprint(_) => true,
             };
             let galley = ui.painter().layout_no_wrap(label, egui::FontId::proportional(13.0), theme::TEXT);
             let w = (galley.size().x + 22.0 + if closeable || dirty { 18.0 } else { 0.0 }).max(72.0);
@@ -465,28 +465,28 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
         egui::Shape::line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2a, 0x2a))),
     ]));
     ui.add_space(3.0);
-    // While playing, the game stays in its own tab (other scenes open once it stops).
+    // While playing, the game stays in its own tab (other blueprints open once it stops).
     if let (Some(i), true) = (activate, st.playing.is_some()) {
-        if matches!(l.tabs.get(i), Some(TopTab::Scene(r)) if Some(r) != st.scene_res.as_ref()) {
-            st.status = "stop the game to switch scenes".into();
+        if matches!(l.tabs.get(i), Some(TopTab::Blueprint(r)) if Some(r) != st.blueprint_res.as_ref()) {
+            st.status = "stop the game to switch blueprints".into();
             activate = None;
         }
     }
     if let Some(i) = activate {
         l.active = i;
-        if let Some(TopTab::Scene(r)) = l.tabs.get(i) {
+        if let Some(TopTab::Blueprint(r)) = l.tabs.get(i) {
             let r = r.clone();
-            st.open_scene(&r);
-            l.last_scene = st.scene_res.clone();
+            st.open_blueprint(&r);
+            l.last_blueprint = st.blueprint_res.clone();
         }
     }
     if let Some(i) = close {
         match l.tabs.remove(i) {
-            TopTab::Scene(r) => {
-                // Closing the tab keeps unsaved changes if a workspace window still shows the scene.
-                let in_use = l.workspaces.iter().any(|w| w.windows.iter().any(|x| matches!(&x.kind, WinKind::Scene { res, .. } | WinKind::Events { res, .. } if *res == r)));
+            TopTab::Blueprint(r) => {
+                // Closing the tab keeps unsaved changes if a workspace window still shows the blueprint.
+                let in_use = l.workspaces.iter().any(|w| w.windows.iter().any(|x| matches!(&x.kind, WinKind::Blueprint { res, .. } | WinKind::Events { res, .. } if *res == r)));
                 if !in_use && !st.is_dirty(&r) {
-                    st.close_scene_res(&r);
+                    st.close_blueprint_res(&r);
                 }
             }
             TopTab::Workspace(w) => {
@@ -501,24 +501,24 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
             }
         }
         l.active = l.active.min(l.tabs.len().saturating_sub(1));
-        if let Some(TopTab::Scene(r)) = l.tabs.get(l.active) {
+        if let Some(TopTab::Blueprint(r)) = l.tabs.get(l.active) {
             let r = r.clone();
-            st.open_scene(&r);
+            st.open_blueprint(&r);
         }
-        l.last_scene = st.scene_res.clone();
+        l.last_blueprint = st.blueprint_res.clone();
     }
 }
 
-/// A scene's own tab: its instances and their properties on the left, the view in the middle.
-fn scene_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &str, rs: Option<&egui_wgpu::RenderState>, viewport_tex: &mut Option<egui::TextureId>) {
-    if st.scene_res.as_deref() != Some(res) && st.playing.is_none() {
-        st.open_scene(res);
-        l.last_scene = st.scene_res.clone();
+/// A blueprint's own tab: its instances and their properties on the left, the view in the middle.
+fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &str, rs: Option<&egui_wgpu::RenderState>, viewport_tex: &mut Option<egui::TextureId>) {
+    if st.blueprint_res.as_deref() != Some(res) && st.playing.is_none() {
+        st.open_blueprint(res);
+        l.last_blueprint = st.blueprint_res.clone();
     }
     let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0);
-    egui::Panel::left("scene tab side").resizable(true).default_size(290.0).frame(glass).show(ui, |ui| {
-        egui::Panel::bottom("scene tab inspector").resizable(true).default_size(ui.available_height() * 0.6).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
-            let id = egui::Id::new("scene tab side events");
+    egui::Panel::left("blueprint tab side").resizable(true).default_size(290.0).frame(glass).show(ui, |ui| {
+        egui::Panel::bottom("blueprint tab inspector").resizable(true).default_size(ui.available_height() * 0.6).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
+            let id = egui::Id::new("blueprint tab side events");
             let mut ev: bool = ui.data(|d| d.get_temp(id).unwrap_or(false));
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut ev, false, "Properties");
@@ -534,8 +534,8 @@ fn scene_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &str,
         });
         ui.horizontal(|ui| {
             theme::title(ui, "Instances");
-            if ui.small_button("Open as window").on_hover_text("Open this scene's window in the workspace (its nodes, properties and events)").clicked() {
-                l.open_scene_window(res);
+            if ui.small_button("Open as window").on_hover_text("Open this blueprint's window in the workspace (its objects, properties and events)").clicked() {
+                l.open_blueprint_window(res);
             }
         });
         panels::hierarchy(ui, st);
@@ -576,10 +576,10 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
     }
     let pan = Vec2::from(l.workspaces[wi].pan);
     let origin = rect.min + pan;
-    // A scene or script dropped from Assets opens as a window where it was dropped.
+    // A blueprint or script dropped from Assets opens as a window where it was dropped.
     if let Some(p) = bg.dnd_release_payload::<panels::AssetPath>() {
-        let kind = if p.0.ends_with(".jscene") {
-            Some(WinKind::Scene { res: p.0.clone(), node: String::new() })
+        let kind = if p.0.ends_with(".jblueprint") {
+            Some(WinKind::Blueprint { res: p.0.clone(), object: String::new() })
         } else if p.0.ends_with(".jlb") && p.0.starts_with("res://") {
             Some(WinKind::Script { res: p.0.clone() })
         } else {
@@ -607,17 +607,17 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         y += step;
     }
     let wins = l.workspaces[wi].windows.clone();
-    if wins.is_empty() && st.scene_res.is_none() && st.playing.is_none() {
-        // A project with nothing in it yet: offer the first scene.
+    if wins.is_empty() && st.blueprint_res.is_none() && st.playing.is_none() {
+        // A project with nothing in it yet: offer the first blueprint.
         let r = Rect::from_center_size(rect.center(), Vec2::new(360.0, 80.0));
         let mut c = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Center)));
-        c.label(RichText::new("This project is empty. Start with a scene:").color(theme::TEXT_DIM));
+        c.label(RichText::new("This project is empty. Start with a blueprint:").color(theme::TEXT_DIM));
         c.add_space(6.0);
         c.horizontal(|ui| {
             ui.add_space(86.0);
-            for (label, k) in [("New 2D scene", gex_core::NodeKind::Node2D), ("New 3D scene", gex_core::NodeKind::Node3D)] {
+            for (label, k) in [("New 2D blueprint", gex_core::ObjectKind::Object2D), ("New 3D blueprint", gex_core::ObjectKind::Object3D)] {
                 if ui.button(label).clicked() {
-                    st.new_scene_file("res://scenes", k);
+                    st.new_blueprint_file("res://blueprints", k);
                 }
             }
         });
@@ -625,7 +625,7 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
-            "Double-click a scene or script in Assets to open it here.\nDrag the background to look around.",
+            "Double-click a blueprint or script in Assets to open it here.\nDrag the background to look around.",
             egui::FontId::proportional(14.0),
             theme::TEXT_DIM,
         );
@@ -647,7 +647,7 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
     let mut front = None;
     let mut close = None;
     let mut opened: Vec<(WinKind, u64)> = Vec::new();
-    let mut set_node: Vec<(u64, String)> = Vec::new();
+    let mut set_object: Vec<(u64, String)> = Vec::new();
     let mut open_tab: Option<String> = None;
     for w in &wins {
         let wr = rect_of(w);
@@ -666,8 +666,8 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         let title_r = Rect::from_min_size(wr.min, Vec2::new(wr.width(), 26.0));
         p.add(theme::header(title_r.shrink2(Vec2::new(1.0, 1.0)), false));
         let (icon, title) = match &w.kind {
-            WinKind::Scene { res, .. } => ("Scene", format!("{}{}", short(res), if st.is_dirty(res) { " *" } else { "" })),
-            WinKind::Events { res, node } => ("Events", format!("{}", if node.is_empty() { short(res) } else { node.rsplit('/').next().unwrap_or(node).to_string() })),
+            WinKind::Blueprint { res, .. } => ("Blueprint", format!("{}{}", short(res), if st.is_dirty(res) { " *" } else { "" })),
+            WinKind::Events { res, object } => ("Events", format!("{}", if object.is_empty() { short(res) } else { object.rsplit('/').next().unwrap_or(object).to_string() })),
             WinKind::Script { res } => ("Script", format!("{}{}", short(res), if st.scripts.get(res).is_some_and(|s| s.dirty()) { " *" } else { "" })),
             WinKind::Tool { name } => ("", name.clone()),
         };
@@ -692,26 +692,26 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         cui.set_clip_rect(body.intersect(rect));
         let before = st.open_requests.len();
         match &w.kind {
-            WinKind::Scene { res, node } => {
-                if let Some((new_node, events, tab)) = scene_window(&mut cui, st, res, node, w.id) {
-                    if new_node != *node {
-                        set_node.push((w.id, new_node.clone()));
+            WinKind::Blueprint { res, object } => {
+                if let Some((new_object, events, tab)) = blueprint_window(&mut cui, st, res, object, w.id) {
+                    if new_object != *object {
+                        set_object.push((w.id, new_object.clone()));
                     }
                     if events {
-                        opened.push((WinKind::Events { res: res.clone(), node: new_node }, w.id));
+                        opened.push((WinKind::Events { res: res.clone(), object: new_object }, w.id));
                     }
                     if tab {
                         open_tab = Some(res.clone());
                     }
                 }
             }
-            WinKind::Events { res, node } => {
+            WinKind::Events { res, object } => {
                 if st.playing.is_some() {
                     cui.label(RichText::new("Stop the game to change events.").color(theme::TEXT_DIM));
                 } else {
-                    let node = node.clone();
-                    st.with_scene(res, |st| {
-                        let id = st.tree.find_path(None, &node).or(st.tree.root);
+                    let object = object.clone();
+                    st.with_blueprint(res, |st| {
+                        let id = st.tree.find_path(None, &object).or(st.tree.root);
                         st.selected = id;
                         st.selection = id.into_iter().collect();
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut cui, |ui| panels::events(ui, st));
@@ -768,10 +768,10 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
             w.size[1] = (w.size[1] + d.y).max(140.0);
         }
     }
-    for (id, node) in set_node {
+    for (id, object) in set_object {
         if let Some(w) = ws.windows.iter_mut().find(|w| w.id == id) {
-            if let WinKind::Scene { node: n, .. } = &mut w.kind {
-                *n = node;
+            if let WinKind::Blueprint { object: n, .. } = &mut w.kind {
+                *n = object;
             }
         }
     }
@@ -790,7 +790,7 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         }
     }
     for (kind, from) in opened {
-        // An events window replaces the one this scene window opened before.
+        // An events window replaces the one this blueprint window opened before.
         if let WinKind::Events { res, .. } = &kind {
             let res = res.clone();
             l.workspaces[wi].windows.retain(|w| !(matches!(&w.kind, WinKind::Events { res: r, .. } if *r == res) && w.parent == Some(from)));
@@ -809,9 +809,9 @@ fn canvas(ui: &mut egui::Ui, l: &mut Layout, wi: usize, st: &mut EditorState) {
         }
     }
     if let Some(r) = open_tab {
-        st.open_scene(&r);
-        l.open_scene_tab(&r);
-        l.last_scene = st.scene_res.clone();
+        st.open_blueprint(&r);
+        l.open_blueprint_tab(&r);
+        l.last_blueprint = st.blueprint_res.clone();
     }
 }
 
@@ -819,40 +819,40 @@ fn short(res: &str) -> String {
     res.rsplit('/').next().unwrap_or(res).to_string()
 }
 
-/// A scene window: buttons, its nodes, and the picked node's properties. Gives back the picked
-/// node's path, and whether its events or its own tab were asked for.
-fn scene_window(ui: &mut egui::Ui, st: &mut EditorState, res: &str, node: &str, win: u64) -> Option<(String, bool, bool)> {
+/// A blueprint window: buttons, its objects, and the picked object's properties. Gives back the picked
+/// object's path, and whether its events or its own tab were asked for.
+fn blueprint_window(ui: &mut egui::Ui, st: &mut EditorState, res: &str, object: &str, win: u64) -> Option<(String, bool, bool)> {
     if st.playing.is_some() {
-        ui.label(RichText::new("Stop the game to edit scenes here.").color(theme::TEXT_DIM));
-        return Some((node.to_string(), false, false));
+        ui.label(RichText::new("Stop the game to edit blueprints here.").color(theme::TEXT_DIM));
+        return Some((object.to_string(), false, false));
     }
-    let r = st.with_scene(res, |st| {
-        let mut picked = st.tree.find_path(None, node).or(st.tree.root);
+    let r = st.with_blueprint(res, |st| {
+        let mut picked = st.tree.find_path(None, object).or(st.tree.root);
         let mut events = false;
         let mut tab = false;
         ui.horizontal(|ui| {
-            if ui.button("Open in tab").on_hover_text("Open the scene in its own tab, to place and edit instances").clicked() {
+            if ui.button("Open in tab").on_hover_text("Open the blueprint in its own tab, to place and edit instances").clicked() {
                 tab = true;
             }
-            if ui.button("Events").on_hover_text("The events of the picked node's scripts").clicked() {
+            if ui.button("Events").on_hover_text("The events of the picked object's scripts").clicked() {
                 events = true;
             }
-            let dirty = st.scene_dirty();
+            let dirty = st.blueprint_dirty();
             if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
-                st.save_scene();
+                st.save_blueprint();
             }
         });
-        // The scene's nodes (a template can have children: a gun on a player, a hitbox).
+        // The blueprint's objects (a template can have children: a gun on a player, a hitbox).
         let ids = st.tree.walk();
         if ids.len() > 1 {
-            egui::CollapsingHeader::new(format!("Nodes ({})", ids.len())).id_salt(("ws nodes", win)).default_open(ids.len() <= 8).show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(140.0).id_salt(("ws nodes scroll", win)).show(ui, |ui| {
+            egui::CollapsingHeader::new(format!("Objects ({})", ids.len())).id_salt(("ws objects", win)).default_open(ids.len() <= 8).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(140.0).id_salt(("ws objects scroll", win)).show(ui, |ui| {
                     for id in &ids {
-                        let n = &st.tree.nodes[*id];
+                        let n = &st.tree.objects[*id];
                         let depth = st.tree.path_of(*id).matches('/').count().saturating_sub(1);
                         ui.horizontal(|ui| {
                             ui.add_space(depth as f32 * 12.0);
-                            if crate::icons::row(ui, st, &crate::icons::node(&st.tree, *id), RichText::new(&n.name), picked == Some(*id)).clicked() {
+                            if crate::icons::row(ui, st, &crate::icons::object(&st.tree, *id), RichText::new(&n.name), picked == Some(*id)).clicked() {
                                 picked = Some(*id);
                             }
                         });
@@ -883,19 +883,19 @@ mod tests {
     #[test]
     fn windows_tabs_and_saving() {
         let mut l = Layout::default();
-        let a = l.open_window(0, WinKind::Scene { res: "res://a.jscene".into(), node: String::new() }, None);
-        let e = l.open_window(0, WinKind::Events { res: "res://a.jscene".into(), node: String::new() }, Some(a));
+        let a = l.open_window(0, WinKind::Blueprint { res: "res://a.jblueprint".into(), object: String::new() }, None);
+        let e = l.open_window(0, WinKind::Events { res: "res://a.jblueprint".into(), object: String::new() }, Some(a));
         // Opening the same thing again brings it forward instead of making another.
-        assert_eq!(l.open_window(0, WinKind::Scene { res: "res://a.jscene".into(), node: String::new() }, None), a);
+        assert_eq!(l.open_window(0, WinKind::Blueprint { res: "res://a.jblueprint".into(), object: String::new() }, None), a);
         assert_eq!(l.workspaces[0].windows.len(), 2);
         let ev = l.workspaces[0].windows.iter().find(|w| w.id == e).unwrap();
         let sc = l.workspaces[0].windows.iter().find(|w| w.id == a).unwrap();
         assert_eq!(ev.parent, Some(a));
         assert!(ev.pos[0] > sc.pos[0] + sc.size[0], "events open to the right");
-        l.open_scene_tab("res://a.jscene");
-        l.open_scene_tab("res://a.jscene");
+        l.open_blueprint_tab("res://a.jblueprint");
+        l.open_blueprint_tab("res://a.jblueprint");
         assert_eq!(l.tabs.len(), 2);
-        assert_eq!(l.tabs[l.active], TopTab::Scene("res://a.jscene".into()));
+        assert_eq!(l.tabs[l.active], TopTab::Blueprint("res://a.jblueprint".into()));
         let dir = std::env::temp_dir().join(format!("gex-ws-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         l.save(&dir);

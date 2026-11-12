@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Gem",
-    kind: Some(Node3D),
+    kind: Some(Object3D),
     props: {"gem": Bool(true)},
     scripts: ["res://scripts/gem.jlb"],
     groups: ["gems"],

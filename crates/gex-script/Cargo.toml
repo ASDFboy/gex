@@ -1,6 +1,6 @@
 [package]
 name = "gex-script"
-description = "Runs JLB scripts on nodes: events, engine commands, the game loop"
+description = "Runs JLB scripts on objects: events, engine commands, the game loop"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

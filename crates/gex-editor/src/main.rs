@@ -2,7 +2,7 @@
 //!
 //!   gex                  the project library
 //!   gex <project folder> open a project
-//!   gex --play <folder>  run a project's main scene
+//!   gex --play <folder>  run a project's main blueprint
 
 // No console window behind the editor on Windows (release builds).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]

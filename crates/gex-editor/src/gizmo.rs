@@ -1,6 +1,6 @@
-//! The handles drawn on the selected node in the scene view: arrows (move), rings (rotate)
+//! The handles drawn on the selected object in the blueprint view: arrows (move), rings (rotate)
 //! and boxes (scale) for one axis, small two-colored squares for two axes at once. Dragging
-//! the node itself, away from any handle, works relative to the camera.
+//! the object itself, away from any handle, works relative to the camera.
 
 use eframe::egui::{self, Color32, Pos2, Stroke};
 use gex_core::glam::{Quat, Vec2, Vec3};
@@ -14,7 +14,7 @@ pub enum Handle {
     Axis(usize),
     /// The two axes other than this one.
     Plane(usize),
-    /// The node itself: every axis, relative to the camera.
+    /// The object itself: every axis, relative to the camera.
     Free,
 }
 
@@ -33,7 +33,7 @@ const LEN: f32 = 78.0;
 const COLORS: [Color32; 3] = [Color32::from_rgb(0xe5, 0x48, 0x4d), Color32::from_rgb(0x7f, 0xc8, 0x3c), Color32::from_rgb(0x4c, 0x8d, 0xf0)];
 
 impl Gizmo {
-    /// `rot` is the selected node's world rotation: scaling works along the node's own axes.
+    /// `rot` is the selected object's world rotation: scaling works along the object's own axes.
     pub fn new(cams: &Cameras, mode_3d: bool, tool: Tool, pivot: Vec3, rot: Quat, ppp: f32) -> Option<Gizmo> {
         let axes = if tool == Tool::Scale { [rot * Vec3::X, rot * Vec3::Y, rot * Vec3::Z] } else { [Vec3::X, Vec3::Y, Vec3::Z] };
         let mut g = Gizmo { pivot, axes, k: 1.0, mode_3d, tool };
@@ -146,7 +146,7 @@ impl Gizmo {
         let color = |h: Handle, i: usize| if lit == Some(h) { Color32::from_rgb(0xff, 0xe0, 0x66) } else { COLORS[i] };
         if self.tool == Tool::Rotate {
             if self.mode_3d {
-                // The outer ring: turning about the line of sight (what dragging the node does).
+                // The outer ring: turning about the line of sight (what dragging the object does).
                 p.circle_stroke(pt(c), LEN * 1.08, Stroke::new(1.0, Color32::from_gray(if lit == Some(Handle::Free) { 230 } else { 130 })));
             }
             for i in self.ring_axes() {

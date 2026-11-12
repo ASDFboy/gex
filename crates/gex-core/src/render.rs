@@ -4,8 +4,8 @@
 
 use glam::{Mat4, Vec2, Vec3};
 
-use crate::node::{NodeId, NodeKind};
-use crate::tree::SceneTree;
+use crate::object::{ObjectId, ObjectKind};
+use crate::tree::BlueprintTree;
 
 /// Which part of a sprite's texture to show.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -40,8 +40,8 @@ impl Blend {
     }
 }
 
-/// A node's own texture filtering: None follows the project's setting.
-pub fn filter_of(n: &crate::Node) -> Option<bool> {
+/// An object's own texture filtering: None follows the project's setting.
+pub fn filter_of(n: &crate::Object) -> Option<bool> {
     match n.text("filter") {
         "pixel" => Some(true),
         "smooth" => Some(false),
@@ -49,12 +49,12 @@ pub fn filter_of(n: &crate::Node) -> Option<bool> {
     }
 }
 
-/// The color every node passes down to its children (`modulate`), multiplied up the tree.
-pub fn inherited_modulate(tree: &SceneTree, id: NodeId) -> [f32; 4] {
+/// The color every object passes down to its children (`modulate`), multiplied up the tree.
+pub fn inherited_modulate(tree: &BlueprintTree, id: ObjectId) -> [f32; 4] {
     let mut c = [1.0f32; 4];
-    let mut cur = tree.nodes[id].parent;
+    let mut cur = tree.objects[id].parent;
     while let Some(p) = cur {
-        let n = &tree.nodes[p];
+        let n = &tree.objects[p];
         if let Some(v) = n.props.get("modulate") {
             let m = v.as_color();
             for k in 0..4 {
@@ -66,9 +66,9 @@ pub fn inherited_modulate(tree: &SceneTree, id: NodeId) -> [f32; 4] {
     c
 }
 
-/// A node's own color: its color times its opacity, its own modulate and its parents'.
-pub fn tinted(tree: &SceneTree, id: NodeId, color: [f32; 4]) -> [f32; 4] {
-    let n = &tree.nodes[id];
+/// An object's own color: its color times its opacity, its own modulate and its parents'.
+pub fn tinted(tree: &BlueprintTree, id: ObjectId, color: [f32; 4]) -> [f32; 4] {
+    let n = &tree.objects[id];
     let mut m = inherited_modulate(tree, id);
     if let Some(v) = n.props.get("modulate") {
         let own = v.as_color();
@@ -82,8 +82,8 @@ pub fn tinted(tree: &SceneTree, id: NodeId, color: [f32; 4]) -> [f32; 4] {
 
 #[derive(Clone, Debug)]
 pub struct Sprite {
-    pub node: NodeId,
-    /// World transform of the node (2D: x, y in pixels, rotation about z).
+    pub object: ObjectId,
+    /// World transform of the object (2D: x, y in pixels, rotation about z).
     pub model: Mat4,
     pub size: Vec2,
     pub centered: bool,
@@ -106,7 +106,7 @@ pub struct Sprite {
 impl Default for Sprite {
     fn default() -> Self {
         Sprite {
-            node: NodeId::default(),
+            object: ObjectId::default(),
             model: Mat4::IDENTITY,
             size: Vec2::ONE,
             centered: false,
@@ -127,19 +127,19 @@ impl Default for Sprite {
 /// A Light2D: brightens the dark set by a Camera2D's `ambient`.
 #[derive(Clone, Debug)]
 pub struct Light2DDraw {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub pos: Vec2,
     pub radius: f32,
     pub color: [f32; 4],
     pub texture: String,
 }
 
-/// A UI node, drawn in game-window pixels (by the editor/player, on top of the game).
+/// A UI object, drawn in game-window pixels (by the editor/player, on top of the game).
 #[derive(Clone, Debug)]
 pub struct UiItem {
-    pub node: NodeId,
-    pub kind: NodeKind,
-    /// Position from the node's transform, before the anchor is applied.
+    pub object: ObjectId,
+    pub kind: ObjectKind,
+    /// Position from the object's transform, before the anchor is applied.
     pub pos: Vec2,
     pub size: Vec2,
     pub props: std::collections::BTreeMap<String, crate::Variant>,
@@ -166,7 +166,7 @@ impl UiItem {
 
 #[derive(Clone, Debug)]
 pub struct Label {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub pos: Vec2,
     pub text: String,
     pub size: f32,
@@ -178,7 +178,7 @@ pub struct Label {
 
 #[derive(Clone, Debug)]
 pub struct MeshDraw {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub model: Mat4,
     /// "cube", "sphere", "plane", or a model resource path.
     pub mesh: String,
@@ -229,9 +229,9 @@ pub struct MeshDraw {
 }
 
 impl MeshDraw {
-    pub fn new(node: NodeId, model: Mat4, mesh: &str) -> MeshDraw {
+    pub fn new(object: ObjectId, model: Mat4, mesh: &str) -> MeshDraw {
         MeshDraw {
-            node,
+            object,
             model,
             mesh: mesh.to_string(),
             color: [1.0; 4],
@@ -270,7 +270,7 @@ impl MeshDraw {
 /// Text placed in the 3D world (drawn on top, facing the screen).
 #[derive(Clone, Debug)]
 pub struct Label3D {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub pos: Vec3,
     pub text: String,
     pub size: f32,
@@ -358,7 +358,7 @@ pub struct Camera3D {
 
 #[derive(Clone, Debug)]
 pub struct Rect2D {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub model: Mat4,
     pub size: Vec2,
 }
@@ -380,7 +380,7 @@ pub struct RenderList {
     pub lines_2d: Vec<([f32; 2], [f32; 2], [f32; 4])>,
     /// The game wants the mouse hidden and held in the window (MOUSE_LOCK).
     pub mouse_locked: bool,
-    /// A color over the whole game (fading between scenes); alpha 0 = none.
+    /// A color over the whole game (fading between blueprints); alpha 0 = none.
     pub fade: [f32; 4],
     pub labels_3d: Vec<Label3D>,
     /// 2D lighting: the dark (from the Camera2D's ambient; white = none) and the lights in it.
@@ -404,7 +404,7 @@ fn rgb(c: [f32; 4]) -> [f32; 3] {
 }
 
 /// The look settings every 3D drawable shares.
-fn mesh_look(n: &crate::Node, base: MeshDraw) -> MeshDraw {
+fn mesh_look(n: &crate::Object, base: MeshDraw) -> MeshDraw {
     let b = |k: &str, d: bool| n.prop(k).map_or(d, |v| v.as_bool());
     MeshDraw {
         blend_mode: Blend::from_name(n.text("blend")),
@@ -420,20 +420,20 @@ fn mesh_look(n: &crate::Node, base: MeshDraw) -> MeshDraw {
     }
 }
 
-pub fn extract(tree: &SceneTree) -> RenderList {
+pub fn extract(tree: &BlueprintTree) -> RenderList {
     let mut out = RenderList { clear: [0.08, 0.08, 0.1, 1.0], ambient_2d: [1.0; 4], ..Default::default() };
     for id in tree.walk() {
         if !tree.visible_in_tree(id) {
             continue;
         }
-        let n = &tree.nodes[id];
+        let n = &tree.objects[id];
         let model = tree.global_matrix(id);
         let blend = Blend::from_name(n.text("blend"));
         let pixel = filter_of(n);
         let lit = n.prop("lit").is_none_or(|v| v.as_bool());
         match n.kind {
-            NodeKind::Sprite2D => out.sprites.push(Sprite {
-                node: id,
+            ObjectKind::Sprite2D => out.sprites.push(Sprite {
+                object: id,
                 model,
                 size: Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32),
                 centered: n.prop("centered").is_none_or(|v| v.as_bool()),
@@ -451,7 +451,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 parallax: Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32),
                 repeat: [n.prop("repeat_x").is_some_and(|v| v.as_bool()), n.prop("repeat_y").is_some_and(|v| v.as_bool())],
             }),
-            NodeKind::TileMap2D => {
+            ObjectKind::TileMap2D => {
                 let grid = crate::tiles::parse(n.text("tiles"));
                 let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
                 let tex = n.text("tileset").to_string();
@@ -465,7 +465,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                         }
                         let local = Mat4::from_translation(Vec3::new(c as f32 * tw, r as f32 * th, 0.0));
                         out.sprites.push(Sprite {
-                            node: id,
+                            object: id,
                             model: model * local,
                             size: Vec2::new(tw, th),
                             centered: false,
@@ -486,13 +486,13 @@ pub fn extract(tree: &SceneTree) -> RenderList {
             k if k.is_ui() => {
                 let p = model.w_axis.truncate().truncate();
                 let mut props = n.props.clone();
-                // The UI layer reads one opacity: this node's, times its parents' modulate alpha.
+                // The UI layer reads one opacity: this object's, times its parents' modulate alpha.
                 let t = tinted(tree, id, [1.0; 4]);
                 props.insert("opacity".into(), crate::Variant::Num(t[3] as f64));
-                out.ui.push(UiItem { node: id, kind: k, pos: p, size: Vec2::new(n.num("width", 100.0) as f32, n.num("height", 30.0) as f32), props });
+                out.ui.push(UiItem { object: id, kind: k, pos: p, size: Vec2::new(n.num("width", 100.0) as f32, n.num("height", 30.0) as f32), props });
             }
-            NodeKind::Label2D => out.labels.push(Label {
-                node: id,
+            ObjectKind::Label2D => out.labels.push(Label {
+                object: id,
                 pos: model.w_axis.truncate().truncate(),
                 text: n.text("text").to_string(),
                 size: n.num("size", 16.0) as f32,
@@ -500,22 +500,22 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 layer: n.num("layer", 10.0) as f32,
                 font: n.text("font").to_string(),
             }),
-            NodeKind::Collider2D => out.colliders.push(Rect2D {
-                node: id,
+            ObjectKind::Collider2D => out.colliders.push(Rect2D {
+                object: id,
                 model,
                 size: Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32),
             }),
-            NodeKind::Body2D => {
+            ObjectKind::Body2D => {
                 let circle = matches!(n.text("shape"), "circle" | "ball");
                 let r = n.num("radius", 16.0) as f32 * 2.0;
                 out.colliders.push(Rect2D {
-                    node: id,
+                    object: id,
                     model,
                     size: if circle { Vec2::splat(r) } else { Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32) },
                 });
             }
-            NodeKind::Light2D => out.lights_2d.push(Light2DDraw {
-                node: id,
+            ObjectKind::Light2D => out.lights_2d.push(Light2DDraw {
+                object: id,
                 pos: model.w_axis.truncate().truncate(),
                 radius: n.num("radius", 200.0) as f32 * model.x_axis.truncate().length(),
                 color: {
@@ -525,7 +525,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                 },
                 texture: n.text("texture").to_string(),
             }),
-            NodeKind::Camera2D => {
+            ObjectKind::Camera2D => {
                 if n.prop("current").is_none_or(|v| v.as_bool()) && out.camera2d.is_none() {
                     out.ambient_2d = n.color("ambient");
                     let (_, rot, pos) = model.to_scale_rotation_translation();
@@ -536,7 +536,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     });
                 }
             }
-            NodeKind::Mesh3D => {
+            ObjectKind::Mesh3D => {
                 let whole = MeshDraw {
                 color: tinted(tree, id, n.color("color")),
                 texture: n.text("texture").to_string(),
@@ -591,7 +591,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     out.meshes.push(whole);
                 }
             }
-            NodeKind::Sprite3D => {
+            ObjectKind::Sprite3D => {
                 let (w, h) = (n.num("width", 1.0) as f32, n.num("height", 1.0) as f32);
                 out.meshes.push(MeshDraw {
                     color: tinted(tree, id, n.color("color")),
@@ -603,15 +603,15 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     ..mesh_look(n, MeshDraw::new(id, model * Mat4::from_scale(Vec3::new(w, h, 1.0)), "quad"))
                 });
             }
-            NodeKind::Label3D => out.labels_3d.push(Label3D {
-                node: id,
+            ObjectKind::Label3D => out.labels_3d.push(Label3D {
+                object: id,
                 pos: model.w_axis.truncate(),
                 text: n.text("text").to_string(),
                 size: n.num("size", 24.0) as f32,
                 color: tinted(tree, id, n.color("color")),
                 font: n.text("font").to_string(),
             }),
-            NodeKind::Environment => {
+            ObjectKind::Environment => {
                 if out.environment.is_none() {
                     let a = n.color("ambient");
                     let e = n.num("ambient_energy", 0.35) as f32;
@@ -639,7 +639,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     });
                 }
             }
-            NodeKind::Camera3D => {
+            ObjectKind::Camera3D => {
                 if n.prop("current").is_none_or(|v| v.as_bool()) && out.camera3d.is_none() {
                     out.camera3d = Some(Camera3D {
                         world: model,
@@ -650,7 +650,7 @@ pub fn extract(tree: &SceneTree) -> RenderList {
                     });
                 }
             }
-            NodeKind::Light3D => {
+            ObjectKind::Light3D => {
                 let c = tinted(tree, id, n.color("color"));
                 let e = n.num("energy", 1.0) as f32;
                 out.lights.push(LightDraw {

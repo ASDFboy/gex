@@ -1,7 +1,7 @@
 //! What each built-in property is: which section of the Inspector it sits in, the
 //! choices or range it takes, and a line of help (shown on hover and in the docs).
 
-use crate::node::NodeKind;
+use crate::object::ObjectKind;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PropInfo {
@@ -17,8 +17,8 @@ const FILTER: &[&str] = &["project", "pixel", "smooth"];
 const ANCHOR: &[&str] = &["top_left", "top", "top_right", "left", "center", "right", "bottom_left", "bottom", "bottom_right"];
 
 /// The Inspector section a property belongs in.
-fn group(kind: NodeKind, k: &str) -> &'static str {
-    use NodeKind::*;
+fn group(kind: ObjectKind, k: &str) -> &'static str {
+    use ObjectKind::*;
     match kind {
         Light3D => match k {
             "shadows" | "shadow_strength" | "shadow_bias" => "Shadows",
@@ -59,8 +59,8 @@ fn group(kind: NodeKind, k: &str) -> &'static str {
 }
 
 /// Everything known about a built-in property (custom properties get the defaults).
-pub fn info(kind: NodeKind, k: &str) -> PropInfo {
-    use NodeKind::*;
+pub fn info(kind: ObjectKind, k: &str) -> PropInfo {
+    use ObjectKind::*;
     let g = group(kind, k);
     let p = |choices: &'static [&'static str], range: Option<(f64, f64)>, doc: &'static str| PropInfo { group: g, choices, range, doc };
     match (kind, k) {
@@ -69,7 +69,7 @@ pub fn info(kind: NodeKind, k: &str) -> PropInfo {
         (_, "blend") => p(BLEND, None, "How it mixes with what's behind: normal covers, add glows (fire, lasers), multiply darkens (shadows, stains)."),
         (_, "filter") => p(FILTER, None, "Texture filtering: pixel keeps texels blocky, smooth blends them, project uses the project's setting."),
         (_, "lit") => p(&[], None, "Darkened by 2D lighting. Off: always full brightness (drawn above lit sprites), for glowing things and HUD-like sprites."),
-        (_, "modulate") => p(&[], None, "A color multiplied into this node and everything under it (alpha fades the whole group)."),
+        (_, "modulate") => p(&[], None, "A color multiplied into this object and everything under it (alpha fades the whole group)."),
         (_, "sides") => p(&["auto", "front", "both"], None, "Which faces draw: front only, both (thin things like leaves and paper), or auto (planes both, solids front)."),
         (_, "emissive") => p(&[], Some((0.0, 10.0)), "How much it glows on its own, without light (works with bloom)."),
         (_, "emissive_color") => p(&[], None, "The color of its glow."),
@@ -154,7 +154,7 @@ pub fn info(kind: NodeKind, k: &str) -> PropInfo {
 }
 
 /// The Inspector sections of a kind, in order (Main first).
-pub fn groups(kind: NodeKind) -> Vec<&'static str> {
+pub fn groups(kind: ObjectKind) -> Vec<&'static str> {
     let mut out = vec!["Main"];
     for (k, _) in kind.default_props() {
         let g = group(kind, k);
@@ -168,7 +168,7 @@ pub fn groups(kind: NodeKind) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::ALL_KINDS;
+    use crate::object::ALL_KINDS;
 
     #[test]
     fn choices_include_the_default() {
@@ -181,7 +181,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(info(NodeKind::Mesh3D, "rim").group, "Look");
-        assert_eq!(groups(NodeKind::Body3D)[0], "Main");
+        assert_eq!(info(ObjectKind::Mesh3D, "rim").group, "Look");
+        assert_eq!(groups(ObjectKind::Body3D)[0], "Main");
     }
 }

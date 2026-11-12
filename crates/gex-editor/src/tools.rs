@@ -35,8 +35,8 @@ pub fn profiler(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.label("  physics");
         ui.label(format!("{:.2} ms", physics));
         ui.end_row();
-        ui.label("Nodes / sprites / meshes");
-        ui.label(format!("{} / {} / {}", last.nodes, last.sprites, last.meshes));
+        ui.label("Objects / sprites / meshes");
+        ui.label(format!("{} / {} / {}", last.objects, last.sprites, last.meshes));
         ui.end_row();
     });
     // The last few seconds of frame times, as bars (green under 16.7 ms, yellow under 33, red above).
@@ -115,7 +115,7 @@ pub fn search_window(ctx: &egui::Context, st: &mut EditorState) {
 pub fn search(ui: &mut egui::Ui, st: &mut EditorState) {
     let mut go = false;
     ui.horizontal(|ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut st.search.query).hint_text("find in every script and scene…").desired_width(ui.available_width() - 120.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut st.search.query).hint_text("find in every script and blueprint…").desired_width(ui.available_width() - 120.0));
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             go = true;
         }
@@ -148,9 +148,9 @@ pub fn search(ui: &mut egui::Ui, st: &mut EditorState) {
     });
     if let Some((file, line)) = open {
         st.search.open = false;
-        if file.ends_with(".jscene") {
+        if file.ends_with(".jblueprint") {
             if st.playing.is_none() {
-                st.open_scene(&file);
+                st.open_blueprint(&file);
             }
         } else {
             st.open_script(&file, Some(line));
@@ -167,7 +167,7 @@ pub fn find_in_files(dir: &std::path::Path, query: &str, case: bool) -> Vec<(Str
             }
             if p.is_dir() {
                 walk(&p, out);
-            } else if matches!(p.extension().and_then(|x| x.to_str()), Some("jlb" | "jscene" | "jproj" | "txt" | "wgsl" | "json" | "md")) {
+            } else if matches!(p.extension().and_then(|x| x.to_str()), Some("jlb" | "jblueprint" | "jproj" | "txt" | "wgsl" | "json" | "md")) {
                 out.push(p);
             }
         }
@@ -200,9 +200,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gex-find-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         crate::templates::create_demo(&dir).unwrap();
-        let r = super::find_in_files(&dir, "change_scene", false);
+        let r = super::find_in_files(&dir, "change_blueprint", false);
         assert!(r.iter().any(|(f, _, _)| f == "res://scripts/menu.jlb"));
-        assert!(r.iter().all(|(_, l, t)| *l > 0 && t.to_lowercase().contains("change_scene")));
-        assert!(super::find_in_files(&dir, "change_scene", true).is_empty(), "case matters when asked");
+        assert!(r.iter().all(|(_, l, t)| *l > 0 && t.to_lowercase().contains("change_blueprint")));
+        assert!(super::find_in_files(&dir, "change_blueprint", true).is_empty(), "case matters when asked");
     }
 }

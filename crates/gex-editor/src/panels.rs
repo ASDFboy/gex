@@ -1,29 +1,29 @@
 //! Hierarchy, inspector, events, assets and console panels.
 
 use eframe::egui::{self, Color32, RichText};
-use gex_core::node::ALL_KINDS;
-use gex_core::{NodeId, NodeKind, Variant};
+use gex_core::object::ALL_KINDS;
+use gex_core::{ObjectId, ObjectKind, Variant};
 use gex_script::LogKind;
 
 use crate::state::EditorState;
 use crate::theme;
 
-pub fn add_node_menu(ui: &mut egui::Ui, st: &mut EditorState) {
-    let groups: [(&str, fn(NodeKind) -> bool); 4] = [
+pub fn add_object_menu(ui: &mut egui::Ui, st: &mut EditorState) {
+    let groups: [(&str, fn(ObjectKind) -> bool); 4] = [
         ("General", |k| !k.is_2d() && !k.is_3d() && !k.is_ui()),
         ("2D", |k| k.is_2d()),
         ("UI (screen space)", |k| k.is_ui()),
         ("3D", |k| k.is_3d()),
     ];
-    // A 2D scene offers no 3D nodes, and the other way round.
-    let root = st.tree.root.map(|r| st.tree.nodes[r].kind);
+    // A 2D blueprint offers no 3D objects, and the other way round.
+    let root = st.tree.root.map(|r| st.tree.objects[r].kind);
     let skip = match root {
         Some(k) if k.is_2d() => "3D",
         Some(k) if k.is_3d() => "2D",
         _ => "",
     };
     theme::fade_in(ui);
-    // One column per kind of node.
+    // One column per kind of object.
     ui.horizontal_top(|ui| {
         for (i, (title, f)) in groups.iter().filter(|g| g.0 != skip).enumerate() {
             if i > 0 {
@@ -32,8 +32,8 @@ pub fn add_node_menu(ui: &mut egui::Ui, st: &mut EditorState) {
             ui.vertical(|ui| {
                 ui.label(RichText::new(*title).color(theme::TEXT_DIM));
                 for k in ALL_KINDS.iter().filter(|k| f(**k)) {
-                    if node_button(ui, st, *k).clicked() {
-                        st.add_node(*k);
+                    if object_button(ui, st, *k).clicked() {
+                        st.add_object(*k);
                         ui.close();
                     }
                 }
@@ -42,16 +42,16 @@ pub fn add_node_menu(ui: &mut egui::Ui, st: &mut EditorState) {
     });
 }
 
-/// A menu row for a kind of node: its icon and name.
-fn node_button(ui: &mut egui::Ui, st: &EditorState, k: NodeKind) -> egui::Response {
+/// A menu row for a kind of object: its icon and name.
+fn object_button(ui: &mut egui::Ui, st: &EditorState, k: ObjectKind) -> egui::Response {
     let r = crate::icons::row(ui, st, &crate::icons::Icon::Silk(crate::icons::kind(k).into()), RichText::new(k.name()), false);
-    crate::docs::on(r, ui, format!("node:{}", k.name()))
+    crate::docs::on(r, ui, format!("object:{}", k.name()))
 }
 
 /// The $variables a script declares (from the open editor, or the file read twice a second).
 fn script_vars_of(ui: &egui::Ui, st: &EditorState, res: &str) -> Vec<String> {
     if let Some(s) = st.scripts.get(res) {
-        return gex_core::node::script_vars(&s.text);
+        return gex_core::object::script_vars(&s.text);
     }
     let id = egui::Id::new(("script vars", res));
     let now = ui.input(|i| i.time);
@@ -60,19 +60,19 @@ fn script_vars_of(ui: &egui::Ui, st: &EditorState, res: &str) -> Vec<String> {
             return v;
         }
     }
-    let v = st.project.read_text(res).map(|t| gex_core::node::script_vars(&t)).unwrap_or_default();
+    let v = st.project.read_text(res).map(|t| gex_core::object::script_vars(&t)).unwrap_or_default();
     ui.data_mut(|d| d.insert_temp(id, (now, v.clone())));
     v
 }
 
 /// Picking a tile to paint with, from the TileMap2D's tileset image.
-fn tile_palette(ui: &mut egui::Ui, st: &mut EditorState, id: NodeId) {
-    let n = &st.tree.nodes[id];
+fn tile_palette(ui: &mut egui::Ui, st: &mut EditorState, id: ObjectId) {
+    let n = &st.tree.objects[id];
     let path = n.text("tileset").to_string();
     let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
     ui.horizontal(|ui| {
         let painting = st.tile_brush.is_some();
-        if ui.selectable_label(painting, "Paint tiles").on_hover_text("LMB paints in the scene view, Shift+LMB erases").clicked() {
+        if ui.selectable_label(painting, "Paint tiles").on_hover_text("LMB paints in the blueprint view, Shift+LMB erases").clicked() {
             st.tile_brush = if painting { None } else { Some(0) };
         }
         if ui.selectable_label(st.tile_brush == Some(-1), "Eraser").clicked() {
@@ -124,15 +124,15 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
     let playing = st.playing.is_some();
     ui.horizontal(|ui| {
         ui.add_enabled_ui(!playing, |ui| {
-            ui.menu_button("+ Node", |ui| add_node_menu(ui, st));
-            ui.menu_button("+ Scene", |ui| { crate::theme::fade_in(ui);
-                let scenes = list_files(st, "res://", "jscene");
-                if scenes.is_empty() {
-                    ui.label("no .jscene files yet");
+            ui.menu_button("+ Object", |ui| add_object_menu(ui, st));
+            ui.menu_button("+ Blueprint", |ui| { crate::theme::fade_in(ui);
+                let blueprints = list_files(st, "res://", "jblueprint");
+                if blueprints.is_empty() {
+                    ui.label("no .jblueprint files yet");
                 }
-                for s in scenes {
+                for s in blueprints {
                     if ui.button(&s).clicked() {
-                        st.instance_scene(&s);
+                        st.instance_blueprint(&s);
                         ui.close();
                     }
                 }
@@ -145,19 +145,19 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
     ui.separator();
     let tree = st.view_tree().clone();
     let Some(root) = tree.root else {
-        ui.label("empty scene");
+        ui.label("empty blueprint");
         return;
     };
     let mut action: Option<Action> = None;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        node_row(ui, st, &tree, root, &mut action, playing);
+        object_row(ui, st, &tree, root, &mut action, playing);
     });
     match action {
         Some(Action::Select(id)) => st.select(Some(id)),
         Some(Action::Toggle(id)) => st.toggle_select(id),
         Some(Action::Reparent(id, to)) if !playing => {
-            if st.tree.nodes[id].from_instance {
-                st.status = "nodes inside an instanced scene can't be moved out of it".into();
+            if st.tree.objects[id].from_instance {
+                st.status = "objects inside an instanced blueprint can't be moved out of it".into();
             } else {
                 st.will_change("move");
                 // Keep where it is in the world.
@@ -166,7 +166,7 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
                     let local = st.tree.global_matrix(to).inverse() * world;
                     let (s2, r, t) = local.to_scale_rotation_translation();
                     let (ry, rx, rz) = r.to_euler(gex_core::glam::EulerRot::YXZ);
-                    let tr = &mut st.tree.nodes[id].transform;
+                    let tr = &mut st.tree.objects[id].transform;
                     tr.position = t;
                     tr.scale = s2;
                     tr.rotation = gex_core::glam::Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees());
@@ -180,10 +180,10 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
             st.delete_selected();
         }
         Some(Action::SaveBranch(id)) if !playing => {
-            st.save_branch_as_scene(id);
+            st.save_branch_as_blueprint(id);
         }
         Some(Action::MakeLocal(id)) if !playing => st.make_local(id),
-        Some(Action::OpenScene(res)) if !playing => st.open_scene(&res),
+        Some(Action::OpenBlueprint(res)) if !playing => st.open_blueprint(&res),
         Some(Action::Duplicate(id)) if !playing => {
             if !st.is_selected(id) {
                 st.select(Some(id));
@@ -191,13 +191,13 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
             st.duplicate_selected();
         }
         Some(Action::Move(id, up)) if !playing => {
-            if let Some(p) = st.tree.nodes[id].parent {
-                let kids = &st.tree.nodes[p].children;
+            if let Some(p) = st.tree.objects[id].parent {
+                let kids = &st.tree.objects[p].children;
                 let i = kids.iter().position(|c| *c == id).unwrap();
                 let j = if up { i.checked_sub(1) } else { (i + 1 < kids.len()).then_some(i + 1) };
                 if let Some(j) = j {
                     st.will_change("order");
-                    st.tree.nodes[p].children.swap(i, j);
+                    st.tree.objects[p].children.swap(i, j);
                 }
             }
         }
@@ -209,29 +209,29 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
 }
 
 enum Action {
-    Select(NodeId),
-    Toggle(NodeId),
-    Reparent(NodeId, NodeId),
-    Delete(NodeId),
-    Duplicate(NodeId),
-    Move(NodeId, bool),
-    AddChild(NodeId, NodeKind),
-    SaveBranch(NodeId),
-    MakeLocal(NodeId),
-    OpenScene(String),
+    Select(ObjectId),
+    Toggle(ObjectId),
+    Reparent(ObjectId, ObjectId),
+    Delete(ObjectId),
+    Duplicate(ObjectId),
+    Move(ObjectId, bool),
+    AddChild(ObjectId, ObjectKind),
+    SaveBranch(ObjectId),
+    MakeLocal(ObjectId),
+    OpenBlueprint(String),
 }
 
-fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id: NodeId, action: &mut Option<Action>, playing: bool) {
-    let n = &tree.nodes[id];
+fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTree, id: ObjectId, action: &mut Option<Action>, playing: bool) {
+    let n = &tree.objects[id];
     let selected = st.is_selected(id);
     let label = n.name.clone();
-    let icon = crate::icons::node(tree, id);
+    let icon = crate::icons::object(tree, id);
     let color = if n.from_instance { theme::TEXT_DIM } else if !n.visible { Color32::from_gray(110) } else { theme::TEXT };
     let draw_label = |ui: &mut egui::Ui, action: &mut Option<Action>| {
         let r = crate::icons::row(ui, st, &icon, RichText::new(&label).color(color), selected);
-        crate::docs::mark(ui, r.rect, format!("node:{}", n.kind.name()));
-        // Small marks after the name: it has scripts, it's an instance of a scene.
-        for (on, mark, tip) in [(!n.scripts.is_empty(), "script", "Has a script"), (n.instance_of.is_some() && !n.from_instance, "link", "An instance of a scene")] {
+        crate::docs::mark(ui, r.rect, format!("object:{}", n.kind.name()));
+        // Small marks after the name: it has scripts, it's an instance of a blueprint.
+        for (on, mark, tip) in [(!n.scripts.is_empty(), "script", "Has a script"), (n.instance_of.is_some() && !n.from_instance, "link", "An instance of a blueprint")] {
             if on {
                 let (mr, m) = ui.allocate_exact_size(egui::vec2(12.0, 16.0), egui::Sense::hover());
                 crate::icons::paint(ui, st, &crate::icons::Icon::Silk(mark.into()), egui::Rect::from_center_size(mr.center(), egui::vec2(12.0, 12.0)));
@@ -243,12 +243,12 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
         }
         if !playing {
             r.dnd_set_drag_payload(id);
-            if let Some(from) = r.dnd_release_payload::<NodeId>() {
+            if let Some(from) = r.dnd_release_payload::<ObjectId>() {
                 if *from != id {
                     *action = Some(Action::Reparent(*from, id));
                 }
             }
-            if r.dnd_hover_payload::<NodeId>().is_some() {
+            if r.dnd_hover_payload::<ObjectId>().is_some() {
                 ui.painter().rect_stroke(r.rect, 0.0, egui::Stroke::new(1.5, theme::ACCENT), egui::StrokeKind::Inside);
             }
         }
@@ -260,7 +260,7 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
         r.context_menu(|ui| { crate::theme::fade_in(ui);
             ui.menu_button("Add child", |ui| { crate::theme::fade_in(ui);
                 for k in ALL_KINDS {
-                    if node_button(ui, st, *k).clicked() {
+                    if object_button(ui, st, *k).clicked() {
                         *action = Some(Action::AddChild(id, *k));
                         ui.close();
                     }
@@ -271,16 +271,16 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
                 ui.close();
             }
             ui.separator();
-            if !n.from_instance && n.instance_of.is_none() && ui.button("Save branch as scene").on_hover_text("make this node and its children a reusable .jscene").clicked() {
+            if !n.from_instance && n.instance_of.is_none() && ui.button("Save branch as blueprint").on_hover_text("make this object and its children a reusable .jblueprint").clicked() {
                 *action = Some(Action::SaveBranch(id));
                 ui.close();
             }
             if let Some(p) = &n.instance_of {
-                if ui.button("Open its scene").clicked() {
-                    *action = Some(Action::OpenScene(p.clone()));
+                if ui.button("Open its blueprint").clicked() {
+                    *action = Some(Action::OpenBlueprint(p.clone()));
                     ui.close();
                 }
-                if !n.from_instance && ui.button("Make local").on_hover_text("stop following the scene file: its nodes become this scene's own").clicked() {
+                if !n.from_instance && ui.button("Make local").on_hover_text("stop following the blueprint file: its objects become this blueprint's own").clicked() {
                     *action = Some(Action::MakeLocal(id));
                     ui.close();
                 }
@@ -312,7 +312,7 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
             .show_header(ui, |ui| draw_label(ui, action))
             .body(|ui| {
                 for c in &n.children {
-                    node_row(ui, st, tree, *c, action, playing);
+                    object_row(ui, st, tree, *c, action, playing);
                 }
             });
     }
@@ -320,9 +320,9 @@ fn node_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::SceneTree, id:
 
 // ---------------------------------------------------------------- inspector
 
-fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: NodeId) {
-    let kind = st.tree.nodes[id].kind;
-    let mut t = st.tree.nodes[id].transform;
+fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: ObjectId) {
+    let kind = st.tree.objects[id].kind;
+    let mut t = st.tree.objects[id].transform;
     let before = t;
     let drag = |ui: &mut egui::Ui, v: &mut f32, speed: f64, label: &str| {
         ui.add(egui::DragValue::new(v).speed(speed).prefix(label).max_decimals(3));
@@ -362,7 +362,7 @@ fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: NodeId) {
     });
     if t != before {
         st.will_change(&format!("xform {:?}", id));
-        st.tree.nodes[id].transform = t;
+        st.tree.objects[id].transform = t;
     }
 }
 
@@ -466,13 +466,13 @@ pub struct AssetPath(pub String);
 pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:properties");
     let Some(id) = st.selected else {
-        ui.label("Select a node to see its properties.");
+        ui.label("Select an object to see its properties.");
         return;
     };
     if let Some(p) = &st.playing {
         // Live, read-only view of the running game.
         let Some(n) = p.tree.get(id) else {
-            ui.label("This node isn't in the running game (it was destroyed).");
+            ui.label("This object isn't in the running game (it was destroyed).");
             return;
         };
         ui.label(RichText::new(&n.name).strong());
@@ -498,72 +498,72 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         st.selected = st.tree.root;
         return;
     }
-    let kind = st.tree.nodes[id].kind;
+    let kind = st.tree.objects[id].kind;
     ui.horizontal(|ui| {
-        // The node's icon; click to pick another.
-        let icon = crate::icons::node(&st.tree, id);
+        // The object's icon; click to pick another.
+        let icon = crate::icons::object(&st.tree, id);
         let (rect, r) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
         if r.hovered() {
             ui.painter().rect_filled(rect, 0.0, theme::GRAY_LIGHT);
         }
         crate::icons::paint(ui, st, &icon, rect.shrink(3.0));
         let r = crate::docs::on(r.on_hover_text("Icon: click to change"), ui, "ui:icon");
-        let current = st.tree.nodes[id].text(crate::icons::PROP).to_string();
+        let current = st.tree.objects[id].text(crate::icons::PROP).to_string();
         egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             theme::fade_in(ui);
             if let Some(pick) = crate::icons::picker(ui, st, &current) {
                 st.will_change("icon");
                 if pick.is_empty() {
-                    st.tree.nodes[id].props.remove(crate::icons::PROP);
+                    st.tree.objects[id].props.remove(crate::icons::PROP);
                 } else {
-                    st.tree.nodes[id].props.insert(crate::icons::PROP.into(), Variant::Text(pick));
+                    st.tree.objects[id].props.insert(crate::icons::PROP.into(), Variant::Text(pick));
                 }
                 ui.close();
             }
         });
-        let mut name = st.tree.nodes[id].name.clone();
-        let renamable = !st.tree.nodes[id].from_instance;
+        let mut name = st.tree.objects[id].name.clone();
+        let renamable = !st.tree.objects[id].from_instance;
         if ui.add_enabled(renamable, egui::TextEdit::singleline(&mut name).desired_width(160.0)).changed() && !name.is_empty() && !name.contains('/') {
             st.will_change(&format!("name {:?}", id));
-            st.tree.nodes[id].name = name;
+            st.tree.objects[id].name = name;
         }
-        let mut vis = st.tree.nodes[id].visible;
+        let mut vis = st.tree.objects[id].visible;
         if ui.checkbox(&mut vis, "Visible").changed() {
             st.will_change("visible");
-            st.tree.nodes[id].visible = vis;
+            st.tree.objects[id].visible = vis;
         }
     });
     ui.label(RichText::new(kind.name()).color(theme::TEXT_DIM));
-    if let Some(p) = st.tree.nodes[id].instance_of.clone() {
+    if let Some(p) = st.tree.objects[id].instance_of.clone() {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("Instance of {}", p.trim_start_matches("res://"))).color(theme::ACCENT));
             if ui.small_button("Open").clicked() {
-                st.open_scene(&p);
+                st.open_blueprint(&p);
             }
         });
     }
-    if st.tree.nodes[id].from_instance {
-        ui.label(RichText::new("Inside an instanced scene: changes here are saved as overrides for this instance only.").small().color(theme::WARN));
+    if st.tree.objects[id].from_instance {
+        ui.label(RichText::new("Inside an instanced blueprint: changes here are saved as overrides for this instance only.").small().color(theme::WARN));
     }
     let n_sel = st.selected_roots().len();
     if n_sel > 1 {
-        ui.label(RichText::new(format!("{} nodes selected (editing this one; drag in the view moves them all)", n_sel)).small().color(theme::ACCENT));
+        ui.label(RichText::new(format!("{} objects selected (editing this one; drag in the view moves them all)", n_sel)).small().color(theme::ACCENT));
     }
     ui.separator();
-    if kind == NodeKind::Animator && ui.button("Edit clips in the Timeline").clicked() {
+    if kind == ObjectKind::Animator && ui.button("Edit clips in the Timeline").clicked() {
         st.open_timeline = true;
     }
-    if kind != NodeKind::Node && kind != NodeKind::Animator {
+    if kind != ObjectKind::Object && kind != ObjectKind::Animator {
         egui::CollapsingHeader::new("Transform").default_open(true).show(ui, |ui| transform_ui(ui, st, id));
     }
     // Built-in properties in their sections (Main open, the rest folded), then custom ones.
     let defaults: Vec<&str> = kind.default_props().iter().map(|p| p.0).collect();
-    let keys: Vec<String> = st.tree.nodes[id].props.keys().cloned().collect();
+    let keys: Vec<String> = st.tree.objects[id].props.keys().cloned().collect();
     let order: Vec<String> = defaults.iter().map(|d| d.to_string()).filter(|d| keys.contains(d)).collect();
     for group in gex_core::props::groups(kind) {
         let in_group: Vec<&String> = order.iter().filter(|k| gex_core::props::info(kind, k).group == group).collect();
         // Faces of their own are a cube's.
-        if in_group.is_empty() || (group == "Advanced texture settings" && st.tree.nodes[id].text("mesh") != "cube") {
+        if in_group.is_empty() || (group == "Advanced texture settings" && st.tree.objects[id].text("mesh") != "cube") {
             continue;
         }
         let title = if group == "Main" { "Properties".to_string() } else { group.to_string() };
@@ -576,10 +576,10 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                     if !info.doc.is_empty() {
                         label.on_hover_text(info.doc);
                     }
-                    let mut v = st.tree.nodes[id].props[k].clone();
+                    let mut v = st.tree.objects[id].props[k].clone();
                     if prop_ui(ui, &mut v, k, &info) {
                         st.will_change(&format!("prop {:?} {}", id, k));
-                        st.tree.nodes[id].props.insert(k.clone(), v);
+                        st.tree.objects[id].props.insert(k.clone(), v);
                     }
                     crate::docs::mark(ui, row.union(ui.min_rect().intersect(egui::Rect::everything_below(row.top())).intersect(egui::Rect::everything_above(row.bottom() + 4.0))), format!("prop:{}.{}", kind.name(), k));
                     ui.end_row();
@@ -589,7 +589,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     }
     // $variables its scripts declare: set here, for this instance.
     let mut vars: Vec<String> = Vec::new();
-    for res in st.tree.nodes[id].scripts.clone() {
+    for res in st.tree.objects[id].scripts.clone() {
         for v in script_vars_of(ui, st, &res) {
             if !vars.contains(&v) && !defaults.contains(&v.as_str()) {
                 vars.push(v);
@@ -600,8 +600,8 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         let h = egui::CollapsingHeader::new("Script variables").default_open(true).show(ui, |ui| {
             egui::Grid::new("script vars").num_columns(3).spacing([8.0, 4.0]).show(ui, |ui| {
                 for k in &vars {
-                    ui.label(RichText::new(format!("${}", k)).color(theme::C_EVENT)).on_hover_text("Declared in this node's script; the value here is this instance's");
-                    let mut v = st.tree.nodes[id].props.get(k).cloned().unwrap_or(Variant::Num(0.0));
+                    ui.label(RichText::new(format!("${}", k)).color(theme::C_EVENT)).on_hover_text("Declared in this object's script; the value here is this instance's");
+                    let mut v = st.tree.objects[id].props.get(k).cloned().unwrap_or(Variant::Num(0.0));
                     let mut changed = variant_ui(ui, &mut v, k);
                     let kind = match &v {
                         Variant::Num(_) => "Number",
@@ -619,7 +619,7 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                     });
                     if changed {
                         st.will_change(&format!("prop {:?} {}", id, k));
-                        st.tree.nodes[id].props.insert(k.clone(), v);
+                        st.tree.objects[id].props.insert(k.clone(), v);
                     }
                     ui.end_row();
                 }
@@ -628,15 +628,15 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         crate::docs::mark(ui, h.header_response.rect.union(h.body_response.map_or(h.header_response.rect, |b| b.rect)), "ui:script_vars");
     }
     let custom = egui::CollapsingHeader::new("Custom properties").default_open(true).show(ui, |ui| {
-        let keys: Vec<String> = st.tree.nodes[id].props.keys().filter(|k| !defaults.contains(&k.as_str()) && k.as_str() != crate::icons::PROP && !vars.contains(k)).cloned().collect();
+        let keys: Vec<String> = st.tree.objects[id].props.keys().filter(|k| !defaults.contains(&k.as_str()) && k.as_str() != crate::icons::PROP && !vars.contains(k)).cloned().collect();
         let mut remove = None;
         egui::Grid::new("custom props").num_columns(3).spacing([8.0, 4.0]).striped(true).show(ui, |ui| {
             for k in keys {
                 ui.label(RichText::new(&k).color(theme::C_EVENT));
-                let mut v = st.tree.nodes[id].props[&k].clone();
+                let mut v = st.tree.objects[id].props[&k].clone();
                 if variant_ui(ui, &mut v, &k) {
                     st.will_change(&format!("prop {:?} {}", id, k));
-                    st.tree.nodes[id].props.insert(k.clone(), v);
+                    st.tree.objects[id].props.insert(k.clone(), v);
                 }
                 if ui.small_button("✖").on_hover_text("remove this property").clicked() {
                     remove = Some(k.clone());
@@ -646,18 +646,18 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         });
         if let Some(k) = remove {
             st.will_change("remove prop");
-            st.tree.nodes[id].props.remove(&k);
+            st.tree.objects[id].props.remove(&k);
         }
         // Custom properties: what scripts see as self.<name>.
         let mem_id = egui::Id::new("new prop name");
         let mut name: String = ui.data_mut(|d| d.get_temp(mem_id).unwrap_or_default());
         ui.horizontal_wrapped(|ui| {
             ui.add(egui::TextEdit::singleline(&mut name).hint_text("new_property").desired_width(120.0));
-            let ok = jlb::value::is_ident(&name) && !st.tree.nodes[id].props.contains_key(&name);
+            let ok = jlb::value::is_ident(&name) && !st.tree.objects[id].props.contains_key(&name);
             for (label, v) in [("Number", Variant::Num(0.0)), ("Text", Variant::Text(String::new())), ("Switch", Variant::Bool(false)), ("Color", Variant::Color([1.0; 4]))] {
                 if ui.add_enabled(ok, egui::Button::new(format!("+ {}", label))).on_hover_text("Name it first, then pick its type").clicked() {
                     st.will_change("add prop");
-                    st.tree.nodes[id].props.insert(name.clone(), v);
+                    st.tree.objects[id].props.insert(name.clone(), v);
                     name.clear();
                 }
             }
@@ -665,14 +665,14 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.data_mut(|d| d.insert_temp(mem_id, name));
     });
     crate::docs::mark(ui, custom.header_response.rect.union(custom.body_response.map_or(custom.header_response.rect, |b| b.rect)), "ui:custom_props");
-    if kind == NodeKind::TileMap2D {
+    if kind == ObjectKind::TileMap2D {
         egui::CollapsingHeader::new("Tiles").default_open(true).show(ui, |ui| tile_palette(ui, st, id));
     }
     egui::CollapsingHeader::new("Groups").default_open(false).show(ui, |ui| {
-        let mut groups = st.tree.nodes[id].groups.join(", ");
+        let mut groups = st.tree.objects[id].groups.join(", ");
         if ui.add(egui::TextEdit::singleline(&mut groups).hint_text("enemies, pickups").desired_width(f32::INFINITY)).changed() {
             st.will_change("groups");
-            st.tree.nodes[id].groups = groups.split(',').map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).collect();
+            st.tree.objects[id].groups = groups.split(',').map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).collect();
         }
     });
 }
@@ -681,11 +681,11 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
 
 /// The events a script can handle: (function signature, when it runs).
 pub const EVENTS: &[(&str, &str)] = &[
-    ("on_create()", "once the scene is loaded (or after SPAWN)"),
+    ("on_create()", "once the blueprint is loaded (or after SPAWN)"),
     ("on_step(dt)", "every frame"),
     ("on_physics(dt)", "60 times a second, before physics moves things"),
     ("on_draw()", "every frame, after on_step: the place for DRAW_* commands"),
-    ("on_destroy()", "before the node is removed"),
+    ("on_destroy()", "before the object is removed"),
     ("on_key_pressed(key)", "any key goes down"),
     ("on_key_released(key)", "any key goes up"),
     ("on_press_space()", "one key goes down (rename: on_press_a, on_press_left, on_press_pad_a...)"),
@@ -693,17 +693,17 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("on_mouse_pressed(button, x, y)", "a mouse click"),
     ("on_mouse_moved(x, y)", "the mouse moved"),
     ("on_mouse_wheel(amount)", "the wheel turned"),
-    ("on_collide_start(other)", "this node's collider or body starts touching another"),
+    ("on_collide_start(other)", "this object's collider or body starts touching another"),
     ("on_collide(other)", "every physics step while touching"),
     ("on_collide_end(other)", "they stop touching"),
-    ("on_timer(name)", "a TIMER(name, seconds) on this node finishes"),
+    ("on_timer(name)", "a TIMER(name, seconds) on this object finishes"),
     ("on_timer_spawn()", "the TIMER named spawn finishes (rename for yours)"),
     ("on_pressed()", "this Button was clicked"),
     ("on_pressed_play()", "any Button named Play was clicked (runs on every script)"),
     ("on_text_changed(text)", "this TextInput's text changed"),
     ("on_text_submitted(text)", "Enter was pressed in this TextInput"),
-    ("on_animation_end(name)", "a non-looping animation on this node finished"),
-    ("on_tween_end(property)", "a TWEEN of one of this node's properties finished"),
+    ("on_animation_end(name)", "a non-looping animation on this object finished"),
+    ("on_tween_end(property)", "a TWEEN of one of this object's properties finished"),
     ("when_ready()", "a condition: return TRUE to run on_ready()"),
     ("on_ready()", "runs when when_ready() turns TRUE"),
 ];
@@ -822,7 +822,7 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
     });
     ui.separator();
     ui.menu_button("Custom", |ui| { crate::theme::fade_in(ui);
-        ui.label(RichText::new("Runs when any script calls BROADCAST(\"name\"),\nor SEND(node, \"name\") for one node.").small().color(theme::TEXT_DIM));
+        ui.label(RichText::new("Runs when any script calls BROADCAST(\"name\"),\nor SEND(object, \"name\") for one object.").small().color(theme::TEXT_DIM));
         let known = broadcast_names(st);
         if !known.is_empty() {
             ui.separator();
@@ -850,23 +850,23 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
     pick.into_inner()
 }
 
-/// The selected node's events (the on_... functions of its scripts) and the scripts themselves.
+/// The selected object's events (the on_... functions of its scripts) and the scripts themselves.
 pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
     crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:events");
     let Some(id) = st.selected.filter(|i| st.tree.contains(*i)) else {
-        ui.label(RichText::new("Select a node to see its events.").color(theme::TEXT_DIM));
+        ui.label(RichText::new("Select an object to see its events.").color(theme::TEXT_DIM));
         return;
     };
     let playing = st.playing.is_some();
-    let scripts = st.tree.nodes[id].scripts.clone();
+    let scripts = st.tree.objects[id].scripts.clone();
     ui.horizontal(|ui| {
-        theme::title(ui, &format!("Events of {}", st.tree.nodes[id].name));
+        theme::title(ui, &format!("Events of {}", st.tree.objects[id].name));
         if !playing {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut add = None;
                 ui.menu_button("Add event", |ui| add = add_event_menu(ui, st));
                 if let Some(sig) = add {
-                    // The first event makes the node's script.
+                    // The first event makes the object's script.
                     if let Some(res) = scripts.first().cloned().or_else(|| st.new_script_for(id)) {
                         st.add_event(&res, &sig);
                     }
@@ -901,14 +901,14 @@ pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
             if ui.link(res.trim_start_matches("res://")).clicked() {
                 st.open_script(res, None);
             }
-            if !playing && ui.small_button("Detach").on_hover_text("Remove from this node (the file stays)").clicked() {
+            if !playing && ui.small_button("Detach").on_hover_text("Remove from this object (the file stays)").clicked() {
                 detach = Some(i);
             }
         });
     }
     if let Some(i) = detach {
         st.will_change("detach");
-        st.tree.nodes[id].scripts.remove(i);
+        st.tree.objects[id].scripts.remove(i);
     }
     if playing {
         return;
@@ -925,7 +925,7 @@ pub fn events(ui: &mut egui::Ui, st: &mut EditorState) {
             for s in all {
                 if ui.button(s.trim_start_matches("res://")).clicked() {
                     st.will_change("attach");
-                    st.tree.nodes[id].scripts.push(s);
+                    st.tree.objects[id].scripts.push(s);
                     ui.close();
                 }
             }
@@ -959,17 +959,17 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
     }
     if in_project {
         r.context_menu(|ui| { crate::theme::fade_in(ui);
-            if e.name.ends_with(".jscene") {
-                if ui.button("Open").on_hover_text("Its nodes, properties and events, as a window in the workspace").clicked() {
+            if e.name.ends_with(".jblueprint") {
+                if ui.button("Open").on_hover_text("Its objects, properties and events, as a window in the workspace").clicked() {
                     st.open_windows.push(e.path.clone());
                     ui.close();
                 }
-                if ui.button("Open in its own tab").on_hover_text("The scene view, to place and arrange things in it").clicked() {
-                    st.open_scene(&e.path);
+                if ui.button("Open in its own tab").on_hover_text("The blueprint view, to place and arrange things in it").clicked() {
+                    st.open_blueprint(&e.path);
                     ui.close();
                 }
-                if st.scene_res.as_deref() != Some(e.path.as_str()) && ui.button("Place in the current scene").clicked() {
-                    st.instance_scene(&e.path);
+                if st.blueprint_res.as_deref() != Some(e.path.as_str()) && ui.button("Place in the current blueprint").clicked() {
+                    st.instance_blueprint(&e.path);
                     ui.close();
                 }
                 ui.separator();
@@ -1049,16 +1049,16 @@ fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<(String,
     files
 }
 
-/// "New folder / scene / script" entries that make the thing in `dir` and ask for its name.
+/// "New folder / blueprint / script" entries that make the thing in `dir` and ask for its name.
 fn new_asset_menu(ui: &mut egui::Ui, st: &mut EditorState, dir: &str) {
     let mut made = None;
     if ui.button("New folder").clicked() {
         made = st.new_folder(dir);
     }
-    ui.menu_button("New scene", |ui| { crate::theme::fade_in(ui);
-        for (label, k) in [("2D", NodeKind::Node2D), ("3D", NodeKind::Node3D), ("UI / menu", NodeKind::Node)] {
+    ui.menu_button("New blueprint", |ui| { crate::theme::fade_in(ui);
+        for (label, k) in [("2D", ObjectKind::Object2D), ("3D", ObjectKind::Object3D), ("UI / menu", ObjectKind::Object)] {
             if ui.button(label).clicked() {
-                made = st.new_scene_file(dir, k);
+                made = st.new_blueprint_file(dir, k);
             }
         }
     });
@@ -1081,15 +1081,15 @@ fn parent_dir(path: &str) -> &str {
     }
 }
 
-/// One file in the asset tree: its icon (pictures and scenes show themselves), click to
+/// One file in the asset tree: its icon (pictures and blueprints show themselves), click to
 /// select, drag to use or to move into a folder, double-click to open, right-click for more.
 fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
     let name = path.rsplit('/').next().unwrap_or(path);
     let sel = st.asset_selected.as_deref() == Some(path);
     let icon = if gex_assets::image_load::is_image(name) {
         crate::icons::Icon::Image(path.to_string())
-    } else if name.ends_with(".jscene") && path.starts_with("res://") {
-        crate::icons::scene(st, path)
+    } else if name.ends_with(".jblueprint") && path.starts_with("res://") {
+        crate::icons::blueprint(st, path)
     } else {
         crate::icons::Icon::Silk(crate::icons::file(name).into())
     };
@@ -1106,7 +1106,7 @@ fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
     }
     asset_context_menu(&r, st, &gex_assets::vfs::Entry { name: name.to_string(), path: path.to_string(), is_dir: false }, in_project);
     if r.double_clicked() && in_project && st.playing.is_none() {
-        if name.ends_with(".jscene") {
+        if name.ends_with(".jblueprint") {
             st.open_windows.push(path.to_string());
         } else if [".jlb", ".txt", ".vmt", ".wgsl", ".json", ".md"].iter().any(|x| name.ends_with(x)) {
             st.open_script(path, None);
@@ -1237,7 +1237,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 }
             })
             .response
-            .on_hover_text("New folder, scene or script (in the selected folder), import");
+            .on_hover_text("New folder, blueprint or script (in the selected folder), import");
         }
         ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search").desired_width(f32::INFINITY));
     });
@@ -1261,7 +1261,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             return;
         }
         if files.is_empty() {
-            ui.label(RichText::new("Nothing here yet. The + button makes folders, scenes and scripts; files dropped on the window are imported.").color(theme::TEXT_DIM));
+            ui.label(RichText::new("Nothing here yet. The + button makes folders, blueprints and scripts; files dropped on the window are imported.").color(theme::TEXT_DIM));
         }
         asset_level(ui, st, &files, "res://");
         ui.add_space(6.0);
@@ -1293,19 +1293,19 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
         ui.image((t.id(), size * scale));
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("{}×{}", size.x, size.y)).small().color(theme::TEXT_DIM));
-            if let Some(id) = st.selected.filter(|i| editing && st.tree.nodes.get(*i).is_some_and(|n| n.props.contains_key("texture"))) {
-                if ui.small_button("Use on selected").on_hover_text("Set the selected node's texture to this").clicked() {
+            if let Some(id) = st.selected.filter(|i| editing && st.tree.objects.get(*i).is_some_and(|n| n.props.contains_key("texture"))) {
+                if ui.small_button("Use on selected").on_hover_text("Set the selected object's texture to this").clicked() {
                     st.will_change("texture");
-                    st.tree.nodes[id].props.insert("texture".into(), Variant::Res(sel.clone()));
+                    st.tree.objects[id].props.insert("texture".into(), Variant::Res(sel.clone()));
                 }
             }
         });
     } else if gex_assets::model::is_model(&sel) {
         st.previews.model(ui, &st.project, &sel, w.min(130.0));
-        if let Some(id) = st.selected.filter(|i| editing && st.tree.nodes.get(*i).is_some_and(|n| n.kind == NodeKind::Mesh3D)) {
+        if let Some(id) = st.selected.filter(|i| editing && st.tree.objects.get(*i).is_some_and(|n| n.kind == ObjectKind::Mesh3D)) {
             if ui.small_button("Use on selected").clicked() {
                 st.will_change("model");
-                st.tree.nodes[id].props.insert("mesh".into(), Variant::Text(sel.clone()));
+                st.tree.objects[id].props.insert("mesh".into(), Variant::Text(sel.clone()));
             }
         }
     } else {
@@ -1456,14 +1456,14 @@ fn asset_dialogs(ui: &mut egui::Ui, st: &mut EditorState) {
         theme::fade_in(ui);
         match &mut d {
         AssetDialog::Rename(res, name) => {
-            // The name is shown and typed without its ending (.jscene, .png...).
+            // The name is shown and typed without its ending (.jblueprint, .png...).
             let ext = res.rsplit('/').next().and_then(|n| n.rfind('.').filter(|i| *i > 0).map(|i| n[i..].to_string())).unwrap_or_default();
             if !ext.is_empty() && name.ends_with(&ext) {
                 name.truncate(name.len() - ext.len());
             }
             let r = ui.text_edit_singleline(name);
             r.request_focus();
-            ui.label(RichText::new("Scenes and scripts that use it are updated too.").small().color(theme::TEXT_DIM));
+            ui.label(RichText::new("Blueprints and scripts that use it are updated too.").small().color(theme::TEXT_DIM));
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui.button("Rename").clicked() || enter {
                 let full = format!("{}{}", name.trim(), ext);
@@ -1488,7 +1488,7 @@ fn asset_dialogs(ui: &mut egui::Ui, st: &mut EditorState) {
                 u
             });
             if !users.is_empty() {
-                ui.label(RichText::new(format!("Used in {} file(s): its instances and attached scripts are taken out of those scenes.", users.len())).color(theme::WARN));
+                ui.label(RichText::new(format!("Used in {} file(s): its instances and attached scripts are taken out of those blueprints.", users.len())).color(theme::WARN));
             }
             ui.label(RichText::new("It goes to the project's hidden .trash folder, so you can get it back.").small().color(theme::TEXT_DIM));
             ui.horizontal(|ui| {

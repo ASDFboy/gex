@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Arena",
-    kind: Some(Node3D),
+    kind: Some(Object3D),
     scripts: ["res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Sky", kind: Some(Environment), props: {"fog_start": Num(20.0), "fog_end": Num(70.0)}),
@@ -25,9 +25,9 @@
         props: {"color": Color((0.9, 0.75, 0.2, 1.0)), "collision": Bool(true)}),
       (name: "Step2", kind: Some(Mesh3D), transform: Some((position: (-6.0, 0.75, -6.0), scale: (3.0, 1.5, 2.0))),
         props: {"color": Color((0.9, 0.75, 0.2, 1.0)), "collision": Bool(true)}),
-      (name: "Crate1", instance: Some("res://scenes/crate3d.jscene"), transform: Some((position: (-2.0, 0.5, -3.0)))),
-      (name: "Crate2", instance: Some("res://scenes/crate3d.jscene"), transform: Some((position: (-1.0, 0.5, -3.5)))),
-      (name: "Crate3", instance: Some("res://scenes/crate3d.jscene"), transform: Some((position: (-1.5, 1.5, -3.2)))),
+      (name: "Crate1", instance: Some("res://blueprints/crate3d.jblueprint"), transform: Some((position: (-2.0, 0.5, -3.0)))),
+      (name: "Crate2", instance: Some("res://blueprints/crate3d.jblueprint"), transform: Some((position: (-1.0, 0.5, -3.5)))),
+      (name: "Crate3", instance: Some("res://blueprints/crate3d.jblueprint"), transform: Some((position: (-1.5, 1.5, -3.2)))),
       (name: "Player", kind: Some(Body3D), transform: Some((position: (0.0, 1.0, 6.0))),
         props: {"body": Text("kinematic"), "shape": Text("capsule"), "width": Num(0.6), "height": Num(1.8), "depth": Num(0.6), "radius": Num(0.3)},
         scripts: ["res://scripts/fps.jlb"],

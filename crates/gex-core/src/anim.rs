@@ -1,10 +1,10 @@
-//! Animation clips (made in the editor's Timeline): property values keyed over time, for nodes
-//! around an Animator node. Saved as `.anim` files (RON).
+//! Animation clips (made in the editor's Timeline): property values keyed over time, for objects
+//! around an Animator object. Saved as `.anim` files (RON).
 
 use serde::{Deserialize, Serialize};
 
-use crate::tree::SceneTree;
-use crate::{NodeId, Variant};
+use crate::tree::BlueprintTree;
+use crate::{ObjectId, Variant};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AnimFile {
@@ -23,7 +23,7 @@ pub struct Clip {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Track {
-    /// The node, as a path from the Animator's parent ("" = the parent itself, "Arm/Hand").
+    /// The object, as a path from the Animator's parent ("" = the parent itself, "Arm/Hand").
     pub target: String,
     /// A property, or a transform part: x, y, z, rotation (rotation_x...), scale_x..., visible.
     pub prop: String,
@@ -98,8 +98,8 @@ impl Track {
     }
 }
 
-/// A node's value for a track property (transform parts included).
-pub fn read(tree: &SceneTree, id: NodeId, prop: &str) -> Option<Variant> {
+/// An object's value for a track property (transform parts included).
+pub fn read(tree: &BlueprintTree, id: ObjectId, prop: &str) -> Option<Variant> {
     let n = tree.get(id)?;
     let t = &n.transform;
     let f = |x: f32| Some(Variant::Num(x as f64));
@@ -118,7 +118,7 @@ pub fn read(tree: &SceneTree, id: NodeId, prop: &str) -> Option<Variant> {
     }
 }
 
-pub fn write(tree: &mut SceneTree, id: NodeId, prop: &str, v: &Variant) {
+pub fn write(tree: &mut BlueprintTree, id: ObjectId, prop: &str, v: &Variant) {
     let Some(n) = tree.get_mut(id) else { return };
     let x = v.as_f64().unwrap_or(0.0) as f32;
     let t = &mut n.transform;
@@ -139,8 +139,8 @@ pub fn write(tree: &mut SceneTree, id: NodeId, prop: &str, v: &Variant) {
     }
 }
 
-/// The node a track's path names, from an Animator.
-pub fn target(tree: &SceneTree, animator: NodeId, path: &str) -> Option<NodeId> {
+/// The object a track's path names, from an Animator.
+pub fn target(tree: &BlueprintTree, animator: ObjectId, path: &str) -> Option<ObjectId> {
     let base = tree.get(animator)?.parent.unwrap_or(animator);
     if path.is_empty() || path == "." {
         Some(base)
@@ -150,7 +150,7 @@ pub fn target(tree: &SceneTree, animator: NodeId, path: &str) -> Option<NodeId> 
 }
 
 /// Puts every track of a clip at time `t`.
-pub fn apply(tree: &mut SceneTree, animator: NodeId, clip: &Clip, t: f32) {
+pub fn apply(tree: &mut BlueprintTree, animator: ObjectId, clip: &Clip, t: f32) {
     for tr in &clip.tracks {
         if let (Some(id), Some(v)) = (target(tree, animator, &tr.target), tr.sample(t)) {
             write(tree, id, &tr.prop, &v);

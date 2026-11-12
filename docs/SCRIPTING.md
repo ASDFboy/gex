@@ -1,10 +1,10 @@
-# Scripting nodes with .jlb
+# Scripting objects with .jlb
 
-Every node can have any number of scripts (Events → **Add event**, **New script** or **Attach
+Every object can have any number of scripts (Events → **Add event**, **New script** or **Attach
 existing**). A script is an ordinary `.jlb` file:
 
 ```
->> Outside variables belong to this node: each Player gets its own copy.
+>> Outside variables belong to this object: each Player gets its own copy.
 speed = 300
 
 DEF on_step(dt) {
@@ -13,13 +13,13 @@ DEF on_step(dt) {
 
 DEF on_collide_start(other) {
 	PRINT("touched " + NAME_OF(other))
-	SEND(other, "hit", 10)          >> runs on_hit(10) on the other node
+	SEND(other, "hit", 10)          >> runs on_hit(10) on the other object
 }
 ```
 
 ## `self`
 
-`self` is the node the script is on. Change it and the node changes.
+`self` is the object the script is on. Change it and the object changes.
 
 | Entry | Meaning |
 |---|---|
@@ -27,23 +27,41 @@ DEF on_collide_start(other) {
 | `self.rotation` | 2D rotation in degrees (same as `rotation_z`); 3D also has `rotation_x`, `rotation_y` |
 | `self.scale_x`, `self.scale_y`, `self.scale_z` | scale |
 | `self.visible`, `self.name` | |
-| `self.id`, `self.kind` | the node's handle (a number) and kind, read-only |
+| `self.id`, `self.kind` | the object's handle (a number) and kind, read-only |
 | any property | `self.color`, `self.width`, `self.text`, ... (colors are `[r:, g:, b:, a:]` tables, 0 to 1) |
 | anything new | `self.hp = 3` makes a property: it shows in the inspector while the game runs |
 
-All scripts on one node share the node, so they can talk through `self`; each keeps its own
+All scripts on one object share the object, so they can talk through `self`; each keeps its own
 outside variables.
+
+## Variables set per instance: `$name`
+
+A line with just `$name` at the top of a script declares a variable whose value isn't in the
+script: every object using the script gets its own, set in Properties under **Script
+variables** (a number, text, switch or color; 0 until set).
+
+```
+$speed
+$label
+
+DEF on_step(dt) {
+	self.x += $speed * dt
+}
+```
+
+`$speed` is the object's `speed` property, so it's the same thing as `self.speed`, and other
+scripts can read it with `GET(object, "speed")`.
 
 ## Events
 
 | Function | When it runs |
 |---|---|
 | top-level code | when the script is attached (before `on_create`) |
-| `on_create()` | once the whole scene is loaded, or after `SPAWN` |
+| `on_create()` | once the whole blueprint is loaded, or after `SPAWN` |
 | `on_step(dt)` | every frame |
 | `on_physics(dt)` | 60 times a second, before physics moves bodies (use it for movement) |
 | `on_draw()` | every frame after `on_step`: the place for `DRAW_*` commands |
-| `on_destroy()` | before the node is removed |
+| `on_destroy()` | before the object is removed |
 | `on_key_pressed(key)` / `on_key_released(key)` | any key |
 | `on_press_<key>()` / `on_release_<key>()` | one key, e.g. `on_press_space()`, `on_press_a()`, `on_press_pad_a()` |
 | `on_mouse_pressed(button, x, y)` | a click (`"left"`, `"right"`, `"middle"`) |
@@ -54,9 +72,9 @@ outside variables.
 | `on_pressed_<button name>()` | on every script: a Button with that name was clicked (`Start Game` → `on_pressed_start_game`) |
 | `on_text_changed(text)` / `on_text_submitted(text)` | on a TextInput's scripts |
 | `on_clip_end(clip)` | on an Animator's parent (and the Animator): its clip finished |
-| `on_tween_end(property)` | a `TWEEN` on this node finished |
+| `on_tween_end(property)` | a `TWEEN` on this object finished |
 | `on_animation_end(name)` | a non-looping sprite or model animation finished |
-| `on_<event>(...)` | `SEND(node, "<event>", ...)` or `EMIT("<event>", ...)` |
+| `on_<event>(...)` | `SEND(object, "<event>", ...)` or `EMIT("<event>", ...)` |
 | `when_<name>()` → `on_<name>()` | a condition: `on_<name>` runs once each time `when_<name>` turns TRUE |
 
 The Events panel lists these; click one to add it to a script.
@@ -78,51 +96,51 @@ with any of them, and you can change the keys later without touching scripts.
 
 ## Engine commands
 
-Where a command takes a node, give an id (a number from `self.id`, `NODE`, `SPAWN`...), a path
-(`"Gun"`, `"../Enemy"`, `"/Level/Door"`, relative to this node), or `NULL` for this node.
+Where a command takes an object, give an id (a number from `self.id`, `OBJECT`, `SPAWN`...), a path
+(`"Gun"`, `"../Enemy"`, `"/Level/Door"`, relative to this object), or `NULL` for this object.
 Colors are tables `[r: 1, g: 0.5, b: 0, a: 1]` (0 to 1) or a hex text like `"#ff8800"`.
 Files are `res://...` (your project) or `hl2://...` (a mounted Source game, see
 [HL2.md](HL2.md)).
 
 The script editor completes these as you type and shows each one's inputs.
 
-### Nodes and the tree
+### Objects and the tree
 
 | Command | |
 |---|---|
-| `NODE(path)` | the node at a path (relative to this one), or NULL |
-| `GET(node, property)` | a property of another node |
-| `SET(node, property, value)` | changes a property of another node |
-| `NODES(group)` | every node in a group, as a table of ids |
-| `CHILDREN(node)` | a node's children, as a table of ids |
-| `PARENT(node)` | a node's parent, or NULL |
-| `NAME_OF(node)` | a node's name |
-| `PATH_OF(node)` | a node's full path |
-| `SPAWN(scene, x, y, z, parent)` | adds an instance of a scene file; gives its id |
-| `DESTROY(node)` | removes a node (at the end of the frame); runs on_destroy |
+| `OBJECT(path)` | the object at a path (relative to this one), or NULL |
+| `GET(object, property)` | a property of another object |
+| `SET(object, property, value)` | changes a property of another object |
+| `OBJECTS(group)` | every object in a group, as a table of ids |
+| `CHILDREN(object)` | an object's children, as a table of ids |
+| `PARENT(object)` | an object's parent, or NULL |
+| `NAME_OF(object)` | an object's name |
+| `PATH_OF(object)` | an object's full path |
+| `SPAWN(blueprint, x, y, z, parent)` | adds an instance of a blueprint file; gives its id |
+| `DESTROY(object)` | removes an object (at the end of the frame); runs on_destroy |
 
 ### Events and timers
 
 | Command | |
 |---|---|
-| `SEND(node, event, inputs...)` | runs on_<event>(inputs...) on one node |
-| `EMIT(event, inputs...)` | runs on_<event>(inputs...) on every node that has it |
+| `SEND(object, event, inputs...)` | runs on_<event>(inputs...) on one object |
+| `EMIT(event, inputs...)` | runs on_<event>(inputs...) on every object that has it |
 | `BROADCAST(event, inputs...)` | another name for EMIT |
 | `TIMER(name, seconds, repeat)` | runs on_timer(name) and on_timer_<name>() later |
-| `TWEEN(node, property, to, seconds, ease)` | slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property) |
-| `TWEEN_STOP(node, property)` | stops a node's tweens (just that property's, if given), leaving the value where it is |
-| `TIMER_STOP(name)` | cancels this node's timer |
+| `TWEEN(object, property, to, seconds, ease)` | slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property) |
+| `TWEEN_STOP(object, property)` | stops an object's tweens (just that property's, if given), leaving the value where it is |
+| `TIMER_STOP(name)` | cancels this object's timer |
 
 ### Physics and queries
 
 | Command | |
 |---|---|
-| `COLLIDING(node)` | the nodes touching this one now, as a table of ids |
-| `MOVE(node, dx, dy, dz)` | moves a body, sliding along walls; gives TRUE when it's on the floor after |
-| `IMPULSE(node, x, y, z)` | adds to a dynamic body's velocity at once (a kick or a jump), whatever its mass |
-| `RAYCAST(x, y, dx, dy, length, ignore, layers)` | the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL; layers (like "world, enemies") limits what it can hit |
+| `COLLIDING(object)` | the objects touching this one now, as a table of ids |
+| `MOVE(object, dx, dy, dz)` | moves a body, sliding along walls; gives TRUE when it's on the floor after |
+| `IMPULSE(object, x, y, z)` | adds to a dynamic body's velocity at once (a kick or a jump), whatever its mass |
+| `RAYCAST(x, y, dx, dy, length, ignore, layers)` | the first 2D body along a line: [object:, x:, y:, nx:, ny:, distance:] or NULL; layers (like "world, enemies") limits what it can hit |
 | `RAYCAST_3D(x, y, z, dx, dy, dz, length, ignore, layers)` | the same in 3D |
-| `DISTANCE(a, b)` | how far apart two nodes are |
+| `DISTANCE(a, b)` | how far apart two objects are |
 | `FIND_PATH(tilemap, x1, y1, x2, y2)` | a walkable path through a TileMap2D: a table of [x:, y:] points, or NULL |
 
 ### Sound
@@ -131,8 +149,8 @@ The script editor completes these as you type and shows each one's inputs.
 |---|---|
 | `PLAY_SOUND(file, volume, pitch, pan, echo)` | plays a sound file once (res:// or hl2://...); pan -1 left to 1 right, echo 0 to 1; gives its id |
 | `STOP_SOUND(id)` | stops a sound from PLAY_SOUND (NULL stops every sound) |
-| `PLAY(node)` | starts a Sound node |
-| `STOP(node)` | stops a Sound node |
+| `PLAY(object)` | starts a Sound object |
+| `STOP(object)` | stops a Sound object |
 | `MUSIC(file, volume)` | plays a looping music track, replacing the last one ("" stops it) |
 | `VOLUME(level)` | the master volume, 0 to 1 |
 
@@ -140,18 +158,18 @@ The script editor completes these as you type and shows each one's inputs.
 
 | Command | |
 |---|---|
-| `BURST(node, count)` | a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff) |
-| `RAGDOLL(node, vx, vy, vz)` | a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it |
+| `BURST(object, count)` | a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff) |
+| `RAGDOLL(object, vx, vy, vz)` | a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it |
 | `USE_DOOR(door, open)` | opens or closes one of a map's doors (in the group map_doors); with no second input, toggles it |
 | `MAP_ENTITIES(map, classname)` | the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:, bounds:] (keys holds every setting as written; bounds is a brush entity's box, like a ladder's); classname picks one kind, "info_player*" any that start so |
 | `PLAY_CLIP(animator, clip)` | an Animator plays one of its clips (made in the Timeline) from the start; on_clip_end(clip) runs on its parent when it ends |
 | `STOP_CLIP(animator)` | stops an Animator's clip where it is |
 | `CLIP_PLAYING(animator)` | the name of the clip an Animator is playing, or NULL |
-| `ANIMATE(node, name, restart)` | plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE |
-| `ANIMATIONS(node)` | the names of a Mesh3D model's animations |
-| `TILE(node, col, row)` | a TileMap2D's tile id at a cell (-1 = empty) |
-| `SET_TILE(node, col, row, id)` | changes a tile (-1 clears it) |
-| `TILE_AT(node, x, y)` | the cell under a world position: [col:, row:] |
+| `ANIMATE(object, name, restart)` | plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE |
+| `ANIMATIONS(object)` | the names of a Mesh3D model's animations |
+| `TILE(object, col, row)` | a TileMap2D's tile id at a cell (-1 = empty) |
+| `SET_TILE(object, col, row, id)` | changes a tile (-1 clears it) |
+| `TILE_AT(object, x, y)` | the cell under a world position: [col:, row:] |
 
 ### Saving and remembering
 
@@ -160,7 +178,7 @@ The script editor completes these as you type and shows each one's inputs.
 | `SAVE_DATA(name, value)` | keeps a value (a table, number, text...) on disk between runs |
 | `LOAD_DATA(name)` | a value kept with SAVE_DATA, or NULL |
 | `DELETE_DATA(name)` | forgets a value kept with SAVE_DATA |
-| `REMEMBER(name, value)` | keeps a value while the game runs, across CHANGE_SCENE (lives, score, inventory) |
+| `REMEMBER(name, value)` | keeps a value while the game runs, across CHANGE_BLUEPRINT (lives, score, inventory) |
 | `RECALL(name)` | a value kept with REMEMBER, or NULL |
 
 ### Drawing
@@ -194,11 +212,11 @@ The script editor completes these as you type and shows each one's inputs.
 
 | Command | |
 |---|---|
-| `CHANGE_SCENE(scene, fade, color)` | switches to another scene file; with fade (seconds) the screen fades to color (default black) and back |
+| `CHANGE_BLUEPRINT(blueprint, fade, color)` | switches to another blueprint file; with fade (seconds) the screen fades to color (default black) and back |
 | `QUIT()` | stops the game |
 | `FULLSCREEN(on)` | switches the game window to full screen (TRUE) or back (FALSE); with no input, gives whether it is |
 | `WINDOW_TITLE(text)` | changes the game window's title |
-| `PAUSE(on)` | pauses the game (TRUE) or carries on (FALSE): only nodes in the group while_paused keep running, for a pause menu |
+| `PAUSE(on)` | pauses the game (TRUE) or carries on (FALSE): only objects in the group while_paused keep running, for a pause menu |
 | `PAUSED()` | TRUE while the game is paused |
 | `TIME_SCALE(scale)` | how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale |
 | `SHAKE(strength, seconds)` | shakes the camera: strength in pixels (2D), dying away over seconds |
@@ -215,13 +233,13 @@ while the game runs: an options menu, a low-detail mode, moon gravity.
 | `SET_PHYSICS(setting, value)` | changes a physics setting: `SET_PHYSICS("gravity_2d", [0, 400])`, `SET_PHYSICS("tick_rate", 120)` |
 | `PHYSICS(setting)` | a physics setting's value; `PHYSICS()` gives a table of all of them |
 
-Each node's own look and physics properties change like any other: `self.opacity = 0.4`,
+Each object's own look and physics properties change like any other: `self.opacity = 0.4`,
 `SET("Crate", "linear_damping", 3)`.
 
 ## Waiting: tasks
 
 An event has to finish within its frame, so it can't `WAIT`. For anything that happens over
-time (a cutscene, an enemy's attack pattern, a countdown), put it in its own function and run
+time (a cutblueprint, an enemy's attack pattern, a countdown), put it in its own function and run
 it as a task with `START`:
 
 ```
@@ -241,20 +259,20 @@ DEF intro() {
 - `WAIT(seconds)` counts game time: it slows with `TIME_SCALE` and holds while the game is paused.
 - `t = START f()` gives back the task; `AWAIT(t)` (inside another task) waits for it and gives
   back what it returned; `DONE(t)` says whether it has finished; `CANCEL(t)` stops it.
-- A task belongs to the node whose event started it: `self` and `NULL` mean that node, and
-  destroying the node stops its tasks.
+- A task belongs to the object whose event started it: `self` and `NULL` mean that object, and
+  destroying the object stops its tasks.
 - Tasks take turns with the game: each runs until its next `WAIT` (or a thousand statements),
   then the game carries on and the task picks up next frame.
 
 ## Pausing
 
 `PAUSE(TRUE)` freezes the game: frame events (`on_step`, `on_physics`, `on_draw`), input
-events, timers, tweens, animations, particles, physics and collisions all stop. Nodes in the
+events, timers, tweens, animations, particles, physics and collisions all stop. Objects in the
 group **`while_paused`** (add it in the Inspector's Groups) carry on, so put your pause menu's
 script there:
 
 ```
->> On a node in the while_paused group.
+>> On an object in the while_paused group.
 DEF on_press_escape() {
 	PAUSE(!PAUSED())
 	SET("PauseMenu", "visible", PAUSED())
@@ -300,5 +318,11 @@ Everything else in .jlb works as usual: tables, IMPORT/LOAD (relative to the scr
 TRY/FAIL, the maths and text builtins. `PRINT` goes to the editor's console. `END` stops the
 game. Note that "not equal" in .jlb is `!==`.
 
-Not in the engine: .jlb's own windows and drawing commands (`WINDOW`, `RECT`...): use nodes and
+Not in the engine: .jlb's own windows and drawing commands (`WINDOW`, `RECT`...): use objects and
 the `DRAW_*` commands instead.
+
+## Older names
+
+`NODE`, `NODES` and `CHANGE_SCENE` are the old names of `OBJECT`, `OBJECTS` and
+`CHANGE_BLUEPRINT`; scripts using them still run. Projects with `.jscene` files are converted
+to `.jblueprint` when opened.

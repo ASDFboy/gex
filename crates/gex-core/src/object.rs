@@ -1,6 +1,6 @@
-//! Nodes: the one building block. A node has a kind (what the engine does with it),
-//! a transform, properties, scripts and children. A "scene" is just a node tree saved
-//! to a file, and any node can be an instance of another scene.
+//! Objects: the one building block. An object has a kind (what the engine does with it),
+//! a transform, properties, scripts and children. A "blueprint" is just an object tree saved
+//! to a file, and any object can be an instance of another blueprint.
 
 use std::collections::BTreeMap;
 
@@ -9,18 +9,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::variant::Variant;
 
-/// What the engine does with a node. 2D kinds use x/y in pixels (y grows downward,
+/// What the engine does with an object. 2D kinds use x/y in pixels (y grows downward,
 /// like GameMaker) and `rotation.z` in degrees; 3D kinds use metres, y up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum NodeKind {
-    /// Plays animation clips (made in the Timeline) on the nodes around it.
+pub enum ObjectKind {
+    /// Plays animation clips (made in the Timeline) on the objects around it.
     Animator,
-    /// A plain grouping node (no transform effect beyond passing it on).
-    Node,
-    /// Plays a sound file (with autoplay, or PLAY(node) from a script).
+    /// A plain grouping object (no transform effect beyond passing it on).
+    #[serde(alias = "Node")]
+    Object,
+    /// Plays a sound file (with autoplay, or PLAY(object) from a script).
     Sound,
     // ---- 2D ----
-    Node2D,
+    #[serde(alias = "Node2D")]
+    Object2D,
     /// A textured or plain-colored rectangle.
     Sprite2D,
     Label2D,
@@ -44,7 +46,8 @@ pub enum NodeKind {
     ProgressBar,
     Image,
     // ---- 3D ----
-    Node3D,
+    #[serde(alias = "Node3D")]
+    Object3D,
     /// A primitive (cube, sphere, plane) or a model resource.
     Mesh3D,
     Camera3D,
@@ -59,92 +62,99 @@ pub enum NodeKind {
     Particles3D,
     /// A 3D area (box or sphere) that reports what enters it (on_collide events): triggers, pickups.
     Collider3D,
-    /// Sky, ambient light and fog for 3D scenes (the first one in the tree is used).
+    /// Sky, ambient light and fog for 3D blueprints (the first one in the tree is used).
     Environment,
 }
 
-pub const ALL_KINDS: &[NodeKind] = &[
-    NodeKind::Node,
-    NodeKind::Animator,
-    NodeKind::Sound,
-    NodeKind::Node2D,
-    NodeKind::Sprite2D,
-    NodeKind::Label2D,
-    NodeKind::Camera2D,
-    NodeKind::Collider2D,
-    NodeKind::Body2D,
-    NodeKind::TileMap2D,
-    NodeKind::Particles2D,
-    NodeKind::Light2D,
-    NodeKind::Panel,
-    NodeKind::Button,
-    NodeKind::Label,
-    NodeKind::TextInput,
-    NodeKind::ProgressBar,
-    NodeKind::Image,
-    NodeKind::Node3D,
-    NodeKind::Mesh3D,
-    NodeKind::Camera3D,
-    NodeKind::Light3D,
-    NodeKind::Body3D,
-    NodeKind::Collider3D,
-    NodeKind::Sprite3D,
-    NodeKind::Label3D,
-    NodeKind::Particles3D,
-    NodeKind::Environment,
+pub const ALL_KINDS: &[ObjectKind] = &[
+    ObjectKind::Object,
+    ObjectKind::Animator,
+    ObjectKind::Sound,
+    ObjectKind::Object2D,
+    ObjectKind::Sprite2D,
+    ObjectKind::Label2D,
+    ObjectKind::Camera2D,
+    ObjectKind::Collider2D,
+    ObjectKind::Body2D,
+    ObjectKind::TileMap2D,
+    ObjectKind::Particles2D,
+    ObjectKind::Light2D,
+    ObjectKind::Panel,
+    ObjectKind::Button,
+    ObjectKind::Label,
+    ObjectKind::TextInput,
+    ObjectKind::ProgressBar,
+    ObjectKind::Image,
+    ObjectKind::Object3D,
+    ObjectKind::Mesh3D,
+    ObjectKind::Camera3D,
+    ObjectKind::Light3D,
+    ObjectKind::Body3D,
+    ObjectKind::Collider3D,
+    ObjectKind::Sprite3D,
+    ObjectKind::Label3D,
+    ObjectKind::Particles3D,
+    ObjectKind::Environment,
 ];
 
-impl NodeKind {
+impl ObjectKind {
     pub fn name(self) -> &'static str {
         match self {
-            NodeKind::Node => "Node",
-            NodeKind::Animator => "Animator",
-            NodeKind::Sound => "Sound",
-            NodeKind::Node2D => "Node2D",
-            NodeKind::Sprite2D => "Sprite2D",
-            NodeKind::Label2D => "Label2D",
-            NodeKind::Camera2D => "Camera2D",
-            NodeKind::Collider2D => "Collider2D",
-            NodeKind::Body2D => "Body2D",
-            NodeKind::TileMap2D => "TileMap2D",
-            NodeKind::Particles2D => "Particles2D",
-            NodeKind::Light2D => "Light2D",
-            NodeKind::Panel => "Panel",
-            NodeKind::Button => "Button",
-            NodeKind::Label => "Label",
-            NodeKind::TextInput => "TextInput",
-            NodeKind::ProgressBar => "ProgressBar",
-            NodeKind::Image => "Image",
-            NodeKind::Node3D => "Node3D",
-            NodeKind::Mesh3D => "Mesh3D",
-            NodeKind::Camera3D => "Camera3D",
-            NodeKind::Light3D => "Light3D",
-            NodeKind::Body3D => "Body3D",
-            NodeKind::Collider3D => "Collider3D",
-            NodeKind::Sprite3D => "Sprite3D",
-            NodeKind::Label3D => "Label3D",
-            NodeKind::Particles3D => "Particles3D",
-            NodeKind::Environment => "Environment",
+            ObjectKind::Object => "Object",
+            ObjectKind::Animator => "Animator",
+            ObjectKind::Sound => "Sound",
+            ObjectKind::Object2D => "Object2D",
+            ObjectKind::Sprite2D => "Sprite2D",
+            ObjectKind::Label2D => "Label2D",
+            ObjectKind::Camera2D => "Camera2D",
+            ObjectKind::Collider2D => "Collider2D",
+            ObjectKind::Body2D => "Body2D",
+            ObjectKind::TileMap2D => "TileMap2D",
+            ObjectKind::Particles2D => "Particles2D",
+            ObjectKind::Light2D => "Light2D",
+            ObjectKind::Panel => "Panel",
+            ObjectKind::Button => "Button",
+            ObjectKind::Label => "Label",
+            ObjectKind::TextInput => "TextInput",
+            ObjectKind::ProgressBar => "ProgressBar",
+            ObjectKind::Image => "Image",
+            ObjectKind::Object3D => "Object3D",
+            ObjectKind::Mesh3D => "Mesh3D",
+            ObjectKind::Camera3D => "Camera3D",
+            ObjectKind::Light3D => "Light3D",
+            ObjectKind::Body3D => "Body3D",
+            ObjectKind::Collider3D => "Collider3D",
+            ObjectKind::Sprite3D => "Sprite3D",
+            ObjectKind::Label3D => "Label3D",
+            ObjectKind::Particles3D => "Particles3D",
+            ObjectKind::Environment => "Environment",
         }
     }
-    pub fn from_name(s: &str) -> Option<NodeKind> {
+    pub fn from_name(s: &str) -> Option<ObjectKind> {
+        // The names from before objects were called objects still work.
+        let s = match s.to_ascii_lowercase().as_str() {
+            "node" => "Object",
+            "node2d" => "Object2D",
+            "node3d" => "Object3D",
+            _ => s,
+        };
         ALL_KINDS.iter().copied().find(|k| k.name().eq_ignore_ascii_case(s))
     }
     pub fn is_2d(self) -> bool {
-        matches!(self, NodeKind::Node2D | NodeKind::Sprite2D | NodeKind::Label2D | NodeKind::Camera2D | NodeKind::Collider2D | NodeKind::Body2D | NodeKind::TileMap2D | NodeKind::Particles2D | NodeKind::Light2D)
+        matches!(self, ObjectKind::Object2D | ObjectKind::Sprite2D | ObjectKind::Label2D | ObjectKind::Camera2D | ObjectKind::Collider2D | ObjectKind::Body2D | ObjectKind::TileMap2D | ObjectKind::Particles2D | ObjectKind::Light2D)
     }
     pub fn is_ui(self) -> bool {
-        matches!(self, NodeKind::Panel | NodeKind::Button | NodeKind::Label | NodeKind::TextInput | NodeKind::ProgressBar | NodeKind::Image)
+        matches!(self, ObjectKind::Panel | ObjectKind::Button | ObjectKind::Label | ObjectKind::TextInput | ObjectKind::ProgressBar | ObjectKind::Image)
     }
     pub fn is_3d(self) -> bool {
-        matches!(self, NodeKind::Node3D | NodeKind::Mesh3D | NodeKind::Camera3D | NodeKind::Light3D | NodeKind::Body3D | NodeKind::Collider3D | NodeKind::Sprite3D | NodeKind::Label3D | NodeKind::Particles3D | NodeKind::Environment)
+        matches!(self, ObjectKind::Object3D | ObjectKind::Mesh3D | ObjectKind::Camera3D | ObjectKind::Light3D | ObjectKind::Body3D | ObjectKind::Collider3D | ObjectKind::Sprite3D | ObjectKind::Label3D | ObjectKind::Particles3D | ObjectKind::Environment)
     }
-    /// The built-in properties this kind has, with their defaults. Scene files only
+    /// The built-in properties this kind has, with their defaults. Blueprint files only
     /// store values that differ from these.
     pub fn default_props(self) -> Vec<(&'static str, Variant)> {
         use Variant::*;
         match self {
-            NodeKind::Sprite2D => vec![
+            ObjectKind::Sprite2D => vec![
                 ("texture", Res(String::new())),
                 ("width", Num(32.0)),
                 ("height", Num(32.0)),
@@ -169,8 +179,8 @@ impl NodeKind {
                 ("filter", Text("project".into())),
                 ("lit", Bool(true)),
             ],
-            NodeKind::Light2D => vec![("color", Color([1.0, 0.9, 0.7, 1.0])), ("energy", Num(1.0)), ("radius", Num(200.0)), ("texture", Res(String::new()))],
-            NodeKind::TileMap2D => vec![
+            ObjectKind::Light2D => vec![("color", Color([1.0, 0.9, 0.7, 1.0])), ("energy", Num(1.0)), ("radius", Num(200.0)), ("texture", Res(String::new()))],
+            ObjectKind::TileMap2D => vec![
                 ("tileset", Res(String::new())),
                 ("tile_width", Num(32.0)),
                 ("tile_height", Num(32.0)),
@@ -186,7 +196,7 @@ impl NodeKind {
                 ("filter", Text("project".into())),
                 ("lit", Bool(true)),
             ],
-            NodeKind::Particles2D => vec![
+            ObjectKind::Particles2D => vec![
                 ("emitting", Bool(true)),
                 ("rate", Num(30.0)),
                 ("lifetime", Num(1.0)),
@@ -208,7 +218,7 @@ impl NodeKind {
                 ("filter", Text("project".into())),
                 ("lit", Bool(true)),
             ],
-            NodeKind::Panel => vec![
+            ObjectKind::Panel => vec![
                 ("width", Num(200.0)),
                 ("height", Num(100.0)),
                 ("color", Color([0.1, 0.12, 0.16, 0.92])),
@@ -220,7 +230,7 @@ impl NodeKind {
                 ("anchor", Text("top_left".into())),
                 ("opacity", Num(1.0)),
             ],
-            NodeKind::Button => vec![
+            ObjectKind::Button => vec![
                 ("text", Text("Button".into())),
                 ("width", Num(140.0)),
                 ("height", Num(36.0)),
@@ -234,7 +244,7 @@ impl NodeKind {
                 ("anchor", Text("top_left".into())),
                 ("opacity", Num(1.0)),
             ],
-            NodeKind::Label => vec![
+            ObjectKind::Label => vec![
                 ("text", Text("Label".into())),
                 ("size", Num(18.0)),
                 ("color", Color([1.0; 4])),
@@ -243,7 +253,7 @@ impl NodeKind {
                 ("anchor", Text("top_left".into())),
                 ("opacity", Num(1.0)),
             ],
-            NodeKind::TextInput => vec![
+            ObjectKind::TextInput => vec![
                 ("text", Text(String::new())),
                 ("placeholder", Text("type here".into())),
                 ("width", Num(200.0)),
@@ -253,7 +263,7 @@ impl NodeKind {
                 ("anchor", Text("top_left".into())),
                 ("opacity", Num(1.0)),
             ],
-            NodeKind::ProgressBar => vec![
+            ObjectKind::ProgressBar => vec![
                 ("value", Num(0.5)),
                 ("max", Num(1.0)),
                 ("width", Num(200.0)),
@@ -263,7 +273,7 @@ impl NodeKind {
                 ("anchor", Text("top_left".into())),
                 ("opacity", Num(1.0)),
             ],
-            NodeKind::Image => vec![
+            ObjectKind::Image => vec![
                 ("texture", Res(String::new())),
                 ("width", Num(64.0)),
                 ("height", Num(64.0)),
@@ -272,8 +282,8 @@ impl NodeKind {
                 ("anchor", Text("top_left".into())),
                 ("opacity", Num(1.0)),
             ],
-            NodeKind::Label2D => vec![("text", Text("Label".into())), ("size", Num(16.0)), ("color", Color([1.0; 4])), ("layer", Num(10.0)), ("font", Res(String::new())), ("opacity", Num(1.0))],
-            NodeKind::Camera2D => vec![
+            ObjectKind::Label2D => vec![("text", Text("Label".into())), ("size", Num(16.0)), ("color", Color([1.0; 4])), ("layer", Num(10.0)), ("font", Res(String::new())), ("opacity", Num(1.0))],
+            ObjectKind::Camera2D => vec![
                 ("zoom", Num(1.0)),
                 ("current", Bool(true)),
                 ("smoothing", Num(0.0)),
@@ -284,8 +294,8 @@ impl NodeKind {
                 ("limit_bottom", Num(720.0)),
                 ("ambient", Color([1.0; 4])),
             ],
-            NodeKind::Collider2D => vec![("width", Num(32.0)), ("height", Num(32.0)), ("layer", Text(String::new())), ("mask", Text(String::new()))],
-            NodeKind::Collider3D => vec![
+            ObjectKind::Collider2D => vec![("width", Num(32.0)), ("height", Num(32.0)), ("layer", Text(String::new())), ("mask", Text(String::new()))],
+            ObjectKind::Collider3D => vec![
                 ("shape", Text("box".into())),
                 ("width", Num(1.0)),
                 ("height", Num(1.0)),
@@ -294,7 +304,7 @@ impl NodeKind {
                 ("layer", Text(String::new())),
                 ("mask", Text(String::new())),
             ],
-            NodeKind::Mesh3D => vec![
+            ObjectKind::Mesh3D => vec![
                 ("mesh", Text("cube".into())),
                 ("color", Color([0.8, 0.8, 0.8, 1.0])),
                 ("texture", Res(String::new())),
@@ -342,7 +352,7 @@ impl NodeKind {
                 ("uv_scroll_y", Num(0.0)),
                 ("draw_distance", Num(0.0)),
             ],
-            NodeKind::Sprite3D => vec![
+            ObjectKind::Sprite3D => vec![
                 ("texture", Res(String::new())),
                 ("width", Num(1.0)),
                 ("height", Num(1.0)),
@@ -364,8 +374,8 @@ impl NodeKind {
                 ("uv_scroll_y", Num(0.0)),
                 ("draw_distance", Num(0.0)),
             ],
-            NodeKind::Label3D => vec![("text", Text("Label".into())), ("size", Num(24.0)), ("color", Color([1.0; 4])), ("font", Res(String::new())), ("opacity", Num(1.0))],
-            NodeKind::Particles3D => vec![
+            ObjectKind::Label3D => vec![("text", Text("Label".into())), ("size", Num(24.0)), ("color", Color([1.0; 4])), ("font", Res(String::new())), ("opacity", Num(1.0))],
+            ObjectKind::Particles3D => vec![
                 ("emitting", Bool(true)),
                 ("rate", Num(30.0)),
                 ("lifetime", Num(1.5)),
@@ -387,8 +397,8 @@ impl NodeKind {
                 ("filter", Text("project".into())),
                 ("fog", Bool(true)),
             ],
-            NodeKind::Camera3D => vec![("fov", Num(70.0)), ("current", Bool(true)), ("near", Num(0.05)), ("far", Num(500.0)), ("ortho", Bool(false)), ("ortho_size", Num(10.0))],
-            NodeKind::Light3D => vec![
+            ObjectKind::Camera3D => vec![("fov", Num(70.0)), ("current", Bool(true)), ("near", Num(0.05)), ("far", Num(500.0)), ("ortho", Bool(false)), ("ortho_size", Num(10.0))],
+            ObjectKind::Light3D => vec![
                 ("type", Text("directional".into())),
                 ("color", Color([1.0, 1.0, 1.0, 1.0])),
                 ("energy", Num(1.0)),
@@ -401,7 +411,7 @@ impl NodeKind {
                 ("shadow_strength", Num(1.0)),
                 ("shadow_bias", Num(-1.0)),
             ],
-            NodeKind::Environment => vec![
+            ObjectKind::Environment => vec![
                 ("sky_top", Color([0.32, 0.5, 0.78, 1.0])),
                 ("sky_horizon", Color([0.72, 0.8, 0.88, 1.0])),
                 ("ground", Color([0.22, 0.22, 0.24, 1.0])),
@@ -424,8 +434,8 @@ impl NodeKind {
                 ("tint", Color([1.0; 4])),
                 ("vignette", Num(0.0)),
             ],
-            NodeKind::Animator => vec![("clips", Res(String::new())), ("autoplay", Text(String::new())), ("speed", Num(1.0))],
-            NodeKind::Sound => vec![
+            ObjectKind::Animator => vec![("clips", Res(String::new())), ("autoplay", Text(String::new())), ("speed", Num(1.0))],
+            ObjectKind::Sound => vec![
                 ("stream", Res(String::new())),
                 ("volume", Num(1.0)),
                 ("pitch", Num(1.0)),
@@ -438,7 +448,7 @@ impl NodeKind {
                 ("echo", Num(0.0)),
                 ("echo_delay", Num(0.15)),
             ],
-            NodeKind::Body2D => vec![
+            ObjectKind::Body2D => vec![
                 ("body", Text("dynamic".into())),
                 ("shape", Text("box".into())),
                 ("width", Num(32.0)),
@@ -465,7 +475,7 @@ impl NodeKind {
                 ("layer", Text(String::new())),
                 ("mask", Text(String::new())),
             ],
-            NodeKind::Body3D => vec![
+            ObjectKind::Body3D => vec![
                 ("body", Text("dynamic".into())),
                 ("shape", Text("box".into())),
                 ("width", Num(1.0)),
@@ -497,7 +507,7 @@ impl NodeKind {
                 ("layer", Text(String::new())),
                 ("mask", Text(String::new())),
             ],
-            NodeKind::Node2D | NodeKind::Node3D => vec![("modulate", Color([1.0; 4]))],
+            ObjectKind::Object2D | ObjectKind::Object3D => vec![("modulate", Color([1.0; 4]))],
             _ => vec![],
         }
     }
@@ -507,7 +517,7 @@ impl NodeKind {
 #[serde(default)]
 pub struct Transform {
     pub position: Vec3,
-    /// Euler angles in degrees (applied Y, then X, then Z). 2D nodes use only `z`.
+    /// Euler angles in degrees (applied Y, then X, then Z). 2D objects use only `z`.
     pub rotation: Vec3,
     pub scale: Vec3,
 }
@@ -532,35 +542,35 @@ impl Transform {
 }
 
 slotmap::new_key_type! {
-    /// A node's handle in its tree. Stays valid until the node is removed.
-    pub struct NodeId;
+    /// An object's handle in its tree. Stays valid until the object is removed.
+    pub struct ObjectId;
 }
 
 #[derive(Clone, Debug)]
-pub struct Node {
+pub struct Object {
     pub name: String,
-    pub kind: NodeKind,
+    pub kind: ObjectKind,
     pub transform: Transform,
     pub visible: bool,
     /// Built-in properties of the kind, plus any custom ones you add.
     pub props: BTreeMap<String, Variant>,
-    /// `res://` paths of the .jlb scripts attached to this node, run in this order.
+    /// `res://` paths of the .jlb scripts attached to this object, run in this order.
     pub scripts: Vec<String>,
-    /// Groups let scripts find sets of nodes ("enemies") and colliders filter hits.
+    /// Groups let scripts find sets of objects ("enemies") and colliders filter hits.
     pub groups: Vec<String>,
-    pub parent: Option<NodeId>,
-    pub children: Vec<NodeId>,
-    /// Set on the root of an instanced scene: the scene file it came from.
+    pub parent: Option<ObjectId>,
+    pub children: Vec<ObjectId>,
+    /// Set on the root of an instanced blueprint: the blueprint file it came from.
     pub instance_of: Option<String>,
-    /// True for nodes that came from inside an instanced scene (saved by reference, not
+    /// True for objects that came from inside an instanced blueprint (saved by reference, not
     /// one by one).
     pub from_instance: bool,
 }
 
-impl Node {
-    pub fn new(name: impl Into<String>, kind: NodeKind) -> Node {
+impl Object {
+    pub fn new(name: impl Into<String>, kind: ObjectKind) -> Object {
         let props = kind.default_props().into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-        Node {
+        Object {
             name: name.into(),
             kind,
             transform: Transform::default(),

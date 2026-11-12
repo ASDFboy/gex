@@ -1,12 +1,12 @@
 //! Engine commands available to every script, ALL CAPS like the rest of .jlb's built-ins.
-//! Wherever a command takes a node, it accepts a node id (a number), a path text
-//! ("Gun", "../Enemy", "/Level/Door"; relative to the running node), or NULL for the
-//! running node itself.
+//! Wherever a command takes an object, it accepts an object id (a number), a path text
+//! ("Gun", "../Enemy", "/Level/Door"; relative to the running object), or NULL for the
+//! running object itself.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gex_core::{scene, NodeId};
+use gex_core::{blueprint, ObjectId};
 use jlb::embed::{as_f64, list_table, num};
 use jlb::host::Host;
 use jlb::value::{display, err};
@@ -17,47 +17,47 @@ use crate::world::{Pending, Timer, WorldState};
 
 /// (name, inputs, what it does) — the editor shows these as help and completions.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
-    ("NODE", "(path)", "the node at a path (relative to this one), or NULL"),
-    ("GET", "(node, property)", "a property of another node"),
-    ("SET", "(node, property, value)", "changes a property of another node"),
-    ("NODES", "(group)", "every node in a group, as a table of ids"),
-    ("CHILDREN", "(node)", "a node's children, as a table of ids"),
-    ("PARENT", "(node)", "a node's parent, or NULL"),
-    ("NAME_OF", "(node)", "a node's name"),
-    ("PATH_OF", "(node)", "a node's full path"),
-    ("SPAWN", "(scene, x, y, z, parent)", "adds an instance of a scene file; gives its id"),
-    ("DESTROY", "(node)", "removes a node (at the end of the frame); runs on_destroy"),
-    ("SEND", "(node, event, inputs...)", "runs on_<event>(inputs...) on one node"),
-    ("EMIT", "(event, inputs...)", "runs on_<event>(inputs...) on every node that has it"),
-    ("BROADCAST", "(event, inputs...)", "the same as EMIT: every node with on_<event> receives it"),
+    ("OBJECT", "(path)", "the object at a path (relative to this one), or NULL"),
+    ("GET", "(object, property)", "a property of another object"),
+    ("SET", "(object, property, value)", "changes a property of another object"),
+    ("OBJECTS", "(group)", "every object in a group, as a table of ids"),
+    ("CHILDREN", "(object)", "an object's children, as a table of ids"),
+    ("PARENT", "(object)", "an object's parent, or NULL"),
+    ("NAME_OF", "(object)", "an object's name"),
+    ("PATH_OF", "(object)", "an object's full path"),
+    ("SPAWN", "(blueprint, x, y, z, parent)", "adds an instance of a blueprint file; gives its id"),
+    ("DESTROY", "(object)", "removes an object (at the end of the frame); runs on_destroy"),
+    ("SEND", "(object, event, inputs...)", "runs on_<event>(inputs...) on one object"),
+    ("EMIT", "(event, inputs...)", "runs on_<event>(inputs...) on every object that has it"),
+    ("BROADCAST", "(event, inputs...)", "the same as EMIT: every object with on_<event> receives it"),
     ("TIMER", "(name, seconds, repeat)", "runs on_timer(name) and on_timer_<name>() later"),
-    ("TWEEN", "(node, property, to, seconds, ease)", "slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property)"),
-    ("TWEEN_STOP", "(node, property)", "stops a node's tweens (just that property's, if given), leaving the value where it is"),
-    ("TIMER_STOP", "(name)", "cancels this node's timer"),
-    ("COLLIDING", "(node)", "the nodes touching this one now, as a table of ids"),
-    ("MOVE", "(node, dx, dy, dz)", "moves a body, sliding along walls; gives TRUE when it's on the floor after"),
-    ("IMPULSE", "(node, x, y, z)", "adds to a dynamic body's velocity at once (a kick or a jump), whatever its mass"),
-    ("RAYCAST", "(x, y, dx, dy, length, ignore, layers)", "the first 2D body along a line: [node:, x:, y:, nx:, ny:, distance:] or NULL; layers (like \"world, enemies\") limits what it can hit"),
+    ("TWEEN", "(object, property, to, seconds, ease)", "slides a number, position or color to a new value; ease: linear, in, out (default), in_out, back, bounce, elastic; then on_tween_end(property)"),
+    ("TWEEN_STOP", "(object, property)", "stops an object's tweens (just that property's, if given), leaving the value where it is"),
+    ("TIMER_STOP", "(name)", "cancels this object's timer"),
+    ("COLLIDING", "(object)", "the objects touching this one now, as a table of ids"),
+    ("MOVE", "(object, dx, dy, dz)", "moves a body, sliding along walls; gives TRUE when it's on the floor after"),
+    ("IMPULSE", "(object, x, y, z)", "adds to a dynamic body's velocity at once (a kick or a jump), whatever its mass"),
+    ("RAYCAST", "(x, y, dx, dy, length, ignore, layers)", "the first 2D body along a line: [object:, x:, y:, nx:, ny:, distance:] or NULL; layers (like \"world, enemies\") limits what it can hit"),
     ("RAYCAST_3D", "(x, y, z, dx, dy, dz, length, ignore, layers)", "the same in 3D"),
-    ("DISTANCE", "(a, b)", "how far apart two nodes are"),
+    ("DISTANCE", "(a, b)", "how far apart two objects are"),
     ("PLAY_SOUND", "(file, volume, pitch, pan, echo)", "plays a sound file once (res:// or hl2://...); pan -1 left to 1 right, echo 0 to 1; gives its id"),
     ("STOP_SOUND", "(id)", "stops a sound from PLAY_SOUND (NULL stops every sound)"),
-    ("PLAY", "(node)", "starts a Sound node"),
-    ("STOP", "(node)", "stops a Sound node"),
+    ("PLAY", "(object)", "starts a Sound object"),
+    ("STOP", "(object)", "stops a Sound object"),
     ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
-    ("BURST", "(node, count)", "a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff)"),
-    ("RAGDOLL", "(node, vx, vy, vz)", "a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it"),
+    ("BURST", "(object, count)", "a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff)"),
+    ("RAGDOLL", "(object, vx, vy, vz)", "a Mesh3D with a skinned model (a character) goes limp and falls as a ragdoll, starting at that velocity; IMPULSE shoves it"),
     ("USE_DOOR", "(door, open)", "opens or closes one of a map's doors (in the group map_doors); with no second input, toggles it"),
     ("MAP_ENTITIES", "(map, classname)", "the entities in a map (a Mesh3D showing a .bsp): a table of [classname:, name:, x:, y:, z:, rotation_y:, keys:, bounds:] (keys holds every setting as written; bounds is a brush entity's box, like a ladder's); classname picks one kind, \"info_player*\" any that start so"),
     ("PLAY_CLIP", "(animator, clip)", "an Animator plays one of its clips (made in the Timeline) from the start; on_clip_end(clip) runs on its parent when it ends"),
     ("STOP_CLIP", "(animator)", "stops an Animator's clip where it is"),
     ("CLIP_PLAYING", "(animator)", "the name of the clip an Animator is playing, or NULL"),
-    ("ANIMATE", "(node, name, restart)", "plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE"),
-    ("ANIMATIONS", "(node)", "the names of a Mesh3D model's animations"),
-    ("TILE", "(node, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
-    ("SET_TILE", "(node, col, row, id)", "changes a tile (-1 clears it)"),
-    ("TILE_AT", "(node, x, y)", "the cell under a world position: [col:, row:]"),
+    ("ANIMATE", "(object, name, restart)", "plays an animation: a Sprite2D's (from its animations property) or a model's; the one already playing carries on unless restart is TRUE"),
+    ("ANIMATIONS", "(object)", "the names of a Mesh3D model's animations"),
+    ("TILE", "(object, col, row)", "a TileMap2D's tile id at a cell (-1 = empty)"),
+    ("SET_TILE", "(object, col, row, id)", "changes a tile (-1 clears it)"),
+    ("TILE_AT", "(object, x, y)", "the cell under a world position: [col:, row:]"),
     ("FIND_PATH", "(tilemap, x1, y1, x2, y2)", "a walkable path through a TileMap2D: a table of [x:, y:] points, or NULL"),
     ("SAVE_DATA", "(name, value)", "keeps a value (a table, number, text...) on disk between runs"),
     ("LOAD_DATA", "(name)", "a value kept with SAVE_DATA, or NULL"),
@@ -79,11 +79,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("AXIS", "(name)", "a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt"),
     ("DELTA_TIME", "()", "seconds since the last frame"),
     ("GAME_TIME", "()", "seconds since the game started"),
-    ("CHANGE_SCENE", "(scene, fade, color)", "switches to another scene file; with fade (seconds) the screen fades to color (default black) and back"),
-    ("REMEMBER", "(name, value)", "keeps a value while the game runs, across CHANGE_SCENE (lives, score, inventory)"),
+    ("CHANGE_BLUEPRINT", "(blueprint, fade, color)", "switches to another blueprint file; with fade (seconds) the screen fades to color (default black) and back"),
+    ("REMEMBER", "(name, value)", "keeps a value while the game runs, across CHANGE_BLUEPRINT (lives, score, inventory)"),
     ("RECALL", "(name)", "a value kept with REMEMBER, or NULL"),
     ("SHAKE", "(strength, seconds)", "shakes the camera: strength in pixels (2D), dying away over seconds"),
-    ("PAUSE", "(on)", "pauses the game (TRUE) or carries on (FALSE): only nodes in the group while_paused keep running, for a pause menu"),
+    ("PAUSE", "(on)", "pauses the game (TRUE) or carries on (FALSE): only objects in the group while_paused keep running, for a pause menu"),
     ("PAUSED", "()", "TRUE while the game is paused"),
     ("TIME_SCALE", "(scale)", "how fast game time runs: 1 normal, 0.3 slow motion, 2 double; with no input, gives the current scale"),
     ("FULLSCREEN", "(on)", "switches the game window to full screen (TRUE) or back (FALSE); with no input, gives whether it is"),
@@ -95,8 +95,12 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("PHYSICS", "(setting)", "a physics setting's value; with no input, a table of all of them"),
 ];
 
+/// Names from before nodes were called objects and scenes blueprints: scripts using them
+/// keep working.
+pub const OLD_NAMES: &[(&str, &str)] = &[("NODE", "OBJECT"), ("NODES", "OBJECTS"), ("CHANGE_SCENE", "CHANGE_BLUEPRINT")];
+
 pub fn register() {
-    let names: Vec<&str> = COMMANDS.iter().map(|c| c.0).collect();
+    let names: Vec<&str> = COMMANDS.iter().map(|c| c.0).chain(OLD_NAMES.iter().map(|o| o.0)).collect();
     jlb::host::register(&names);
 }
 
@@ -104,19 +108,19 @@ pub struct EngineHost {
     pub st: Rc<RefCell<WorldState>>,
 }
 
-fn target(st: &WorldState, v: Option<&Value>) -> R<NodeId> {
+fn target(st: &WorldState, v: Option<&Value>) -> R<ObjectId> {
     let cur = st.current;
     let id = match v {
         None | Some(Value::Null) => cur,
         Some(Value::Text(p)) => st.tree.find_path(cur, p),
         Some(v @ Value::Num(_)) => value_id(v),
-        Some(o) => return err(format!("a node is given as an id, a path or NULL, not a {}", o.type_name())),
+        Some(o) => return err(format!("an object is given as an id, a path or NULL, not a {}", o.type_name())),
     };
     match id {
         Some(i) if st.tree.contains(i) => Ok(i),
         _ => err(match v {
-            Some(Value::Text(p)) => format!("there's no node at {}", p),
-            _ => "that node doesn't exist (was it destroyed?)".into(),
+            Some(Value::Text(p)) => format!("there's no object at {}", p),
+            _ => "that object doesn't exist (was it destroyed?)".into(),
         }),
     }
 }
@@ -133,13 +137,13 @@ fn num_arg(a: &[Value], i: usize, default: f64) -> f64 {
     a.get(i).and_then(as_f64).unwrap_or(default)
 }
 
-fn ids(list: Vec<NodeId>) -> Value {
+fn ids(list: Vec<ObjectId>) -> Value {
     list_table(list.into_iter().map(id_value).collect())
 }
 
-/// A node property by name, including the transform shortcuts that `self` has.
-fn get_prop(st: &WorldState, id: NodeId, k: &str) -> Value {
-    let n = &st.tree.nodes[id];
+/// An object property by name, including the transform shortcuts that `self` has.
+fn get_prop(st: &WorldState, id: ObjectId, k: &str) -> Value {
+    let n = &st.tree.objects[id];
     let t = &n.transform;
     match k {
         "name" => Value::text(&n.name),
@@ -159,11 +163,11 @@ fn get_prop(st: &WorldState, id: NodeId, k: &str) -> Value {
     }
 }
 
-fn set_prop(st: &mut WorldState, id: NodeId, k: &str, v: &Value) -> R<()> {
-    let n = &mut st.tree.nodes[id];
+fn set_prop(st: &mut WorldState, id: ObjectId, k: &str, v: &Value) -> R<()> {
+    let n = &mut st.tree.objects[id];
     let like = n.props.get(k).cloned();
     let Some(var) = to_variant(v, like.as_ref()) else {
-        return err(format!("a {} can't be stored in a node property", v.type_name()));
+        return err(format!("a {} can't be stored in an object property", v.type_name()));
     };
     let f = var.as_f64().unwrap_or(0.0) as f32;
     let t = &mut n.transform;
@@ -197,12 +201,12 @@ pub enum Draw {
     Image { file: String, x: f32, y: f32, w: f32, h: f32 },
 }
 
-/// Turns DRAW_* commands into sprites, lines and labels on top of the scene.
+/// Turns DRAW_* commands into sprites, lines and labels on top of the blueprint.
 pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
     use gex_core::render::{Label, Region, Sprite};
-    let node = NodeId::default();
+    let object = ObjectId::default();
     let sprite = |x: f32, y: f32, w: f32, h: f32, color, texture: &str| Sprite {
-        node,
+        object,
         model: glam::Mat4::from_translation(glam::Vec3::new(x, y, 0.0)),
         size: glam::Vec2::new(w, h),
         centered: false,
@@ -234,7 +238,7 @@ pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
                     list.lines_2d.push(([x + r * a0.cos(), y + r * a0.sin()], [x + r * a1.cos(), y + r * a1.sin()], *color));
                 }
             }
-            Draw::Text { x, y, text, size, color } => list.labels.push(Label { node, pos: glam::Vec2::new(*x, *y), text: text.clone(), size: *size, color: *color, layer: 1000.0, font: String::new() }),
+            Draw::Text { x, y, text, size, color } => list.labels.push(Label { object, pos: glam::Vec2::new(*x, *y), text: text.clone(), size: *size, color: *color, layer: 1000.0, font: String::new() }),
             Draw::Image { file, x, y, w, h } => list.sprites.push(sprite(*x, *y, *w, *h, [1.0; 4], file)),
         }
     }
@@ -289,18 +293,18 @@ fn truthy(v: Option<&Value>, default: bool) -> bool {
     }
 }
 
-/// Starts a Sound node's stream (restarting it if it's playing).
-pub fn play_node(st: &mut WorldState, id: NodeId) -> Result<(), String> {
-    let n = &st.tree.nodes[id];
-    if n.kind != gex_core::NodeKind::Sound {
-        return Err(format!("{} isn't a Sound node", n.name));
+/// Starts a Sound object's stream (restarting it if it's playing).
+pub fn play_object(st: &mut WorldState, id: ObjectId) -> Result<(), String> {
+    let n = &st.tree.objects[id];
+    if n.kind != gex_core::ObjectKind::Sound {
+        return Err(format!("{} isn't a Sound object", n.name));
     }
     let file = n.text("stream").to_string();
     if file.is_empty() {
-        return Err(format!("the Sound node {} has no stream file", n.name));
+        return Err(format!("the Sound object {} has no stream file", n.name));
     }
     let (vol, pitch, looped) = (n.num("volume", 1.0) as f32, n.num("pitch", 1.0) as f32, n.prop("loop").is_some_and(|v| v.as_bool()));
-    if let Some(old) = st.audio.by_node.remove(&id) {
+    if let Some(old) = st.audio.by_object.remove(&id) {
         st.audio.stop(old);
     }
     let echo = n.num("echo", 0.0) as f32;
@@ -308,24 +312,25 @@ pub fn play_node(st: &mut WorldState, id: NodeId) -> Result<(), String> {
     let r = st.audio.play_fx(&st.vfs, &file, vol, pitch, looped, fx);
     let s = r?;
     if s != 0 {
-        st.audio.by_node.insert(id, s);
+        st.audio.by_object.insert(id, s);
     }
     Ok(())
 }
 
 impl Host for EngineHost {
     fn call(&mut self, _it: &mut Interp, name: &'static str, a: Vec<Value>) -> Result<R<Value>, Vec<Value>> {
+        let name = OLD_NAMES.iter().find(|o| o.0 == name).map_or(name, |o| o.1);
         if !COMMANDS.iter().any(|c| c.0 == name) {
             return Err(a);
         }
         let mut st = self.st.borrow_mut();
         let st = &mut *st;
-        // Inside a task (START), NULL means the node the task belongs to.
+        // Inside a task (START), NULL means the object the task belongs to.
         if let Some(tag) = _it.running_tag() {
-            st.current = Some(crate::world::tag_node(tag));
+            st.current = Some(crate::world::tag_object(tag));
         }
         let r: R<Value> = (|| match name {
-            "NODE" => {
+            "OBJECT" => {
                 let p = text_arg(name, &a, 0)?;
                 Ok(st.tree.find_path(st.current, &p).map(id_value).unwrap_or(Value::Null))
             }
@@ -339,18 +344,18 @@ impl Host for EngineHost {
                 set_prop(st, id, &k, a.get(2).unwrap_or(&Value::Null))?;
                 Ok(Value::Null)
             }
-            "NODES" => Ok(ids(st.tree.in_group(&text_arg(name, &a, 0)?))),
+            "OBJECTS" => Ok(ids(st.tree.in_group(&text_arg(name, &a, 0)?))),
             "CHILDREN" => {
                 let id = target(st, a.first())?;
-                Ok(ids(st.tree.nodes[id].children.clone()))
+                Ok(ids(st.tree.objects[id].children.clone()))
             }
             "PARENT" => {
                 let id = target(st, a.first())?;
-                Ok(st.tree.nodes[id].parent.map(id_value).unwrap_or(Value::Null))
+                Ok(st.tree.objects[id].parent.map(id_value).unwrap_or(Value::Null))
             }
             "NAME_OF" => {
                 let id = target(st, a.first())?;
-                Ok(Value::text(&st.tree.nodes[id].name))
+                Ok(Value::text(&st.tree.objects[id].name))
             }
             "PATH_OF" => {
                 let id = target(st, a.first())?;
@@ -363,8 +368,8 @@ impl Host for EngineHost {
                     v => Some(target(st, v)?),
                 };
                 let project = st.project.clone();
-                let id = scene::instance(&mut st.tree, parent, &res, &|p: &str| project.read_text(p)).map_err(|e| jlb::value::fault(e.0))?;
-                let t = &mut st.tree.nodes[id].transform;
+                let id = blueprint::instance(&mut st.tree, parent, &res, &|p: &str| project.read_text(p)).map_err(|e| jlb::value::fault(e.0))?;
+                let t = &mut st.tree.objects[id].transform;
                 t.position.x = num_arg(&a, 1, t.position.x as f64) as f32;
                 t.position.y = num_arg(&a, 2, t.position.y as f64) as f32;
                 t.position.z = num_arg(&a, 3, t.position.z as f64) as f32;
@@ -388,23 +393,23 @@ impl Host for EngineHost {
                 Ok(Value::Null)
             }
             "TIMER" => {
-                let node = target(st, None)?;
+                let object = target(st, None)?;
                 let n = text_arg(name, &a, 0)?;
                 let secs = num_arg(&a, 1, 1.0);
                 let repeat = a.get(2).is_some_and(|v| jlb::ops::truth(v).unwrap_or(false));
-                st.timers.retain(|t| !(t.node == node && t.name == n));
-                st.timers.push(Timer { node, name: n, left: secs, every: repeat.then_some(secs) });
+                st.timers.retain(|t| !(t.object == object && t.name == n));
+                st.timers.push(Timer { object, name: n, left: secs, every: repeat.then_some(secs) });
                 Ok(Value::Null)
             }
             "TIMER_STOP" => {
-                let node = target(st, None)?;
+                let object = target(st, None)?;
                 let n = text_arg(name, &a, 0)?;
-                st.timers.retain(|t| !(t.node == node && t.name == n));
+                st.timers.retain(|t| !(t.object == object && t.name == n));
                 Ok(Value::Null)
             }
             "COLLIDING" => {
                 let id = target(st, a.first())?;
-                let mut v: Vec<NodeId> = st.touching.iter().filter(|(x, _)| *x == id).map(|(_, y)| *y).collect();
+                let mut v: Vec<ObjectId> = st.touching.iter().filter(|(x, _)| *x == id).map(|(_, y)| *y).collect();
                 v.sort();
                 Ok(ids(v))
             }
@@ -412,10 +417,10 @@ impl Host for EngineHost {
                 let id = target(st, a.first())?;
                 let n = num_arg(&a, 1, 20.0).max(0.0) as usize;
                 let st = &mut *st;
-                match st.tree.nodes[id].kind {
-                    gex_core::NodeKind::Particles2D => st.particles.entry(id).or_default().spawn(&st.tree, id, n),
-                    gex_core::NodeKind::Particles3D => st.particles_3d.entry(id).or_default().spawn(&st.tree, id, n),
-                    _ => return err(format!("{} isn't a Particles2D or Particles3D", st.tree.nodes[id].name)),
+                match st.tree.objects[id].kind {
+                    gex_core::ObjectKind::Particles2D => st.particles.entry(id).or_default().spawn(&st.tree, id, n),
+                    gex_core::ObjectKind::Particles3D => st.particles_3d.entry(id).or_default().spawn(&st.tree, id, n),
+                    _ => return err(format!("{} isn't a Particles2D or Particles3D", st.tree.objects[id].name)),
                 }
                 Ok(Value::Null)
             }
@@ -423,7 +428,7 @@ impl Host for EngineHost {
                 let id = target(st, a.first())?;
                 let prop = text_arg(name, &a, 1)?;
                 let Some(from) = crate::tween::read(&st.tree, id, &prop) else {
-                    return err(format!("{} has no number or color property {:?} to tween", st.tree.nodes[id].name, prop));
+                    return err(format!("{} has no number or color property {:?} to tween", st.tree.objects[id].name, prop));
                 };
                 let to = match (from, a.get(2)) {
                     (crate::tween::Val::Color(_), Some(v)) => crate::tween::Val::Color(color_arg(Some(v))),
@@ -440,8 +445,8 @@ impl Host for EngineHost {
                 if !crate::tween::EASES.contains(&ease.as_str()) {
                     return err(format!("no ease called {:?}; try {}", ease, crate::tween::EASES.join(", ")));
                 }
-                st.tweens.retain(|t| !(t.node == id && t.prop == prop));
-                st.tweens.push(crate::tween::Tween { node: id, prop, from, to, time: 0.0, length: num_arg(&a, 3, 0.5).max(0.0), ease });
+                st.tweens.retain(|t| !(t.object == id && t.prop == prop));
+                st.tweens.push(crate::tween::Tween { object: id, prop, from, to, time: 0.0, length: num_arg(&a, 3, 0.5).max(0.0), ease });
                 Ok(Value::Null)
             }
             "TWEEN_STOP" => {
@@ -450,13 +455,13 @@ impl Host for EngineHost {
                     Some(Value::Null) | None => None,
                     Some(_) => Some(text_arg(name, &a, 1)?),
                 };
-                st.tweens.retain(|t| !(t.node == id && prop.as_ref().is_none_or(|p| *p == t.prop)));
+                st.tweens.retain(|t| !(t.object == id && prop.as_ref().is_none_or(|p| *p == t.prop)));
                 Ok(Value::Null)
             }
             "MOVE" => {
                 let id = target(st, a.first())?;
                 let d = glam::Vec3::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, num_arg(&a, 3, 0.0) as f32);
-                let g = st.physics.move_node(&mut st.tree, id, d).map_err(jlb::value::fault)?;
+                let g = st.physics.move_object(&mut st.tree, id, d).map_err(jlb::value::fault)?;
                 Ok(Value::Bool(g))
             }
             "IMPULSE" => {
@@ -486,7 +491,7 @@ impl Host for EngineHost {
                 Ok(match hit {
                     None => Value::Null,
                     Some(h) => jlb::embed::named_table(vec![
-                        ("node", id_value(h.node)),
+                        ("object", id_value(h.object)),
                         ("x", num(h.point.x as f64)),
                         ("y", num(h.point.y as f64)),
                         ("z", num(h.point.z as f64)),
@@ -519,12 +524,12 @@ impl Host for EngineHost {
             }
             "PLAY" => {
                 let id = target(st, a.first())?;
-                play_node(st, id).map_err(jlb::value::fault)?;
+                play_object(st, id).map_err(jlb::value::fault)?;
                 Ok(Value::Null)
             }
             "STOP" => {
                 let id = target(st, a.first())?;
-                if let Some(s) = st.audio.by_node.remove(&id) {
+                if let Some(s) = st.audio.by_object.remove(&id) {
                     st.audio.stop(s);
                 }
                 Ok(Value::Null)
@@ -541,9 +546,9 @@ impl Host for EngineHost {
             }
             "RAGDOLL" => {
                 let id = target(st, a.first())?;
-                let n = &st.tree.nodes[id];
+                let n = &st.tree.objects[id];
                 let mesh = n.text("mesh").to_string();
-                if n.kind != gex_core::NodeKind::Mesh3D || !gex_assets::model::is_model(&mesh) {
+                if n.kind != gex_core::ObjectKind::Mesh3D || !gex_assets::model::is_model(&mesh) {
                     return err(format!("{} isn't a Mesh3D with a model", n.name));
                 }
                 let model = gex_assets::model::cached(&st.vfs, &mesh).map_err(jlb::value::fault)?;
@@ -565,7 +570,7 @@ impl Host for EngineHost {
             }
             "USE_DOOR" => {
                 let id = target(st, a.first())?;
-                let n = &st.tree.nodes[id];
+                let n = &st.tree.objects[id];
                 if n.text("door").is_empty() {
                     return err(format!("{} isn't one of a map's doors", n.name));
                 }
@@ -579,7 +584,7 @@ impl Host for EngineHost {
                 }
                 let time = n.num("door_time", 1.0);
                 // Remember where it started, the first time.
-                let n = &mut st.tree.nodes[id];
+                let n = &mut st.tree.objects[id];
                 if n.prop("door_home_x").is_none() {
                     let t = n.transform;
                     for (k, v) in [("door_home_x", t.position.x), ("door_home_y", t.position.y), ("door_home_z", t.position.z), ("door_home_ry", t.rotation.y)] {
@@ -598,16 +603,16 @@ impl Host for EngineHost {
                 }
                 for (prop, to) in go {
                     let from = crate::tween::read(&st.tree, id, prop).unwrap_or(crate::tween::Val::Num(0.0));
-                    st.tweens.retain(|t| !(t.node == id && t.prop == prop));
-                    st.tweens.push(crate::tween::Tween { node: id, prop: prop.to_string(), from, to: crate::tween::Val::Num(to), time: 0.0, length: time, ease: "in_out".into() });
+                    st.tweens.retain(|t| !(t.object == id && t.prop == prop));
+                    st.tweens.push(crate::tween::Tween { object: id, prop: prop.to_string(), from, to: crate::tween::Val::Num(to), time: 0.0, length: time, ease: "in_out".into() });
                 }
                 Ok(Value::Null)
             }
             "MAP_ENTITIES" => {
                 let id = target(st, a.first())?;
-                let mesh = st.tree.nodes[id].text("mesh").to_string();
+                let mesh = st.tree.objects[id].text("mesh").to_string();
                 if !gex_assets::model::map_base(&mesh).to_ascii_lowercase().ends_with(".bsp") {
-                    return err(format!("{} doesn't show a map (.bsp)", st.tree.nodes[id].name));
+                    return err(format!("{} doesn't show a map (.bsp)", st.tree.objects[id].name));
                 }
                 let want = match a.get(1) {
                     Some(Value::Text(t)) => t.to_ascii_lowercase(),
@@ -657,8 +662,8 @@ impl Host for EngineHost {
             "PLAY_CLIP" => {
                 let id = target(st, a.first())?;
                 let name = text_arg(name, &a, 1)?;
-                if st.tree.nodes[id].kind != gex_core::NodeKind::Animator {
-                    return err(format!("{} isn't an Animator", st.tree.nodes[id].name));
+                if st.tree.objects[id].kind != gex_core::ObjectKind::Animator {
+                    return err(format!("{} isn't an Animator", st.tree.objects[id].name));
                 }
                 let file = st.anim_file(id).map_err(jlb::value::fault)?;
                 if file.clip(&name).is_none() {
@@ -682,21 +687,21 @@ impl Host for EngineHost {
                 let anim = text_arg(name, &a, 1)?;
                 // Already playing it: carry on (so calling ANIMATE every frame is fine).
                 let restart = a.get(2).is_some_and(|v| matches!(v, Value::Bool(true)));
-                let same = st.tree.nodes[id].text("animation") == anim && st.anims.get(&id).is_none_or(|(n, _, ended)| *n == anim && !ended);
+                let same = st.tree.objects[id].text("animation") == anim && st.anims.get(&id).is_none_or(|(n, _, ended)| *n == anim && !ended);
                 if same && !restart {
                     return Ok(Value::Null);
                 }
                 st.anims.remove(&id);
-                let n = &mut st.tree.nodes[id];
+                let n = &mut st.tree.objects[id];
                 n.props.insert("animation".into(), gex_core::Variant::Text(anim));
-                if n.kind == gex_core::NodeKind::Mesh3D {
+                if n.kind == gex_core::ObjectKind::Mesh3D {
                     n.props.insert("anim_time".into(), gex_core::Variant::Num(0.0));
                 }
                 Ok(Value::Null)
             }
             "ANIMATIONS" => {
                 let id = target(st, a.first())?;
-                let mesh = st.tree.nodes[id].text("mesh").to_string();
+                let mesh = st.tree.objects[id].text("mesh").to_string();
                 let names = match gex_assets::model::cached(&st.vfs, &mesh) {
                     Ok(m) => m.animations.iter().map(|a| Value::text(&a.name)).collect(),
                     Err(_) => Vec::new(),
@@ -705,21 +710,21 @@ impl Host for EngineHost {
             }
             "TILE" | "SET_TILE" => {
                 let id = target(st, a.first())?;
-                if st.tree.nodes[id].kind != gex_core::NodeKind::TileMap2D {
-                    return err(format!("{} isn't a TileMap2D", st.tree.nodes[id].name));
+                if st.tree.objects[id].kind != gex_core::ObjectKind::TileMap2D {
+                    return err(format!("{} isn't a TileMap2D", st.tree.objects[id].name));
                 }
                 let (c, r) = (num_arg(&a, 1, 0.0).floor() as i32, num_arg(&a, 2, 0.0).floor() as i32);
-                let mut grid = gex_core::tiles::parse(st.tree.nodes[id].text("tiles"));
+                let mut grid = gex_core::tiles::parse(st.tree.objects[id].text("tiles"));
                 if name == "TILE" {
                     return Ok(num(gex_core::tiles::get(&grid, c, r) as f64));
                 }
                 gex_core::tiles::set(&mut grid, c, r, num_arg(&a, 3, -1.0) as i32);
-                st.tree.nodes[id].props.insert("tiles".into(), gex_core::Variant::Text(gex_core::tiles::to_text(&grid)));
+                st.tree.objects[id].props.insert("tiles".into(), gex_core::Variant::Text(gex_core::tiles::to_text(&grid)));
                 Ok(Value::Null)
             }
             "TILE_AT" => {
                 let id = target(st, a.first())?;
-                let n = &st.tree.nodes[id];
+                let n = &st.tree.objects[id];
                 let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
                 let local = st.tree.global_matrix(id).inverse().transform_point3(glam::Vec3::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, 0.0));
                 Ok(jlb::embed::named_table(vec![("col", num((local.x / tw).floor() as f64)), ("row", num((local.y / th).floor() as f64))]))
@@ -740,7 +745,7 @@ impl Host for EngineHost {
             }
             "FIND_PATH" => {
                 let id = target(st, a.first())?;
-                if st.tree.nodes[id].kind != gex_core::NodeKind::TileMap2D {
+                if st.tree.objects[id].kind != gex_core::ObjectKind::TileMap2D {
                     return err("FIND_PATH needs a TileMap2D to walk through");
                 }
                 let n = |i| num_arg(&a, i, 0.0) as f32;
@@ -775,19 +780,19 @@ impl Host for EngineHost {
             "MOUSE_Y" => Ok(num(st.input.mouse[1] as f64)),
             "DELTA_TIME" => Ok(num(st.dt)),
             "GAME_TIME" => Ok(num(st.time)),
-            "CHANGE_SCENE" => {
-                let scene = text_arg(name, &a, 0)?;
+            "CHANGE_BLUEPRINT" => {
+                let blueprint = text_arg(name, &a, 0)?;
                 let fade = num_arg(&a, 1, 0.0) as f32;
                 if fade > 0.0 {
-                    if st.fade.as_ref().is_none_or(|f| f.to_scene.is_none()) {
+                    if st.fade.as_ref().is_none_or(|f| f.to_blueprint.is_none()) {
                         let color = match a.get(2) {
                             Some(v) if !matches!(v, Value::Null) => color_arg(Some(v)),
                             _ => [0.0, 0.0, 0.0, 1.0],
                         };
-                        st.fade = Some(crate::world::Fade { to_scene: Some(scene), time: 0.0, length: fade / 2.0, color });
+                        st.fade = Some(crate::world::Fade { to_blueprint: Some(blueprint), time: 0.0, length: fade / 2.0, color });
                     }
                 } else {
-                    st.change_scene = Some(scene);
+                    st.change_blueprint = Some(blueprint);
                 }
                 Ok(Value::Null)
             }

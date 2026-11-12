@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Arena",
-    kind: Some(Node3D),
+    kind: Some(Object3D),
     scripts: ["res://scripts/rollaball.jlb", "res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Sky", kind: Some(Environment),

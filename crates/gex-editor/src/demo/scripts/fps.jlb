@@ -54,8 +54,8 @@ DEF on_mouse_pressed(button, x, y) {
 	dz = 0 - COS(yaw) * COS(pitch)
 	hit = RAYCAST_3D(self.x, self.y + 0.7, self.z, dx, dy, dz, 30, self.id)
 	IF hit !== NULL {
-		IF GET(hit.node, "body") == "dynamic" {
-			IMPULSE(hit.node, dx * 8, 3, dz * 8)
+		IF GET(hit.object, "body") == "dynamic" {
+			IMPULSE(hit.object, dx * 8, 3, dz * 8)
 		}
 	}
 }

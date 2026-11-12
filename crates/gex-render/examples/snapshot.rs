@@ -1,10 +1,10 @@
-//! Renders a scene headless to a PNG: `cargo run -p gex-render --example snapshot -- <out.png> [3d|2d]`.
+//! Renders a blueprint headless to a PNG: `cargo run -p gex-render --example snapshot -- <out.png> [3d|2d]`.
 //! Used to check the renderer without a window.
 
 use egui_wgpu::wgpu;
 use gex_core::glam::Vec3;
 use gex_core::render::extract;
-use gex_core::{Node, NodeKind, SceneTree, Variant};
+use gex_core::{Object, ObjectKind, BlueprintTree, Variant};
 use gex_render::{Cameras, EditorCamera2D, EditorCamera3D, Overlay, Renderer, COLOR_FORMAT};
 
 fn main() {
@@ -16,23 +16,23 @@ fn main() {
     eprintln!("adapter: {:?}", adapter.get_info().name);
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("no device");
 
-    let mut tree = SceneTree::new();
-    let root = tree.add(None, Node::new("R", NodeKind::Node3D));
-    let add = |t: &mut SceneTree, kind, pos: Vec3, f: &dyn Fn(&mut Node)| {
-        let mut n = Node::new("n", kind);
+    let mut tree = BlueprintTree::new();
+    let root = tree.add(None, Object::new("R", ObjectKind::Object3D));
+    let add = |t: &mut BlueprintTree, kind, pos: Vec3, f: &dyn Fn(&mut Object)| {
+        let mut n = Object::new("n", kind);
         n.transform.position = pos;
         f(&mut n);
         t.add(Some(root), n);
     };
-    add(&mut tree, NodeKind::Environment, Vec3::ZERO, &|n| {
+    add(&mut tree, ObjectKind::Environment, Vec3::ZERO, &|n| {
         n.props.insert("fog_start".into(), Variant::Num(8.0));
         n.props.insert("fog_end".into(), Variant::Num(30.0));
         n.props.insert("bloom".into(), Variant::Num(std::env::var("GEX_SNAP_BLOOM").ok().and_then(|b| b.parse().ok()).unwrap_or(0.0)));
     });
-    add(&mut tree, NodeKind::Sprite3D, Vec3::new(-1.0, 2.0, 0.5), &|n| {
+    add(&mut tree, ObjectKind::Sprite3D, Vec3::new(-1.0, 2.0, 0.5), &|n| {
         n.props.insert("color".into(), Variant::Color([0.2, 1.0, 0.4, 1.0]));
     });
-    add(&mut tree, NodeKind::Mesh3D, Vec3::new(0.0, 2.2, -1.5), &|n| {
+    add(&mut tree, ObjectKind::Mesh3D, Vec3::new(0.0, 2.2, -1.5), &|n| {
         n.props.insert("mesh".into(), Variant::Text("sphere".into()));
         n.props.insert("emissive".into(), Variant::Num(3.0));
         n.props.insert("color".into(), Variant::Color([1.0, 0.8, 0.3, 1.0]));
@@ -40,28 +40,28 @@ fn main() {
             n.props.insert("shader".into(), Variant::Res(sh));
         }
     });
-    add(&mut tree, NodeKind::Light3D, Vec3::ZERO, &|n| n.transform.rotation = Vec3::new(-50.0, 30.0, 0.0));
-    add(&mut tree, NodeKind::Light3D, Vec3::new(2.0, 1.0, 1.5), &|n| {
+    add(&mut tree, ObjectKind::Light3D, Vec3::ZERO, &|n| n.transform.rotation = Vec3::new(-50.0, 30.0, 0.0));
+    add(&mut tree, ObjectKind::Light3D, Vec3::new(2.0, 1.0, 1.5), &|n| {
         n.props.insert("type".into(), Variant::Text("point".into()));
         n.props.insert("color".into(), Variant::Color([1.0, 0.2, 0.1, 1.0]));
         n.props.insert("energy".into(), Variant::Num(3.0));
         n.props.insert("range".into(), Variant::Num(4.0));
     });
-    add(&mut tree, NodeKind::Mesh3D, Vec3::ZERO, &|n| {
+    add(&mut tree, ObjectKind::Mesh3D, Vec3::ZERO, &|n| {
         n.props.insert("mesh".into(), Variant::Text("plane".into()));
         n.transform.scale = Vec3::new(40.0, 1.0, 40.0);
     });
-    add(&mut tree, NodeKind::Mesh3D, Vec3::new(0.0, 0.5, 0.0), &|_| {});
-    add(&mut tree, NodeKind::Mesh3D, Vec3::new(2.0, 1.0, 0.0), &|n| n.props.insert("mesh".into(), Variant::Text("sphere".into())).map(|_| ()).unwrap_or(()));
-    add(&mut tree, NodeKind::Mesh3D, Vec3::new(-2.0, 0.6, 1.0), &|n| {
+    add(&mut tree, ObjectKind::Mesh3D, Vec3::new(0.0, 0.5, 0.0), &|_| {});
+    add(&mut tree, ObjectKind::Mesh3D, Vec3::new(2.0, 1.0, 0.0), &|n| n.props.insert("mesh".into(), Variant::Text("sphere".into())).map(|_| ()).unwrap_or(()));
+    add(&mut tree, ObjectKind::Mesh3D, Vec3::new(-2.0, 0.6, 1.0), &|n| {
         n.props.insert("color".into(), Variant::Color([0.3, 0.6, 1.0, 0.4]));
     });
-    // GEX_SNAP_MODEL=dir:file.glb:animation adds a model (from that folder) to the scene.
+    // GEX_SNAP_MODEL=dir:file.glb:animation adds a model (from that folder) to the blueprint.
     if let Ok(spec) = std::env::var("GEX_SNAP_MODEL") {
         let parts: Vec<&str> = spec.split(':').collect();
         let file = format!("res://{}", parts.get(1).copied().unwrap_or(""));
         let anim = parts.get(2).copied().unwrap_or("").to_string();
-        add(&mut tree, NodeKind::Mesh3D, Vec3::new(0.0, 0.0, 2.0), &|n| {
+        add(&mut tree, ObjectKind::Mesh3D, Vec3::new(0.0, 0.0, 2.0), &|n| {
             n.props.insert("mesh".into(), Variant::Text(file.clone()));
             n.props.insert("animation".into(), Variant::Text(anim.clone()));
             n.props.insert("anim_time".into(), Variant::Num(0.35));
@@ -69,17 +69,17 @@ fn main() {
             n.transform.rotation.y = 60.0;
         });
     }
-    let mut s = Node::new("S", NodeKind::Sprite2D);
+    let mut s = Object::new("S", ObjectKind::Sprite2D);
     s.transform.position = Vec3::new(100.0, 100.0, 0.0);
     s.props.insert("color".into(), Variant::Color([1.0, 0.3, 0.2, 1.0]));
     tree.add(Some(root), s);
     // 2D lighting: a dark camera ambient and one light.
     if std::env::var("GEX_SNAP_DARK").is_ok() {
-        let mut c = Node::new("Cam", NodeKind::Camera2D);
+        let mut c = Object::new("Cam", ObjectKind::Camera2D);
         c.transform.position = Vec3::new(320.0, 180.0, 0.0);
         c.props.insert("ambient".into(), Variant::Color([0.15, 0.15, 0.25, 1.0]));
         tree.add(Some(root), c);
-        let mut bg = Node::new("BG", NodeKind::Sprite2D);
+        let mut bg = Object::new("BG", ObjectKind::Sprite2D);
         bg.transform.position = Vec3::new(320.0, 180.0, 0.0);
         bg.props.insert("width".into(), Variant::Num(200.0));
         bg.props.insert("height".into(), Variant::Num(100.0));
@@ -88,7 +88,7 @@ fn main() {
         bg.props.insert("layer".into(), Variant::Num(-1.0));
         bg.props.insert("color".into(), Variant::Color([0.5, 0.6, 0.7, 1.0]));
         tree.add(Some(root), bg);
-        let mut l = Node::new("L", NodeKind::Light2D);
+        let mut l = Object::new("L", ObjectKind::Light2D);
         l.transform.position = Vec3::new(120.0, 120.0, 0.0);
         tree.add(Some(root), l);
     }

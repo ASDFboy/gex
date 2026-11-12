@@ -66,7 +66,7 @@ pub struct Animation {
 pub struct ModelData {
     pub parts: Vec<Part>,
     pub joints: Vec<Joint>,
-    /// Transform above the skeleton's roots (from the file's node hierarchy).
+    /// Transform above the skeleton's roots (from the file's hierarchy).
     pub skeleton_root: Mat4,
     pub animations: Vec<Animation>,
     /// Source models and maps use the other triangle winding: draw both sides.
@@ -677,7 +677,7 @@ fn pack(sizes: &[(u32, u32)], width: u32) -> (Vec<(u32, u32)>, u32) {
     (spots, (y + row).max(1))
 }
 
-/// Brush entities that move (drawn by their own nodes while a game runs).
+/// Brush entities that move (drawn by their own objects while a game runs).
 pub const MOVERS: &[&str] = &["func_door", "func_door_rotating", "func_movelinear", "func_rotating", "func_tracktrain", "func_physbox", "func_button"];
 
 fn load_bsp(vfs: &Vfs, full: &str) -> Result<ModelData, String> {

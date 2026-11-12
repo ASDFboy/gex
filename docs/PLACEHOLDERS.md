@@ -5,10 +5,10 @@ GEX comes with 708 simple pictures you can use straight away while a game has no
 ## Using them
 
 - In the **Assets** panel, click **gex:// (built-in)**. Folders of pictures show as thumbnails.
-- Drag a picture into the scene view to make a Sprite2D, or onto a `texture` field. With a node selected, **Use on selected** sets its texture.
+- Drag a picture into the blueprint view to make a Sprite2D, or onto a `texture` field. With an object selected, **Use on selected** sets its texture.
 - In scripts, use the path like any other: `self.texture = "gex://icons/coin.png"`.
 - Right-click one → **Copy into project** to get an editable copy in `res://assets/placeholders/`.
-- `shapes/white/`, `shapes/outline/`, `icons/white/` and `particles/` are white on purpose: set the node's `color` to tint them any color.
+- `shapes/white/`, `shapes/outline/`, `icons/white/` and `particles/` are white on purpose: set the object's `color` to tint them any color.
 - Patterns tile seamlessly: use `repeat_x`/`repeat_y` on a Sprite2D, or `uv_scale_x/y` on a Mesh3D.
 - The `ui/panel_*` and `ui/button_*` pictures are made for nine-slice: give a Panel, Button or Image the picture as `texture` and `slice` = 16.
 

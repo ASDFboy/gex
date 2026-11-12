@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Pipes",
-    kind: Some(Node2D),
+    kind: Some(Object2D),
     scripts: ["res://scripts/pipes.jlb"],
     groups: ["pipes"],
     children: [

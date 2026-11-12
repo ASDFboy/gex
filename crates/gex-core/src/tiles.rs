@@ -1,5 +1,5 @@
 //! Tile grids and sprite-sheet animations, stored as plain text properties so they show
-//! (and diff) nicely in scene files.
+//! (and diff) nicely in blueprint files.
 
 /// "0,1,1,-1\n2,2,2,2" → rows of tile ids (-1 = empty). Blank or "." cells are empty too.
 pub fn parse(text: &str) -> Vec<Vec<i32>> {

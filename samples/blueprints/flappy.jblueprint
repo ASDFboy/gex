@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Flappy",
-    kind: Some(Node2D),
+    kind: Some(Object2D),
     scripts: ["res://scripts/flappy.jlb", "res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Sky", kind: Some(Sprite2D), transform: Some((position: (640.0, 360.0, 0.0))),

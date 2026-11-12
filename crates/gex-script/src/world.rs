@@ -1,4 +1,4 @@
-//! A running game: the node tree plus every script attached to it, driven one frame at
+//! A running game: the object tree plus every script attached to it, driven one frame at
 //! a time. Lives on one thread (the .jlb interpreter isn't thread-safe); see `thread.rs`
 //! for running it beside the editor.
 
@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use gex_core::input::Input;
 use gex_core::project::Project;
-use gex_core::{scene, NodeId, NodeKind, SceneTree, Variant};
+use gex_core::{blueprint, ObjectId, ObjectKind, BlueprintTree, Variant};
 use jlb::embed::{fault_location, fault_report, named_table, num};
 use jlb::{Env, Fault, Interp, Value};
 
@@ -37,19 +37,19 @@ pub struct LogLine {
     pub line: usize,
 }
 
-/// A node as a task tag, and back.
-pub fn node_tag(id: NodeId) -> u64 {
+/// An object as a task tag, and back.
+pub fn object_tag(id: ObjectId) -> u64 {
     use slotmap::Key;
     id.data().as_ffi()
 }
-pub fn tag_node(tag: u64) -> NodeId {
-    NodeId::from(slotmap::KeyData::from_ffi(tag))
+pub fn tag_object(tag: u64) -> ObjectId {
+    ObjectId::from(slotmap::KeyData::from_ffi(tag))
 }
 
-/// Nodes in this group keep running while the game is paused (a pause menu).
+/// Objects in this group keep running while the game is paused (a pause menu).
 pub const PAUSE_GROUP: &str = "while_paused";
 
-/// Events that stop for paused nodes. Custom events (SEND / EMIT), on_create and on_destroy
+/// Events that stop for paused objects. Custom events (SEND / EMIT), on_create and on_destroy
 /// still run.
 fn pausable(handler: &str) -> bool {
     ["on_step", "on_physics", "on_draw", "on_timer", "on_key_", "on_press_", "on_release_", "on_mouse_", "on_collide", "on_pressed", "on_text_", "on_animation_end", "on_tween_end", "when_"]
@@ -65,7 +65,7 @@ pub struct FrameStats {
     pub physics_ms: f32,
     /// The slowest event handlers this frame: (script, handler, ms).
     pub slowest: Vec<(String, String, f32)>,
-    pub nodes: usize,
+    pub objects: usize,
     pub sprites: usize,
     pub meshes: usize,
 }
@@ -89,19 +89,19 @@ pub struct FrameInput {
 
 #[derive(Clone, Debug)]
 pub enum UiEvent {
-    Pressed(NodeId),
-    Changed(NodeId, String),
-    Submitted(NodeId, String),
+    Pressed(ObjectId),
+    Changed(ObjectId, String),
+    Submitted(ObjectId, String),
 }
 
 fn jle_vec(x: f32, y: f32) -> glam::Vec3 {
     glam::Vec3::new(x, y, 0.0)
 }
 
-/// A screen fade: out (to `color`, then the scene changes) or in (from it).
+/// A screen fade: out (to `color`, then the blueprint changes) or in (from it).
 #[derive(Clone, Debug)]
 pub struct Fade {
-    pub to_scene: Option<String>,
+    pub to_blueprint: Option<String>,
     pub time: f32,
     pub length: f32,
     pub color: [f32; 4],
@@ -111,7 +111,7 @@ impl Fade {
     /// How much of the screen the color covers now, 0 to 1.
     pub fn amount(&self) -> f32 {
         let t = (self.time / self.length.max(0.001)).clamp(0.0, 1.0);
-        if self.to_scene.is_some() {
+        if self.to_blueprint.is_some() {
             t
         } else {
             1.0 - t
@@ -120,15 +120,15 @@ impl Fade {
 }
 
 pub(crate) enum Pending {
-    /// Run `handler` on one node's scripts, or on every node's when `target` is None.
-    Event { target: Option<NodeId>, handler: String, args: Vec<Value> },
-    /// A node (and its subtree) just appeared: attach scripts, then on_create.
-    Created(NodeId),
-    Destroy(NodeId),
+    /// Run `handler` on one object's scripts, or on every object's when `target` is None.
+    Event { target: Option<ObjectId>, handler: String, args: Vec<Value> },
+    /// An object (and its subtree) just appeared: attach scripts, then on_create.
+    Created(ObjectId),
+    Destroy(ObjectId),
 }
 
 pub(crate) struct Timer {
-    pub node: NodeId,
+    pub object: ObjectId,
     pub name: String,
     pub left: f64,
     pub every: Option<f64>,
@@ -136,18 +136,18 @@ pub(crate) struct Timer {
 
 /// What scripts can reach through engine commands, while the interpreter runs.
 pub struct WorldState {
-    pub tree: SceneTree,
+    pub tree: BlueprintTree,
     pub input: Input,
     pub time: f64,
     pub dt: f64,
     pub project: Project,
     pub logs: Vec<LogLine>,
     pub quit: bool,
-    pub change_scene: Option<String>,
-    /// Node whose script is running now (what NULL / no target means in commands).
-    pub current: Option<NodeId>,
+    pub change_blueprint: Option<String>,
+    /// Object whose script is running now (what NULL / no target means in commands).
+    pub current: Option<ObjectId>,
     /// Collision owners overlapping right now.
-    pub touching: HashSet<(NodeId, NodeId)>,
+    pub touching: HashSet<(ObjectId, ObjectId)>,
     pub(crate) queue: VecDeque<Pending>,
     pub(crate) timers: Vec<Timer>,
     pub physics: crate::physics::Physics,
@@ -162,17 +162,17 @@ pub struct WorldState {
     pub window_title: Option<String>,
     /// DRAW_* commands from this frame.
     pub draws: Vec<crate::commands::Draw>,
-    /// Sprite animations: node → (animation, time, ended).
-    pub(crate) anims: HashMap<NodeId, (String, f64, bool)>,
-    /// Model crossfades: node → (from animation, its time, progress 0..1, length).
-    pub(crate) anim_blends: HashMap<NodeId, (String, f32, f32, f32)>,
-    /// Tilemap collision boxes: node → (what they were made from, boxes).
-    pub(crate) tile_boxes: HashMap<NodeId, (String, Vec<crate::physics::StaticBox2>)>,
-    /// Collision meshes made from Mesh3D models: node → (what they were made from, mesh).
-    pub(crate) mesh_colliders: HashMap<NodeId, (String, crate::physics::StaticMesh)>,
-    /// REMEMBER'd values: they outlive CHANGE_SCENE (but not the game).
+    /// Sprite animations: object → (animation, time, ended).
+    pub(crate) anims: HashMap<ObjectId, (String, f64, bool)>,
+    /// Model crossfades: object → (from animation, its time, progress 0..1, length).
+    pub(crate) anim_blends: HashMap<ObjectId, (String, f32, f32, f32)>,
+    /// Tilemap collision boxes: object → (what they were made from, boxes).
+    pub(crate) tile_boxes: HashMap<ObjectId, (String, Vec<crate::physics::StaticBox2>)>,
+    /// Collision meshes made from Mesh3D models: object → (what they were made from, mesh).
+    pub(crate) mesh_colliders: HashMap<ObjectId, (String, crate::physics::StaticMesh)>,
+    /// REMEMBER'd values: they outlive CHANGE_BLUEPRINT (but not the game).
     pub shared: HashMap<String, serde_json::Value>,
-    /// A fade to a color (before a CHANGE_SCENE) or from it (after one).
+    /// A fade to a color (before a CHANGE_BLUEPRINT) or from it (after one).
     pub fade: Option<Fade>,
     /// Where the 2D camera looks after smoothing and limits.
     pub cam2_center: Option<glam::Vec2>,
@@ -180,25 +180,25 @@ pub struct WorldState {
     pub shake: (f32, f32),
     shake_seed: u32,
     pub(crate) tweens: Vec<crate::tween::Tween>,
-    /// Animators playing a clip: node → (clip, seconds in).
-    pub(crate) clips_playing: HashMap<NodeId, (String, f32)>,
+    /// Animators playing a clip: object → (clip, seconds in).
+    pub(crate) clips_playing: HashMap<ObjectId, (String, f32)>,
     /// Loaded .anim files.
     pub(crate) anim_files: HashMap<String, Arc<gex_core::anim::AnimFile>>,
-    /// PAUSE: only nodes in the "while_paused" group keep getting frame, input and timer events.
+    /// PAUSE: only objects in the "while_paused" group keep getting frame, input and timer events.
     pub paused: bool,
     /// TIME_SCALE: 0.5 is slow motion, 2 is double speed.
     pub time_scale: f64,
     /// Particles2D emitters and their live particles.
-    pub(crate) particles: HashMap<NodeId, crate::particles::Emitter>,
-    pub(crate) particles_3d: HashMap<NodeId, crate::particles::Emitter3>,
+    pub(crate) particles: HashMap<ObjectId, crate::particles::Emitter>,
+    pub(crate) particles_3d: HashMap<ObjectId, crate::particles::Emitter3>,
 }
 
 impl WorldState {
     /// An Animator's clips (loaded once).
-    pub fn anim_file(&mut self, animator: NodeId) -> Result<Arc<gex_core::anim::AnimFile>, String> {
-        let res = self.tree.nodes[animator].text("clips").to_string();
+    pub fn anim_file(&mut self, animator: ObjectId) -> Result<Arc<gex_core::anim::AnimFile>, String> {
+        let res = self.tree.objects[animator].text("clips").to_string();
         if res.is_empty() {
-            return Err(format!("the Animator {} has no clips file yet (make clips in the Timeline)", self.tree.nodes[animator].name));
+            return Err(format!("the Animator {} has no clips file yet (make clips in the Timeline)", self.tree.objects[animator].name));
         }
         if let Some(f) = self.anim_files.get(&res) {
             return Ok(f.clone());
@@ -208,8 +208,8 @@ impl WorldState {
         Ok(f)
     }
 
-    /// Paused, and this node isn't one that runs while paused.
-    pub fn frozen(&self, id: NodeId) -> bool {
+    /// Paused, and this object isn't one that runs while paused.
+    pub fn frozen(&self, id: ObjectId) -> bool {
         self.paused && !self.tree.get(id).is_some_and(|n| n.groups.iter().any(|g| g == PAUSE_GROUP))
     }
 
@@ -232,7 +232,7 @@ pub struct Game {
     pub stats: FrameStats,
     pub(crate) it: Interp,
     pub st: Rc<RefCell<WorldState>>,
-    scripts: HashMap<NodeId, Vec<ScriptInst>>,
+    scripts: HashMap<ObjectId, Vec<ScriptInst>>,
     physics_acc: f64,
     started: bool,
 }
@@ -262,8 +262,8 @@ impl Write for LogWriter {
 }
 
 impl Game {
-    /// A game over `tree` (usually a copy of the scene being edited, so node ids match).
-    pub fn new(project: Project, tree: SceneTree, cancel: Option<Arc<AtomicBool>>) -> Game {
+    /// A game over `tree` (usually a copy of the blueprint being edited, so object ids match).
+    pub fn new(project: Project, tree: BlueprintTree, cancel: Option<Arc<AtomicBool>>) -> Game {
         commands::register();
         let st = Rc::new(RefCell::new(WorldState {
             tree,
@@ -273,7 +273,7 @@ impl Game {
             project: project.clone(),
             logs: Vec::new(),
             quit: false,
-            change_scene: None,
+            change_blueprint: None,
             current: None,
             touching: HashSet::new(),
             queue: VecDeque::new(),
@@ -312,15 +312,15 @@ impl Game {
         Game { stats: FrameStats::default(), it, st, scripts: HashMap::new(), physics_acc: 0.0, started: false }
     }
 
-    /// Loads a scene file as a fresh game.
-    pub fn from_scene(project: Project, scene_res: &str, cancel: Option<Arc<AtomicBool>>) -> Result<Game, String> {
-        let text = project.read_text(scene_res)?;
+    /// Loads a blueprint file as a fresh game.
+    pub fn from_blueprint(project: Project, blueprint_res: &str, cancel: Option<Arc<AtomicBool>>) -> Result<Game, String> {
+        let text = project.read_text(blueprint_res)?;
         let p2 = project.clone();
-        let tree = scene::load(&text, &|p: &str| p2.read_text(p)).map_err(|e| e.0)?;
+        let tree = blueprint::load(&text, &|p: &str| p2.read_text(p)).map_err(|e| e.0)?;
         Ok(Game::new(project, tree, cancel))
     }
 
-    pub fn tree(&self) -> std::cell::Ref<'_, SceneTree> {
+    pub fn tree(&self) -> std::cell::Ref<'_, BlueprintTree> {
         std::cell::Ref::map(self.st.borrow(), |s| &s.tree)
     }
 
@@ -338,7 +338,7 @@ impl Game {
         {
             // Animators with an autoplay clip start it.
             let mut st = self.st.borrow_mut();
-            let auto: Vec<(NodeId, String)> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Animator && !st.tree.nodes[*i].text("autoplay").is_empty()).map(|i| (i, st.tree.nodes[i].text("autoplay").to_string())).collect();
+            let auto: Vec<(ObjectId, String)> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Animator && !st.tree.objects[*i].text("autoplay").is_empty()).map(|i| (i, st.tree.objects[i].text("autoplay").to_string())).collect();
             for (id, clip) in auto {
                 st.clips_playing.insert(id, (clip, 0.0));
             }
@@ -353,21 +353,21 @@ impl Game {
     }
 
     /// Maps (a Mesh3D showing a .bsp) bring their physics props to life: each becomes a
-    /// Body3D (its outline as the shape) holding the model, under the map's node.
+    /// Body3D (its outline as the shape) holding the model, under the map's object.
     fn spawn_map_props(&mut self) {
         let mut st = self.st.borrow_mut();
         let st = &mut *st;
-        let maps: Vec<NodeId> = st
+        let maps: Vec<ObjectId> = st
             .tree
             .walk()
             .into_iter()
             .filter(|i| {
-                let n = &st.tree.nodes[*i];
-                n.kind == NodeKind::Mesh3D && n.text("mesh").to_ascii_lowercase().ends_with(".bsp") && n.prop("map_props").is_none_or(|v| v.as_bool())
+                let n = &st.tree.objects[*i];
+                n.kind == ObjectKind::Mesh3D && n.text("mesh").to_ascii_lowercase().ends_with(".bsp") && n.prop("map_props").is_none_or(|v| v.as_bool())
             })
             .collect();
         for map in maps {
-            let mesh = st.tree.nodes[map].text("mesh").to_string();
+            let mesh = st.tree.objects[map].text("mesh").to_string();
             let scheme = mesh.split_once("://").map(|s| s.0).unwrap_or("res").to_string();
             let Ok(model) = gex_assets::model::cached(&st.vfs, &mesh) else { continue };
             for e in &model.entities {
@@ -387,17 +387,17 @@ impl Game {
                     "" => file.rsplit('/').next().unwrap_or("prop").trim_end_matches(".mdl").to_string(),
                     n => n.to_string(),
                 };
-                let mut body = gex_core::Node::new(name, NodeKind::Body3D);
+                let mut body = gex_core::Object::new(name, ObjectKind::Body3D);
                 body.transform.position = t;
                 body.transform.rotation = glam::Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees());
                 body.props.insert("shape".into(), Variant::Text("hull".into()));
                 body.groups.push("map_props".into());
                 let b = st.tree.add(Some(map), body);
-                let mut look = gex_core::Node::new("Model", NodeKind::Mesh3D);
+                let mut look = gex_core::Object::new("Model", ObjectKind::Mesh3D);
                 look.props.insert("mesh".into(), Variant::Text(format!("{}://{}", scheme, file.to_ascii_lowercase())));
                 st.tree.add(Some(b), look);
             }
-            // Doors and other moving brushes become nodes of their own (USE_DOOR opens them),
+            // Doors and other moving brushes become objects of their own (USE_DOOR opens them),
             // and the map itself is drawn without them.
             let base = gex_assets::model::map_base(&mesh).to_string();
             for e in &model.entities {
@@ -411,7 +411,7 @@ impl Game {
                     "" => class.clone(),
                     n => n.to_string(),
                 };
-                let mut door = gex_core::Node::new(name, NodeKind::Mesh3D);
+                let mut door = gex_core::Object::new(name, ObjectKind::Mesh3D);
                 let place = gex_assets::model::entity_transform(e);
                 let (_, r, t) = place.to_scale_rotation_translation();
                 let (y, x, z) = r.to_euler(glam::EulerRot::YXZ);
@@ -453,24 +453,24 @@ impl Game {
                 door.groups.push("map_doors".into());
                 st.tree.add(Some(map), door);
             }
-            st.tree.nodes[map].props.insert("mesh".into(), Variant::Text(format!("{}?static", base)));
+            st.tree.objects[map].props.insert("mesh".into(), Variant::Text(format!("{}?static", base)));
         }
     }
 
-    /// Starts Sound nodes that play by themselves.
-    fn autoplay(&mut self, ids: &[NodeId]) {
+    /// Starts Sound objects that play by themselves.
+    fn autoplay(&mut self, ids: &[ObjectId]) {
         let mut st = self.st.borrow_mut();
         for id in ids {
-            let auto = st.tree.get(*id).is_some_and(|n| n.kind == NodeKind::Sound && n.prop("autoplay").is_some_and(|v| v.as_bool()));
+            let auto = st.tree.get(*id).is_some_and(|n| n.kind == ObjectKind::Sound && n.prop("autoplay").is_some_and(|v| v.as_bool()));
             if auto {
-                if let Err(e) = crate::commands::play_node(&mut st, *id) {
+                if let Err(e) = crate::commands::play_object(&mut st, *id) {
                     st.log(LogKind::Error, e);
                 }
             }
         }
     }
 
-    fn attach_all(&mut self, ids: &[NodeId]) {
+    fn attach_all(&mut self, ids: &[ObjectId]) {
         for id in ids {
             let scripts = match self.st.borrow().tree.get(*id) {
                 Some(n) => n.scripts.clone(),
@@ -482,17 +482,17 @@ impl Game {
         }
     }
 
-    fn attach(&mut self, id: NodeId, res: &str) {
+    fn attach(&mut self, id: ObjectId, res: &str) {
         let Some(path) = self.st.borrow().project.res_to_path(res) else {
             self.st.borrow_mut().log(LogKind::Error, format!("{} isn't a project path (scripts live in res://)", res));
             return;
         };
         let handlers = scan_handlers(&path);
-        // $variables nobody gave this node a value for start at 0.
+        // $variables nobody gave this object a value for start at 0.
         if let Ok(text) = std::fs::read_to_string(&path) {
             let mut st = self.st.borrow_mut();
-            if let Some(n) = st.tree.nodes.get_mut(id) {
-                for v in gex_core::node::script_vars(&text) {
+            if let Some(n) = st.tree.objects.get_mut(id) {
+                for v in gex_core::object::script_vars(&text) {
                     n.props.entry(v).or_insert(Variant::Num(0.0));
                 }
             }
@@ -519,12 +519,12 @@ impl Game {
         self.it.pause = Some(hook);
     }
 
-    /// Loads a changed script again on every node that uses it, keeping the values of
+    /// Loads a changed script again on every object that uses it, keeping the values of
     /// outside variables it still has (so a running game keeps its state).
     pub fn reload_script(&mut self, res: &str) -> usize {
         let Some(path) = self.st.borrow().project.res_to_path(res) else { return 0 };
         let handlers = scan_handlers(&path);
-        let users: Vec<(NodeId, usize)> = self
+        let users: Vec<(ObjectId, usize)> = self
             .scripts
             .iter()
             .flat_map(|(id, list)| list.iter().enumerate().filter(|(_, s)| s.res == res).map(move |(i, _)| (*id, i)))
@@ -552,23 +552,23 @@ impl Game {
             }
         }
         if done > 0 {
-            self.st.borrow_mut().log(LogKind::Info, format!("reloaded {} on {} node(s)", res, done));
+            self.st.borrow_mut().log(LogKind::Info, format!("reloaded {} on {} object(s)", res, done));
         }
         done
     }
 
     /// Gives every running task (START) its turn: up to its next WAIT, AWAIT or a slice of
-    /// statements. Tasks see their node's `self` like events do.
+    /// statements. Tasks see their object's `self` like events do.
     fn run_tasks(&mut self) {
         let tags = self.it.live_task_tags();
         if tags.is_empty() {
             return;
         }
-        let mut nodes: Vec<NodeId> = tags.into_iter().map(tag_node).collect();
-        nodes.sort();
-        nodes.dedup();
+        let mut objects: Vec<ObjectId> = tags.into_iter().map(tag_object).collect();
+        objects.sort();
+        objects.dedup();
         let mut envs = Vec::new();
-        for id in nodes {
+        for id in objects {
             if !self.st.borrow().tree.contains(id) {
                 continue;
             }
@@ -611,7 +611,7 @@ impl Game {
     }
 
     /// The `self` table a script sees, and what it held (to tell what the script changed).
-    fn self_table(&self, id: NodeId) -> (Value, HashMap<String, Variant>) {
+    fn self_table(&self, id: ObjectId) -> (Value, HashMap<String, Variant>) {
         let st = self.st.borrow();
         let Some(n) = st.tree.get(id) else { return (Value::Null, HashMap::new()) };
         let t = &n.transform;
@@ -639,8 +639,8 @@ impl Game {
         (table, snap.into_iter().collect())
     }
 
-    /// Applies what a script changed in `self` back to the node.
-    fn read_self_back(&mut self, id: NodeId, env: &Env, before: &HashMap<String, Variant>) {
+    /// Applies what a script changed in `self` back to the object.
+    fn read_self_back(&mut self, id: ObjectId, env: &Env, before: &HashMap<String, Variant>) {
         let Some(Value::Table(t, _)) = Interp::env_get(env, "self") else { return };
         let mut st = self.st.borrow_mut();
         let Some(n) = st.tree.get_mut(id) else { return };
@@ -675,15 +675,15 @@ impl Game {
         }
     }
 
-    /// Runs `handler` in each of the node's scripts that defines it.
-    pub fn run(&mut self, id: NodeId, handler: &str, args: Vec<Value>) {
+    /// Runs `handler` in each of the object's scripts that defines it.
+    pub fn run(&mut self, id: ObjectId, handler: &str, args: Vec<Value>) {
         let count = self.scripts.get(&id).map_or(0, |s| s.len());
         for i in 0..count {
             self.run_one(id, i, handler, args.clone());
         }
     }
 
-    fn run_one(&mut self, id: NodeId, i: usize, handler: &str, args: Vec<Value>) -> Option<Value> {
+    fn run_one(&mut self, id: ObjectId, i: usize, handler: &str, args: Vec<Value>) -> Option<Value> {
         let (env, res) = {
             let s = self.scripts.get(&id)?.get(i)?;
             if s.dead || !s.handlers.contains(handler) {
@@ -701,8 +701,8 @@ impl Game {
         let (me, before) = self.self_table(id);
         Interp::env_set(&env, "self", me);
         self.st.borrow_mut().current = Some(id);
-        // Tasks this event STARTs belong to this node.
-        self.it.event_tag = node_tag(id);
+        // Tasks this event STARTs belong to this object.
+        self.it.event_tag = object_tag(id);
         let t0 = std::time::Instant::now();
         let r = self.it.call_value(&f, args);
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -727,9 +727,9 @@ impl Game {
         }
     }
 
-    /// Runs `handler` on every node that has it, parents first.
+    /// Runs `handler` on every object that has it, parents first.
     pub fn broadcast(&mut self, handler: &str, args: Vec<Value>) {
-        let ids: Vec<NodeId> = self.st.borrow().tree.walk();
+        let ids: Vec<ObjectId> = self.st.borrow().tree.walk();
         for id in ids {
             if self.scripts.get(&id).is_some_and(|s| s.iter().any(|s| s.handlers.contains(handler))) {
                 self.run(id, handler, args.clone());
@@ -757,7 +757,7 @@ impl Game {
             st.wheel = input.wheel;
             st.mouse_delta = input.mouse_delta;
             paused = st.paused;
-            // While paused, the nodes that still run see real time; the rest is frozen.
+            // While paused, the objects that still run see real time; the rest is frozen.
             dt = if paused { real_dt } else { real_dt * st.time_scale.max(0.0) };
             st.dt = dt;
             if !paused {
@@ -837,17 +837,17 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let frozen: Vec<NodeId> = if st.paused { st.particles.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
+            let frozen: Vec<ObjectId> = if st.paused { st.particles.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
             let amount = st.project.config.graphics.particles.clamp(0.0, 1.0) as f64;
             crate::particles::update(&st.tree, &mut st.particles, dt as f32, &frozen, amount);
-            let frozen3: Vec<NodeId> = if st.paused { st.particles_3d.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
+            let frozen3: Vec<ObjectId> = if st.paused { st.particles_3d.keys().copied().filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
             crate::particles::update_3d(&st.tree, &mut st.particles_3d, dt as f32, &frozen3, amount);
         }
         self.timers(dt);
         let finished = {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let frozen: Vec<NodeId> = if st.paused { st.tweens.iter().map(|t| t.node).filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
+            let frozen: Vec<ObjectId> = if st.paused { st.tweens.iter().map(|t| t.object).filter(|i| st.frozen(*i)).collect() } else { Vec::new() };
             crate::tween::update(&mut st.tree, &mut st.tweens, dt, &frozen)
         };
         for (id, prop) in finished {
@@ -859,13 +859,13 @@ impl Game {
         }
         self.camera_and_fade(dt as f32);
         {
-            // Sound nodes report whether they're still playing.
+            // Sound objects report whether they're still playing.
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
             st.audio.tidy();
-            let playing: Vec<(NodeId, bool)> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Sound).map(|i| (i, st.audio.by_node.contains_key(&i))).collect();
+            let playing: Vec<(ObjectId, bool)> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Sound).map(|i| (i, st.audio.by_object.contains_key(&i))).collect();
             // Where the "ears" are: the 3D camera, else the 2D camera (or the screen's middle).
-            let cam3 = st.tree.walk().into_iter().find(|i| st.tree.nodes[*i].kind == NodeKind::Camera3D && st.tree.nodes[*i].prop("current").is_none_or(|v| v.as_bool()));
+            let cam3 = st.tree.walk().into_iter().find(|i| st.tree.objects[*i].kind == ObjectKind::Camera3D && st.tree.objects[*i].prop("current").is_none_or(|v| v.as_bool()));
             // ...and which way is right, for the balance.
             let (ear, right) = match cam3 {
                 Some(c) => {
@@ -879,7 +879,7 @@ impl Game {
                 }
             };
             for (i, p) in playing {
-                let n = &st.tree.nodes[i];
+                let n = &st.tree.objects[i];
                 if p {
                     let mut vol = n.num("volume", 1.0) as f32;
                     if let (true, Some((ear, three))) = (n.prop("spatial").is_some_and(|v| v.as_bool()), ear) {
@@ -895,17 +895,17 @@ impl Game {
                         // Left or right of the listener.
                         let off = at - ear;
                         let side = if three { off.normalize_or_zero().dot(right) } else { (off.x / (range * 0.5)).clamp(-1.0, 1.0) };
-                        if let Some(id) = st.audio.by_node.get(&i).copied() {
+                        if let Some(id) = st.audio.by_object.get(&i).copied() {
                             st.audio.set_pan(id, (side * 0.9).clamp(-1.0, 1.0));
                         }
-                    } else if let Some(id) = st.audio.by_node.get(&i).copied() {
+                    } else if let Some(id) = st.audio.by_object.get(&i).copied() {
                         st.audio.set_pan(id, n.num("pan", 0.0) as f32);
                     }
-                    if let Some(id) = st.audio.by_node.get(&i).copied() {
+                    if let Some(id) = st.audio.by_object.get(&i).copied() {
                         st.audio.set_volume(id, vol);
                     }
                 }
-                st.tree.nodes[i].props.insert("playing".into(), Variant::Bool(p));
+                st.tree.objects[i].props.insert("playing".into(), Variant::Bool(p));
             }
         }
         self.conditions();
@@ -940,12 +940,12 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let ids: Vec<NodeId> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Sprite2D).collect();
+            let ids: Vec<ObjectId> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Sprite2D).collect();
             for id in ids {
                 if st.frozen(id) {
                     continue;
                 }
-                let n = &st.tree.nodes[id];
+                let n = &st.tree.objects[id];
                 let name = n.text("animation").to_string();
                 if name.is_empty() {
                     st.anims.remove(&id);
@@ -975,16 +975,16 @@ impl Game {
                         }
                     }
                 }
-                st.tree.nodes[id].props.insert("frame".into(), Variant::Num(frames[k] as f64));
+                st.tree.objects[id].props.insert("frame".into(), Variant::Num(frames[k] as f64));
             }
         }
         // Model (Mesh3D) animations.
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let ids: Vec<NodeId> = st.tree.walk().into_iter().filter(|i| st.tree.nodes[*i].kind == NodeKind::Mesh3D && !st.frozen(*i)).collect();
+            let ids: Vec<ObjectId> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Mesh3D && !st.frozen(*i)).collect();
             for id in ids {
-                let n = &st.tree.nodes[id];
+                let n = &st.tree.objects[id];
                 let name = n.text("animation").to_string();
                 let mesh = n.text("mesh").to_string();
                 if name.is_empty() || !gex_assets::model::is_model(&mesh) {
@@ -1024,7 +1024,7 @@ impl Game {
                     }
                 }
                 let t = a.1;
-                st.tree.nodes[id].props.insert("anim_time".into(), Variant::Num(t));
+                st.tree.objects[id].props.insert("anim_time".into(), Variant::Num(t));
             }
         }
         for (id, name) in ended {
@@ -1039,8 +1039,8 @@ impl Game {
         let mut boxes = Vec::new();
         let mut keep = HashSet::new();
         for id in st.tree.walk() {
-            let n = &st.tree.nodes[id];
-            if n.kind != NodeKind::TileMap2D || !n.prop("solid").is_none_or(|v| v.as_bool()) {
+            let n = &st.tree.objects[id];
+            if n.kind != ObjectKind::TileMap2D || !n.prop("solid").is_none_or(|v| v.as_bool()) {
                 continue;
             }
             keep.insert(id);
@@ -1078,12 +1078,12 @@ impl Game {
         }
         st.tile_boxes.retain(|k, _| keep.contains(k));
         st.physics.statics_2d = boxes;
-        // Mesh3D nodes with collision on become static triangle meshes.
+        // Mesh3D objects with collision on become static triangle meshes.
         let mut meshes = Vec::new();
         let mut keep = HashSet::new();
         for id in st.tree.walk() {
-            let n = &st.tree.nodes[id];
-            if n.kind != NodeKind::Mesh3D || !n.prop("collision").is_some_and(|v| v.as_bool()) {
+            let n = &st.tree.objects[id];
+            if n.kind != ObjectKind::Mesh3D || !n.prop("collision").is_some_and(|v| v.as_bool()) {
                 continue;
             }
             let mesh = n.text("mesh").to_string();
@@ -1120,12 +1120,12 @@ impl Game {
         // Body3D with shape "hull": the outline of its first Mesh3D child's model.
         let mut keep = HashSet::new();
         for id in st.tree.walk() {
-            let n = &st.tree.nodes[id];
-            if n.kind != NodeKind::Body3D || !matches!(n.text("shape"), "hull" | "model") {
+            let n = &st.tree.objects[id];
+            if n.kind != ObjectKind::Body3D || !matches!(n.text("shape"), "hull" | "model") {
                 continue;
             }
-            let Some(child) = n.children.iter().copied().find(|c| st.tree.nodes[*c].kind == NodeKind::Mesh3D) else { continue };
-            let c = &st.tree.nodes[child];
+            let Some(child) = n.children.iter().copied().find(|c| st.tree.objects[*c].kind == ObjectKind::Mesh3D) else { continue };
+            let c = &st.tree.objects[child];
             let mesh = c.text("mesh").to_string();
             let local = c.transform.matrix();
             let key = format!("{}{:?}", mesh, local);
@@ -1152,7 +1152,7 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let ids: Vec<NodeId> = st.clips_playing.keys().copied().collect();
+            let ids: Vec<ObjectId> = st.clips_playing.keys().copied().collect();
             for id in ids {
                 if !st.tree.contains(id) {
                     st.clips_playing.remove(&id);
@@ -1167,7 +1167,7 @@ impl Game {
                     st.clips_playing.remove(&id);
                     continue;
                 };
-                t += dt * st.tree.nodes[id].num("speed", 1.0) as f32;
+                t += dt * st.tree.objects[id].num("speed", 1.0) as f32;
                 let len = clip.length.max(0.001);
                 let mut done = false;
                 if t >= len {
@@ -1181,7 +1181,7 @@ impl Game {
                 gex_core::anim::apply(&mut st.tree, id, clip, t);
                 if done {
                     st.clips_playing.remove(&id);
-                    ended.push((st.tree.nodes[id].parent.unwrap_or(id), id, name));
+                    ended.push((st.tree.objects[id].parent.unwrap_or(id), id, name));
                 } else {
                     st.clips_playing.insert(id, (name, t));
                 }
@@ -1202,10 +1202,10 @@ impl Game {
         if let Some(f) = &mut st.fade {
             f.time += dt;
             if f.time >= f.length {
-                match f.to_scene.clone() {
-                    Some(scene) => {
-                        if st.change_scene.is_none() {
-                            st.change_scene = Some(scene);
+                match f.to_blueprint.clone() {
+                    Some(blueprint) => {
+                        if st.change_blueprint.is_none() {
+                            st.change_blueprint = Some(blueprint);
                         }
                     }
                     None => st.fade = None,
@@ -1214,14 +1214,14 @@ impl Game {
         }
         st.shake.0 = (st.shake.0 - st.shake.1 * dt).max(0.0);
         let cam = st.tree.walk().into_iter().find(|i| {
-            let n = &st.tree.nodes[*i];
-            n.kind == NodeKind::Camera2D && n.prop("current").is_none_or(|v| v.as_bool())
+            let n = &st.tree.objects[*i];
+            n.kind == ObjectKind::Camera2D && n.prop("current").is_none_or(|v| v.as_bool())
         });
         let Some(cam) = cam else {
             st.cam2_center = None;
             return;
         };
-        let n = &st.tree.nodes[cam];
+        let n = &st.tree.objects[cam];
         let target = st.tree.global_matrix(cam).w_axis.truncate().truncate();
         let speed = n.num("smoothing", 0.0) as f32;
         let mut c = match st.cam2_center {
@@ -1259,12 +1259,12 @@ impl Game {
         list.graphics = st.project.config.graphics.clone();
         crate::particles::draw(&st.tree, &st.particles, &mut list);
         crate::particles::draw_3d(&st.tree, &st.particles_3d, &mut list);
-        let ragdolls: HashMap<NodeId, std::sync::Arc<Vec<glam::Mat4>>> = st.physics.ragdoll_poses(&st.tree).into_iter().map(|(id, p)| (id, std::sync::Arc::new(p))).collect();
+        let ragdolls: HashMap<ObjectId, std::sync::Arc<Vec<glam::Mat4>>> = st.physics.ragdoll_poses(&st.tree).into_iter().map(|(id, p)| (id, std::sync::Arc::new(p))).collect();
         for m in &mut list.meshes {
-            if let Some(p) = ragdolls.get(&m.node) {
+            if let Some(p) = ragdolls.get(&m.object) {
                 m.pose = Some(p.clone());
             }
-            if let Some((prev, t, k, _)) = st.anim_blends.get(&m.node) {
+            if let Some((prev, t, k, _)) = st.anim_blends.get(&m.object) {
                 m.prev_animation = prev.clone();
                 m.prev_time = *t;
                 m.blend = k.clamp(0.0, 1.0);
@@ -1298,20 +1298,20 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let frozen: HashSet<NodeId> = if st.paused { st.timers.iter().map(|t| t.node).filter(|i| st.frozen(*i)).collect() } else { HashSet::new() };
+            let frozen: HashSet<ObjectId> = if st.paused { st.timers.iter().map(|t| t.object).filter(|i| st.frozen(*i)).collect() } else { HashSet::new() };
             let tree = &st.tree;
             st.timers.retain_mut(|t| {
-                if !tree.contains(t.node) {
+                if !tree.contains(t.object) {
                     return false;
                 }
-                if frozen.contains(&t.node) {
+                if frozen.contains(&t.object) {
                     return true;
                 }
                 t.left -= dt;
                 if t.left > 0.0 {
                     return true;
                 }
-                fire.push((t.node, t.name.clone()));
+                fire.push((t.object, t.name.clone()));
                 match t.every {
                     Some(e) => {
                         t.left += e.max(0.001);
@@ -1358,10 +1358,10 @@ impl Game {
             let areas = collect_areas(tree, &st.physics.layers, |id| self.scripts.contains_key(&id));
             let mut now = HashSet::new();
             // Physics bodies touching each other, reported for their owners.
-            let owner_of = |id: NodeId| -> NodeId {
+            let owner_of = |id: ObjectId| -> ObjectId {
                 match tree.get(id) {
                     Some(n) if !self.scripts.contains_key(&id) => match n.parent {
-                        Some(p) if self.scripts.contains_key(&p) && n.kind != NodeKind::Body2D && n.kind != NodeKind::Body3D => p,
+                        Some(p) if self.scripts.contains_key(&p) && n.kind != ObjectKind::Body2D && n.kind != ObjectKind::Body3D => p,
                         _ => id,
                     },
                     _ => id,
@@ -1428,9 +1428,9 @@ impl Game {
                     let mut st = self.st.borrow_mut();
                     let gone = st.tree.remove(id);
                     for g in gone {
-                        self.it.cancel_tagged(node_tag(g));
+                        self.it.cancel_tagged(object_tag(g));
                         self.scripts.remove(&g);
-                        if let Some(s) = st.audio.by_node.remove(&g) {
+                        if let Some(s) = st.audio.by_object.remove(&g) {
                             st.audio.stop(s);
                         }
                     }
@@ -1446,7 +1446,7 @@ impl Game {
 /// Something that reports touches without being a physics body (Collider2D / Collider3D), or a
 /// body seen as an area so colliders notice it.
 struct Area {
-    owner: NodeId,
+    owner: ObjectId,
     body: bool,
     groups: (u32, u32),
     shape: AreaShape,
@@ -1472,20 +1472,20 @@ impl AreaShape {
     }
 }
 
-fn collect_areas(tree: &SceneTree, layers: &crate::physics::Layers, has_scripts: impl Fn(NodeId) -> bool) -> Vec<Area> {
+fn collect_areas(tree: &BlueprintTree, layers: &crate::physics::Layers, has_scripts: impl Fn(ObjectId) -> bool) -> Vec<Area> {
     let mut out = Vec::new();
     for id in tree.walk() {
-        let n = &tree.nodes[id];
-        if !matches!(n.kind, NodeKind::Collider2D | NodeKind::Collider3D | NodeKind::Body2D | NodeKind::Body3D) || !tree.visible_in_tree(id) {
+        let n = &tree.objects[id];
+        if !matches!(n.kind, ObjectKind::Collider2D | ObjectKind::Collider3D | ObjectKind::Body2D | ObjectKind::Body3D) || !tree.visible_in_tree(id) {
             continue;
         }
-        let body = matches!(n.kind, NodeKind::Body2D | NodeKind::Body3D);
+        let body = matches!(n.kind, ObjectKind::Body2D | ObjectKind::Body3D);
         // A collider speaks for its parent, unless it has scripts itself.
         let owner = if body || has_scripts(id) || n.parent.is_none() { id } else { n.parent.unwrap() };
         let groups = layers.of(tree, id);
         let shape = match n.kind {
-            NodeKind::Collider2D => AreaShape::Rect(aabb(tree, id)),
-            NodeKind::Body2D => {
+            ObjectKind::Collider2D => AreaShape::Rect(aabb(tree, id)),
+            ObjectKind::Body2D => {
                 let mut r = aabb(tree, id);
                 if matches!(n.text("shape"), "circle" | "ball") {
                     let c = tree.global_matrix(id).w_axis;
@@ -1517,8 +1517,8 @@ fn collect_areas(tree: &SceneTree, layers: &crate::physics::Layers, has_scripts:
     out
 }
 
-pub fn aabb(tree: &SceneTree, id: NodeId) -> [f32; 4] {
-    let n = &tree.nodes[id];
+pub fn aabb(tree: &BlueprintTree, id: ObjectId) -> [f32; 4] {
+    let n = &tree.objects[id];
     let m = tree.global_matrix(id);
     let (w, h) = (n.num("width", 32.0) as f32 / 2.0, n.num("height", 32.0) as f32 / 2.0);
     let mut r = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];

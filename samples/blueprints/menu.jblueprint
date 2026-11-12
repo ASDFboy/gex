@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Menu",
-    kind: Some(Node2D),
+    kind: Some(Object2D),
     scripts: ["res://scripts/menu.jlb"],
     children: [
       (name: "Back", kind: Some(Sprite2D), transform: Some((position: (640.0, 360.0, 0.0))), props: {"width": Num(1280.0), "height": Num(720.0), "color": Color((0.05, 0.06, 0.09, 1.0)), "layer": Num(-10.0)}),

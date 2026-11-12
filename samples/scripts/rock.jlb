@@ -28,7 +28,7 @@ DEF on_shot() {
 	GLOBAL hit = TRUE
 	IF self.size > 1 {
 		FOR i IN 1 TO 2 {
-			r = SPAWN("res://scenes/rock.jscene", self.x, self.y)
+			r = SPAWN("res://blueprints/rock.jblueprint", self.x, self.y)
 			SET(r, "size", self.size - 1)
 			a = RANDOM(0, 359)
 			s = 80 + (4 - self.size) * 40

@@ -10,8 +10,9 @@ pub const PROJECT_FILE: &str = "project.jproj";
 #[serde(default)]
 pub struct ProjectConfig {
     pub name: String,
-    /// The scene the game starts in (res:// path).
-    pub main_scene: String,
+    /// The blueprint the game starts in (res:// path).
+    #[serde(alias = "main_scene")]
+    pub main_blueprint: String,
     pub window_size: [u32; 2],
     /// Extra asset sources (see gex-assets): e.g. a Source-engine game install.
     pub mounts: Vec<MountConfig>,
@@ -37,7 +38,7 @@ pub struct ProjectConfig {
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        ProjectConfig { name: "New Game".into(), main_scene: "res://scenes/main.jscene".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: None, gravity_3d: None, graphics: Default::default(), physics: Default::default(), actions: Default::default(), fullscreen: false, resizable: true, vsync: true, icon: String::new() }
+        ProjectConfig { name: "New Game".into(), main_blueprint: "res://blueprints/main.jblueprint".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: None, gravity_3d: None, graphics: Default::default(), physics: Default::default(), actions: Default::default(), fullscreen: false, resizable: true, vsync: true, icon: String::new() }
     }
 }
 
@@ -78,6 +79,7 @@ pub struct Project {
 
 impl Project {
     pub fn open(dir: &Path) -> Result<Project, String> {
+        rename_old_files(dir);
         let f = dir.join(PROJECT_FILE);
         let text = std::fs::read_to_string(&f).map_err(|e| format!("couldn't open {}: {}", f.display(), e))?;
         let mut config: ProjectConfig = ron::from_str(&text).map_err(|e| format!("{}: {}", f.display(), e))?;
@@ -101,9 +103,47 @@ impl Project {
         let rel = p.strip_prefix(&self.dir).ok()?;
         Some(format!("res://{}", rel.to_string_lossy().replace('\\', "/")))
     }
-    /// Reads a res:// file as text (what scene instancing uses).
+    /// Reads a res:// file as text (what blueprint instancing uses).
     pub fn read_text(&self, res: &str) -> Result<String, String> {
         let p = self.res_to_path(res).ok_or_else(|| format!("{} isn't a project path", res))?;
         std::fs::read_to_string(&p).map_err(|e| e.to_string())
+    }
+}
+
+/// Projects from before scenes were called blueprints: `.jscene` files become `.jblueprint`,
+/// and scripts, blueprints and the project file that name them are fixed to match.
+fn rename_old_files(dir: &Path) {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') && name != ".gex" {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    if !files.iter().any(|f| f.extension().is_some_and(|e| e == "jscene")) {
+        return;
+    }
+    for f in &files {
+        let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if matches!(ext, "jscene" | "jlb" | "jproj" | "ron" | "janim" | "txt" | "json") {
+            if let Ok(text) = std::fs::read_to_string(f) {
+                if text.contains(".jscene") {
+                    let _ = std::fs::write(f, text.replace(".jscene", ".jblueprint"));
+                }
+            }
+        }
+        if ext == "jscene" {
+            let _ = std::fs::rename(f, f.with_extension("jblueprint"));
+        }
     }
 }

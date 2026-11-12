@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Level",
-    kind: Some(Node2D),
+    kind: Some(Object2D),
     scripts: ["res://scripts/game.jlb", "res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Floor", kind: Some(Sprite2D), transform: Some((position: (640.0, 690.0, 0.0))),
@@ -15,14 +15,14 @@
           (name: "Trail", kind: Some(Particles2D), props: {"rate": Num(60.0), "lifetime": Num(0.5), "speed": Num(20.0), "spread": Num(180.0),
             "size": Num(18.0), "size_end": Num(4.0), "color": Color((0.5, 0.82, 1.0, 0.8)), "color_end": Color((0.3, 0.5, 0.9, 0.0)), "area": Num(12.0), "layer": Num(0.0)}),
         ]),
-      (name: "Coin", instance: Some("res://scenes/coin.jscene"), transform: Some((position: (300.0, 250.0, 0.0)))),
-      (name: "Coin2", instance: Some("res://scenes/coin.jscene"), transform: Some((position: (950.0, 450.0, 0.0)))),
+      (name: "Coin", instance: Some("res://blueprints/coin.jblueprint"), transform: Some((position: (300.0, 250.0, 0.0)))),
+      (name: "Coin2", instance: Some("res://blueprints/coin.jblueprint"), transform: Some((position: (950.0, 450.0, 0.0)))),
       (name: "Sparks", kind: Some(Particles2D), props: {"emitting": Bool(false), "lifetime": Num(0.7), "speed": Num(260.0), "speed_random": Num(0.8), "spread": Num(180.0),
         "gravity": Num(400.0), "size": Num(7.0), "size_end": Num(1.0), "color": Color((1.0, 0.85, 0.3, 1.0)), "color_end": Color((1.0, 0.45, 0.1, 0.0)), "layer": Num(2.0)}),
       (name: "Score", kind: Some(Label2D), transform: Some((position: (24.0, 24.0, 0.0))),
         props: {"text": Text("Score: 0"), "size": Num(24.0)}),
       (name: "Help", kind: Some(Label2D), transform: Some((position: (24.0, 60.0, 0.0))),
-        props: {"text": Text("Arrows/WASD move - collect the coins - Tab: 3D scene - Esc: menu"), "size": Num(14.0), "color": Color((0.56, 0.6, 0.63, 1.0))}),
+        props: {"text": Text("Arrows/WASD move - collect the coins - Tab: 3D blueprint - Esc: menu"), "size": Num(14.0), "color": Color((0.56, 0.6, 0.63, 1.0))}),
     ],
   ),
 )

@@ -1,6 +1,6 @@
 [package]
 name = "gex-core"
-description = "Scene tree, nodes, scene files and render extraction for GEX"
+description = "Blueprint tree, objects, blueprint files and render extraction for GEX"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

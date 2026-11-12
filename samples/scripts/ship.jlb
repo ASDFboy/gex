@@ -24,7 +24,7 @@ DEF on_step(dt) {
 	IF KEY_DOWN("action") AND cooldown <= 0 {
 		GLOBAL cooldown = 0.18
 		a = self.rotation - 90
-		b = SPAWN("res://scenes/bullet.jscene", self.x + COS(a) * 24, self.y + SIN(a) * 24)
+		b = SPAWN("res://blueprints/bullet.jblueprint", self.x + COS(a) * 24, self.y + SIN(a) * 24)
 		SET(b, "vx", COS(a) * 700 + vx)
 		SET(b, "vy", SIN(a) * 700 + vy)
 		PLAY_SOUND("res://assets/laser.wav", 0.35)

@@ -13,7 +13,7 @@ use crate::{code, panels, templates, theme, tools, viewport};
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
-    Scene,
+    Blueprint,
     Hierarchy,
     Inspector,
     Events,
@@ -42,9 +42,9 @@ impl TabViewer for Viewer<'_> {
 
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
-            Tab::Scene => {
-                let name = self.st.scene_res.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
-                let dirty = if self.st.playing.is_none() && self.st.scene_dirty() { " *" } else { "" };
+            Tab::Blueprint => {
+                let name = self.st.blueprint_res.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
+                let dirty = if self.st.playing.is_none() && self.st.blueprint_dirty() { " *" } else { "" };
                 format!("🎬 {}{}", name, dirty).into()
             }
             Tab::Hierarchy => "🌲 Hierarchy".into(),
@@ -67,8 +67,8 @@ impl TabViewer for Viewer<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
-            Tab::Scene => {
-                scene_tabs(ui, self.st);
+            Tab::Blueprint => {
+                blueprint_tabs(ui, self.st);
                 viewport::viewport(ui, self.st, self.rs, self.viewport_tex)
             }
             Tab::Hierarchy => panels::hierarchy(ui, self.st),
@@ -101,8 +101,8 @@ impl TabViewer for Viewer<'_> {
     }
 }
 
-/// The strip of open scenes above the scene view.
-fn scene_tabs(ui: &mut egui::Ui, st: &mut EditorState) {
+/// The strip of open blueprints above the blueprint view.
+fn blueprint_tabs(ui: &mut egui::Ui, st: &mut EditorState) {
     if st.docs.is_empty() {
         return;
     }
@@ -110,21 +110,21 @@ fn scene_tabs(ui: &mut egui::Ui, st: &mut EditorState) {
     let mut close = false;
     ui.horizontal(|ui| {
         let name = |r: &Option<String>| r.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
-        ui.add(egui::Button::selectable(true, name(&st.scene_res)));
-        if ui.small_button("✖").on_hover_text("close this scene (Ctrl+W)").clicked() {
+        ui.add(egui::Button::selectable(true, name(&st.blueprint_res)));
+        if ui.small_button("✖").on_hover_text("close this blueprint (Ctrl+W)").clicked() {
             close = true;
         }
         for (i, d) in st.docs.iter().enumerate() {
-            if ui.add(egui::Button::selectable(false, name(&d.scene_res))).clicked() {
+            if ui.add(egui::Button::selectable(false, name(&d.blueprint_res))).clicked() {
                 switch = Some(i);
             }
         }
     });
     if let Some(i) = switch {
-        st.switch_scene(i);
+        st.switch_blueprint(i);
     }
     if close {
-        st.close_scene();
+        st.close_blueprint();
     }
 }
 
@@ -137,7 +137,7 @@ fn saved_dock() -> Option<DockState<Tab>> {
     let mut d: DockState<Tab> = ron::from_str(&text).ok()?;
     // Script tabs from last time don't carry over (their buffers aren't open).
     d.retain_tabs(|t| !matches!(t, Tab::Script(_)));
-    d.find_tab(&Tab::Scene)?;
+    d.find_tab(&Tab::Blueprint)?;
     Some(d)
 }
 
@@ -164,7 +164,7 @@ fn show_tab(dock: &mut DockState<Tab>, t: Tab) {
 }
 
 fn default_dock() -> DockState<Tab> {
-    let mut d = DockState::new(vec![Tab::Scene]);
+    let mut d = DockState::new(vec![Tab::Blueprint]);
     let t = d.main_surface_mut();
     let [center, _left] = t.split_left(NodeIndex::root(), 0.18, vec![Tab::Hierarchy]);
     let [center, right] = t.split_right(center, 0.74, vec![Tab::Inspector, Tab::Events]);
@@ -189,7 +189,7 @@ pub struct EditorApp {
     pads: crate::gamepad::Pads,
     /// The window holds and hides the mouse for the game right now.
     cursor_locked: bool,
-    /// The GameMaker-style layout (workspaces and scene tabs) of the open project.
+    /// The GameMaker-style layout (workspaces and blueprint tabs) of the open project.
     ws: crate::workspace::Layout,
     /// Use the older docked layout instead.
     classic: bool,
@@ -228,7 +228,7 @@ pub fn mouse_motion(i: &egui::InputState) -> [f32; 2] {
 struct SettingsForm {
     loaded: bool,
     name: String,
-    main_scene: String,
+    main_blueprint: String,
     hl2_path: String,
     hl2_games: String,
     hl2_on: bool,
@@ -278,13 +278,13 @@ impl EditorApp {
                 state::remember_project(&p.dir);
                 self.ws = crate::workspace::Layout::load(&p.dir);
                 let st = EditorState::new(p);
-                // The scene opened at start doesn't take over the tab that was showing.
-                if !self.ws.tabs.iter().any(|t| matches!(t, crate::workspace::TopTab::Scene(r) if Some(r) == st.scene_res.as_ref())) {
-                    if let Some(r) = &st.scene_res {
-                        self.ws.tabs.push(crate::workspace::TopTab::Scene(r.clone()));
+                // The blueprint opened at start doesn't take over the tab that was showing.
+                if !self.ws.tabs.iter().any(|t| matches!(t, crate::workspace::TopTab::Blueprint(r) if Some(r) == st.blueprint_res.as_ref())) {
+                    if let Some(r) = &st.blueprint_res {
+                        self.ws.tabs.push(crate::workspace::TopTab::Blueprint(r.clone()));
                     }
                 }
-                self.ws.last_scene = st.scene_res.clone();
+                self.ws.last_blueprint = st.blueprint_res.clone();
                 self.st = Some(st);
                 self.dock = saved_dock().unwrap_or_else(default_dock);
                 self.viewport_tex = None;
@@ -299,7 +299,7 @@ impl EditorApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(32.0)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("GEX").size(30.0).strong().color(theme::ACCENT));
-                ui.label(RichText::new("2D & 3D · scenes all the way down · scripted in .jlb").color(theme::TEXT_DIM));
+                ui.label(RichText::new("2D & 3D · blueprints all the way down · scripted in .jlb").color(theme::TEXT_DIM));
             });
             ui.add_space(16.0);
             ui.columns(2, |cols| {
@@ -356,7 +356,7 @@ impl EditorApp {
                             Err(e) => self.launcher_error = e,
                         }
                     }
-                    if ui.button("Create demo project").on_hover_text("a small 2D game and a 3D scene, with scripts to read").clicked() {
+                    if ui.button("Create demo project").on_hover_text("a small 2D game and a 3D blueprint, with scripts to read").clicked() {
                         let dir = PathBuf::from(&self.new_path);
                         match templates::create_demo(&dir) {
                             Ok(p) => self.open_project(&p.dir),
@@ -395,35 +395,35 @@ impl EditorApp {
                     st.save_all();
                     ui.close();
                 }
-                ui.menu_button("Open scene", |ui| { crate::theme::fade_in(ui);
-                    for s in panels::list_files(st, "res://", "jscene") {
+                ui.menu_button("Open blueprint", |ui| { crate::theme::fade_in(ui);
+                    for s in panels::list_files(st, "res://", "jblueprint") {
                         if ui.button(&s).clicked() {
-                            st.open_scene(&s);
+                            st.open_blueprint(&s);
                             ui.close();
                         }
                     }
                 });
-                ui.menu_button("New scene", |ui| { crate::theme::fade_in(ui);
-                    for k in [gex_core::NodeKind::Node2D, gex_core::NodeKind::Node3D, gex_core::NodeKind::Node] {
+                ui.menu_button("New blueprint", |ui| { crate::theme::fade_in(ui);
+                    for k in [gex_core::ObjectKind::Object2D, gex_core::ObjectKind::Object3D, gex_core::ObjectKind::Object] {
                         if ui.button(format!("{} root", k.name())).clicked() {
-                            let mut res = "res://scenes/new_scene.jscene".to_string();
+                            let mut res = "res://blueprints/new_blueprint.jblueprint".to_string();
                             let mut i = 2;
                             while st.project.res_to_path(&res).is_some_and(|p| p.exists()) {
-                                res = format!("res://scenes/new_scene_{}.jscene", i);
+                                res = format!("res://blueprints/new_blueprint_{}.jblueprint", i);
                                 i += 1;
                             }
                             if let Some(p) = st.project.res_to_path(&res) {
                                 let _ = std::fs::create_dir_all(p.parent().unwrap());
-                                let _ = std::fs::write(&p, gex_core::scene::new_scene_text("Root", k));
-                                st.open_scene(&res);
+                                let _ = std::fs::write(&p, gex_core::blueprint::new_blueprint_text("Root", k));
+                                st.open_blueprint(&res);
                             }
                             ui.close();
                         }
                     }
                 });
-                if ui.button("Set as main scene").on_hover_text("The game starts in this scene").clicked() {
-                    if let Some(r) = st.scene_res.clone() {
-                        st.project.config.main_scene = r;
+                if ui.button("Set as main blueprint").on_hover_text("The game starts in this blueprint").clicked() {
+                    if let Some(r) = st.blueprint_res.clone() {
+                        st.project.config.main_blueprint = r;
                         let _ = st.project.save();
                     }
                     ui.close();
@@ -467,10 +467,10 @@ impl EditorApp {
                     ui.close();
                 }
             });
-            ui.menu_button("Node", |ui| panels::add_node_menu(ui, st));
+            ui.menu_button("Object", |ui| panels::add_object_menu(ui, st));
             ui.menu_button("View", |ui| { crate::theme::fade_in(ui);
                 if self.classic {
-                    for t in [Tab::Scene, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler] {
+                    for t in [Tab::Blueprint, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler] {
                         let name = match &t {
                             Tab::Search => "Find in files".to_string(),
                             t => format!("{:?}", t),
@@ -502,7 +502,7 @@ impl EditorApp {
                 }
                 ui.separator();
                 let mut classic = self.classic;
-                if ui.checkbox(&mut classic, "Classic docked layout").on_hover_text("Panels docked around one scene view, instead of workspaces and scene tabs").changed() {
+                if ui.checkbox(&mut classic, "Classic docked layout").on_hover_text("Panels docked around one blueprint view, instead of workspaces and blueprint tabs").changed() {
                     self.classic = classic;
                     if classic {
                         let _ = std::fs::create_dir_all(state::config_dir());
@@ -520,7 +520,7 @@ impl EditorApp {
             ui.add_space(24.0);
             let playing = st.playing.is_some();
             if !playing {
-                if theme::primary_button(ui, "▶  Play", egui::Color32::from_rgb(0x86, 0xb8, 0x22)).on_hover_text("Run this scene (F5)").clicked() {
+                if theme::primary_button(ui, "▶  Play", egui::Color32::from_rgb(0x86, 0xb8, 0x22)).on_hover_text("Run this blueprint (F5)").clicked() {
                     st.play();
                 }
             } else if theme::primary_button(ui, "■  Stop", egui::Color32::from_rgb(0xc8, 0x1e, 0x5c)).on_hover_text("Stop the game (F5)").clicked() {
@@ -559,7 +559,7 @@ impl EditorApp {
             )
         });
         let mut find_in_files = false;
-        let (copy, paste, close_scene, tool) = ctx.input_mut(|i| {
+        let (copy, paste, close_blueprint, tool) = ctx.input_mut(|i| {
             let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
             let paste = i.events.iter().find_map(|e| match e {
                 egui::Event::Paste(t) => Some(t.clone()),
@@ -637,7 +637,7 @@ impl EditorApp {
             if copy {
                 if let Some(t) = st.copy_text() {
                     ctx.copy_text(t);
-                    st.status = format!("copied {} node(s)", st.selected_roots().len());
+                    st.status = format!("copied {} object(s)", st.selected_roots().len());
                 }
             }
             if let Some(t) = paste {
@@ -645,8 +645,8 @@ impl EditorApp {
                     st.status = "pasted".into();
                 }
             }
-            if close_scene {
-                st.close_scene();
+            if close_blueprint {
+                st.close_blueprint();
             }
         }
     }
@@ -710,7 +710,7 @@ impl EditorApp {
         if !f.loaded {
             f.loaded = true;
             f.name = st.project.config.name.clone();
-            f.main_scene = st.project.config.main_scene.clone();
+            f.main_blueprint = st.project.config.main_blueprint.clone();
             f.message.clear();
             f.window = st.project.config.window_size;
             f.actions = st.project.config.actions.iter().map(|(k, v)| (k.clone(), v.join(", "))).collect();
@@ -792,11 +792,11 @@ impl EditorApp {
                 ui.label("Name");
                 ui.text_edit_singleline(&mut f.name);
                 ui.end_row();
-                ui.label("Main scene");
-                egui::ComboBox::from_id_salt("main scene").selected_text(f.main_scene.trim_start_matches("res://")).width(300.0).show_ui(ui, |ui| {
-                    for sc in scene_files(&st.project) {
+                ui.label("Main blueprint");
+                egui::ComboBox::from_id_salt("main blueprint").selected_text(f.main_blueprint.trim_start_matches("res://")).width(300.0).show_ui(ui, |ui| {
+                    for sc in blueprint_files(&st.project) {
                         let label = sc.trim_start_matches("res://").to_string();
-                        ui.selectable_value(&mut f.main_scene, sc, label);
+                        ui.selectable_value(&mut f.main_blueprint, sc, label);
                     }
                 });
                 ui.end_row();
@@ -885,7 +885,7 @@ impl EditorApp {
             ui.separator();
             if ui.button("Save").clicked() {
                 st.project.config.name = f.name.clone();
-                st.project.config.main_scene = f.main_scene.clone();
+                st.project.config.main_blueprint = f.main_blueprint.clone();
                 st.project.config.window_size = f.window;
                 st.project.config.fullscreen = f.fullscreen;
                 st.project.config.resizable = f.resizable;
@@ -1016,26 +1016,26 @@ fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
         "w" | "write" => st.save_all(),
         "e" | "edit" => {
             let res = if arg.contains("://") { arg.to_string() } else { format!("res://{}", arg) };
-            if res.ends_with(".jscene") {
-                st.open_scene(&res);
+            if res.ends_with(".jblueprint") {
+                st.open_blueprint(&res);
             } else {
                 st.open_script(&res, None);
             }
         }
         "play" | "run" => st.play(),
         "stop" => st.stop(),
-        "add" | "node" => match gex_core::NodeKind::from_name(arg) {
+        "add" | "object" => match gex_core::ObjectKind::from_name(arg) {
             Some(k) => {
-                st.add_node(k);
+                st.add_object(k);
             }
-            None => st.status = format!("no node kind called {:?}", arg),
+            None => st.status = format!("no object kind called {:?}", arg),
         },
         "del" | "delete" => st.delete_selected(),
         "dup" => st.duplicate_selected(),
         "name" | "rename" => {
             if let Some(id) = st.selected {
                 st.will_change("rename");
-                st.tree.nodes[id].name = arg.to_string();
+                st.tree.objects[id].name = arg.to_string();
             }
         }
         "2d" => st.mode_3d = false,
@@ -1044,7 +1044,7 @@ fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
         "redo" => st.redo(),
         "find" | "sel" => match st.tree.find_path(None, arg).or_else(|| st.tree.find_named(arg)) {
             Some(id) => st.selected = Some(id),
-            None => st.status = format!("no node {:?}", arg),
+            None => st.status = format!("no object {:?}", arg),
         },
         "script" => {
             if let Some(id) = st.selected {
@@ -1060,7 +1060,7 @@ fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
         }
         "branch" => {
             if let Some(id) = st.selected {
-                st.save_branch_as_scene(id);
+                st.save_branch_as_blueprint(id);
             }
         }
         "q" | "quit" => std::process::exit(0),
@@ -1071,8 +1071,8 @@ fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
     }
 }
 
-/// Every .jscene in the project, as res:// paths.
-fn scene_files(p: &Project) -> Vec<String> {
+/// Every .jblueprint in the project, as res:// paths.
+fn blueprint_files(p: &Project) -> Vec<String> {
     fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             let path = e.path();
@@ -1081,7 +1081,7 @@ fn scene_files(p: &Project) -> Vec<String> {
             }
             if path.is_dir() {
                 walk(&path, out);
-            } else if path.extension().is_some_and(|x| x == "jscene") {
+            } else if path.extension().is_some_and(|x| x == "jblueprint") {
                 out.push(path);
             }
         }
@@ -1166,9 +1166,9 @@ impl eframe::App for EditorApp {
             // Script tabs to open / close (the workspace layout opens its own windows).
             let requests = if self.classic { std::mem::take(&mut st.open_requests) } else { Vec::new() };
             if self.classic {
-                // The classic layout has no scene windows: opening a scene edits it.
+                // The classic layout has no blueprint windows: opening a blueprint edits it.
                 for r in std::mem::take(&mut st.open_windows) {
-                    st.open_scene(&r);
+                    st.open_blueprint(&r);
                 }
             }
             for r in requests {
@@ -1178,8 +1178,8 @@ impl eframe::App for EditorApp {
                         let _ = self.dock.set_active_tab(p);
                     }
                     None => {
-                        // Next to the scene view.
-                        match self.dock.find_tab(&Tab::Scene) {
+                        // Next to the blueprint view.
+                        match self.dock.find_tab(&Tab::Blueprint) {
                             Some(p) => {
                                 let _ = self.dock.set_focused_node_and_surface(p.node_path());
                                 self.dock.push_to_focused_leaf(t);
@@ -1286,8 +1286,8 @@ pub struct PlayerApp {
 impl PlayerApp {
     pub fn new(project: Project) -> Result<PlayerApp, String> {
         gex_script::commands::register();
-        let text = project.read_text(&project.config.main_scene)?;
-        let tree = gex_core::scene::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
+        let text = project.read_text(&project.config.main_blueprint)?;
+        let tree = gex_core::blueprint::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let mut list = gex_core::render::extract(&tree);
         list.graphics = project.config.graphics.clone();

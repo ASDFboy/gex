@@ -1,21 +1,21 @@
-//! Moving values between node properties (Variant) and .jlb values.
+//! Moving values between object properties (Variant) and .jlb values.
 
-use gex_core::{NodeId, Variant};
+use gex_core::{ObjectId, Variant};
 use jlb::embed::{as_f64, list_table, named_table, num, table_get};
 use jlb::Value;
 use slotmap::{Key, KeyData};
 
-/// Node handles are plain numbers in .jlb.
-pub fn id_value(id: NodeId) -> Value {
+/// Object handles are plain numbers in .jlb.
+pub fn id_value(id: ObjectId) -> Value {
     num(id.data().as_ffi() as f64)
 }
 
-pub fn value_id(v: &Value) -> Option<NodeId> {
+pub fn value_id(v: &Value) -> Option<ObjectId> {
     let n = as_f64(v)?;
     if n < 0.0 || n.fract() != 0.0 {
         return None;
     }
-    Some(NodeId::from(KeyData::from_ffi(n as u64)))
+    Some(ObjectId::from(KeyData::from_ffi(n as u64)))
 }
 
 pub fn to_value(v: &Variant) -> Value {

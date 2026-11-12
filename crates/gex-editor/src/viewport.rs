@@ -1,5 +1,5 @@
-//! The scene view: draws the scene (or the running game) with gex-render, and handles
-//! camera controls, picking, dragging nodes and dropping assets.
+//! The blueprint view: draws the blueprint (or the running game) with gex-render, and handles
+//! camera controls, picking, dragging objects and dropping assets.
 
 use std::collections::HashSet;
 
@@ -7,7 +7,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense};
 use egui_wgpu::wgpu;
 use gex_core::glam::{Mat4, Quat, Vec2, Vec3};
 use gex_core::render::{extract, RenderList};
-use gex_core::{Node, NodeId, NodeKind, Variant};
+use gex_core::{Object, ObjectId, ObjectKind, Variant};
 use gex_render::camera::ray_box;
 use gex_render::{Cameras, Overlay, Renderer};
 
@@ -192,11 +192,11 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
             grid_3d(&mut o);
         }
         for id in tree.walk() {
-            let n = &tree.nodes[id];
-            if matches!(n.kind, NodeKind::Camera3D | NodeKind::Light3D | NodeKind::Node3D) {
+            let n = &tree.objects[id];
+            if matches!(n.kind, ObjectKind::Camera3D | ObjectKind::Light3D | ObjectKind::Object3D) {
                 let m = tree.global_matrix(id);
                 let p = m.w_axis.truncate();
-                let c = if n.kind == NodeKind::Light3D { [1.0, 0.85, 0.3, 0.9] } else { [0.8, 0.8, 0.8, 0.8] };
+                let c = if n.kind == ObjectKind::Light3D { [1.0, 0.85, 0.3, 0.9] } else { [0.8, 0.8, 0.8, 0.8] };
                 for ax in [Vec3::X, Vec3::Y, Vec3::Z] {
                     o.line3(p - ax * 0.2, p + ax * 0.2, c);
                 }
@@ -204,9 +204,9 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
             }
         }
         for id in tree.walk() {
-            let n = &tree.nodes[id];
-            if matches!(n.kind, NodeKind::Body3D | NodeKind::Collider3D) {
-                let color = if n.kind == NodeKind::Collider3D { [0.95, 0.75, 0.3, 0.8] } else { [0.3, 0.9, 0.5, 0.7] };
+            let n = &tree.objects[id];
+            if matches!(n.kind, ObjectKind::Body3D | ObjectKind::Collider3D) {
+                let color = if n.kind == ObjectKind::Collider3D { [0.95, 0.75, 0.3, 0.8] } else { [0.3, 0.9, 0.5, 0.7] };
                 let size = if matches!(n.text("shape"), "sphere" | "ball") {
                     Vec3::splat(n.num("radius", 0.5) as f32 * 2.0)
                 } else {
@@ -217,7 +217,7 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
         }
         if let Some(sel) = st.selected.filter(|s| tree.contains(*s)) {
             let m = tree.global_matrix(sel);
-            if tree.nodes[sel].kind == NodeKind::Mesh3D {
+            if tree.objects[sel].kind == ObjectKind::Mesh3D {
                 box_lines(&mut o, m * Mat4::from_scale(Vec3::splat(1.02)), SEL);
             } else {
                 box_lines(&mut o, m * Mat4::from_scale(Vec3::splat(0.4)), SEL);
@@ -236,12 +236,12 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
             o.quad2(corners(c.model, c.size, true), [0.3, 0.9, 0.5, 0.8]);
         }
         for sel in st.selection.iter().copied().chain(st.selected).filter(|s| tree.contains(*s)) {
-            let n = &tree.nodes[sel];
+            let n = &tree.objects[sel];
             let m = tree.global_matrix(sel);
             match n.kind {
-                NodeKind::Sprite2D | NodeKind::Collider2D => {
+                ObjectKind::Sprite2D | ObjectKind::Collider2D => {
                     let size = Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
-                    let centered = n.kind == NodeKind::Collider2D || n.prop("centered").is_none_or(|v| v.as_bool());
+                    let centered = n.kind == ObjectKind::Collider2D || n.prop("centered").is_none_or(|v| v.as_bool());
                     o.quad2(corners(m, size + Vec2::splat(2.0), centered), SEL);
                 }
                 _ => {
@@ -255,17 +255,17 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
     o
 }
 
-/// The node under a point in the view.
-fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Option<NodeId> {
+/// The object under a point in the view.
+fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Option<ObjectId> {
     let tree = &st.tree;
     if st.mode_3d {
         let (o, d) = cams.ray(screen);
-        let mut best: Option<(f32, NodeId)> = None;
+        let mut best: Option<(f32, ObjectId)> = None;
         for m in &list.meshes {
             let model = if gex_render::mesh::primitive(&m.mesh) == "plane" { m.model * Mat4::from_scale(Vec3::new(1.0, 0.02, 1.0)) } else { m.model };
             if let Some(t) = ray_box(o, d, model) {
                 if best.is_none_or(|b| t < b.0) {
-                    best = Some((t, m.node));
+                    best = Some((t, m.object));
                 }
             }
         }
@@ -273,45 +273,45 @@ fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Op
     }
     let w = cams.screen_to_2d(screen);
     let zoom = (cams.view_proj_2d.x_axis.x * cams.size[0] as f32 / 2.0).abs().max(0.01);
-    // UI nodes sit on top (in the editor, game-window pixels are world pixels).
+    // UI objects sit on top (in the editor, game-window pixels are world pixels).
     let [dw, dh] = st.project.config.window_size;
     for u in list.ui.iter().rev() {
         let tl = u.top_left(Vec2::new(dw as f32, dh as f32));
         if w.x >= tl.x && w.y >= tl.y && w.x <= tl.x + u.size.x && w.y <= tl.y + u.size.y {
-            return Some(u.node);
+            return Some(u.object);
         }
     }
-    // Labels, then sprites from the top layer down, then point-like nodes.
+    // Labels, then sprites from the top layer down, then point-like objects.
     for l in list.labels.iter().rev() {
         let size = Vec2::new(l.text.chars().count() as f32 * l.size * 0.55, l.size * 1.2);
         if w.x >= l.pos.x && w.y >= l.pos.y && w.x <= l.pos.x + size.x && w.y <= l.pos.y + size.y {
-            return Some(l.node);
+            return Some(l.object);
         }
     }
     for s in list.sprites.iter().rev() {
         let off = if s.centered { -s.size / 2.0 } else { Vec2::ZERO };
         let local = s.model.inverse().transform_point3(w.extend(0.0)).truncate() - off;
         if local.x >= 0.0 && local.y >= 0.0 && local.x <= s.size.x && local.y <= s.size.y {
-            return Some(s.node);
+            return Some(s.object);
         }
     }
     for c in &list.colliders {
         let local = c.model.inverse().transform_point3(w.extend(0.0)).truncate();
         if local.x.abs() <= c.size.x / 2.0 && local.y.abs() <= c.size.y / 2.0 {
-            return Some(c.node);
+            return Some(c.object);
         }
     }
     tree.walk().into_iter().find(|id| {
-        let n = &tree.nodes[*id];
-        matches!(n.kind, NodeKind::Node2D | NodeKind::Camera2D) && tree.global_matrix(*id).w_axis.truncate().truncate().distance(w) * zoom < 10.0
+        let n = &tree.objects[*id];
+        matches!(n.kind, ObjectKind::Object2D | ObjectKind::Camera2D) && tree.global_matrix(*id).w_axis.truncate().truncate().distance(w) * zoom < 10.0
     })
 }
 
 #[derive(Clone)]
 struct Drag {
-    /// The dragged nodes and their world transforms when the drag began.
-    nodes: Vec<(NodeId, Mat4)>,
-    /// The grabbed node's position.
+    /// The dragged objects and their world transforms when the drag began.
+    objects: Vec<(ObjectId, Mat4)>,
+    /// The grabbed object's position.
     pivot: Vec3,
     screen_start: Vec2,
     /// The handle grabbed, and the gizmo as it was then.
@@ -321,7 +321,7 @@ struct Drag {
 
 pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::RenderState>, textures: &mut Option<egui::TextureId>) {
     let playing = st.playing.is_some();
-    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:scene_view");
+    crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:blueprint_view");
     ui.horizontal(|ui| {
         let a = ui.selectable_label(!st.mode_3d, "2D");
         if a.clicked() {
@@ -484,13 +484,13 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     }
 
     // Painting tiles into the selected TileMap2D.
-    let painting = !playing && !st.mode_3d && st.tile_brush.is_some() && st.selected.is_some_and(|s| st.tree.get(s).is_some_and(|n| n.kind == NodeKind::TileMap2D));
+    let painting = !playing && !st.mode_3d && st.tile_brush.is_some() && st.selected.is_some_and(|s| st.tree.get(s).is_some_and(|n| n.kind == ObjectKind::TileMap2D));
     if painting {
         let down = ui.input(|i| i.pointer.primary_down());
         if let (true, true, Some(pp)) = (down, resp.hovered() || resp.dragged(), pointer) {
             let id = st.selected.unwrap();
             let w = cams.screen_to_2d(to_px(pp));
-            let n = &st.tree.nodes[id];
+            let n = &st.tree.objects[id];
             let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
             let local = st.tree.global_matrix(id).inverse().transform_point3(w.extend(0.0));
             let (c, r) = ((local.x / tw).floor() as i32, (local.y / th).floor() as i32);
@@ -499,18 +499,18 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
             if c >= 0 && r >= 0 && gex_core::tiles::get(&grid, c, r) != brush {
                 st.will_change(&format!("paint {:?}", id));
                 gex_core::tiles::set(&mut grid, c, r, brush);
-                st.tree.nodes[id].props.insert("tiles".into(), Variant::Text(gex_core::tiles::to_text(&grid)));
+                st.tree.objects[id].props.insert("tiles".into(), Variant::Text(gex_core::tiles::to_text(&grid)));
             }
         }
     }
-    // Select, drag nodes (move / rotate / scale), box select, drop assets (editing only).
+    // Select, drag objects (move / rotate / scale), box select, drop assets (editing only).
     let mut box_rect: Option<Rect> = None;
     let mut gizmo_draw: Option<(Gizmo, Option<Handle>)> = None;
     if !playing && !painting {
         let drag_id = egui::Id::new("viewport drag");
         let ctrl = ui.input(|i| i.modifiers.command);
-        // The handles on the selected node.
-        let giz = st.selected.filter(|s| st.tree.contains(*s) && Some(*s) != st.tree.root && (st.tree.nodes[*s].kind.is_3d() == st.mode_3d)).and_then(|s| {
+        // The handles on the selected object.
+        let giz = st.selected.filter(|s| st.tree.contains(*s) && Some(*s) != st.tree.root && (st.tree.objects[*s].kind.is_3d() == st.mode_3d)).and_then(|s| {
             let m = st.tree.global_matrix(s);
             Gizmo::new(&cams, st.mode_3d, st.tool, m.w_axis.truncate(), m.to_scale_rotation_translation().1, ppp)
         });
@@ -527,8 +527,8 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                 let grabbed = giz.and_then(|g| g.hit(&cams, to_px(pp), ppp).map(|h| (g, h)));
                 let hit = if grabbed.is_some() { None } else { pick(st, &list, &cams, to_px(pp)).filter(|h| Some(*h) != st.tree.root) };
                 if let Some((g, handle)) = grabbed {
-                    let nodes: Vec<(NodeId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
-                    ui.data_mut(|d| d.insert_temp(drag_id, Drag { nodes, pivot: g.pivot, screen_start: to_px(pp), handle, giz: g }));
+                    let objects: Vec<(ObjectId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
+                    ui.data_mut(|d| d.insert_temp(drag_id, Drag { objects, pivot: g.pivot, screen_start: to_px(pp), handle, giz: g }));
                 }
                 match hit {
                     Some(h) => {
@@ -539,11 +539,11 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                                 st.select(Some(h));
                             }
                         }
-                        let nodes: Vec<(NodeId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
+                        let objects: Vec<(ObjectId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
                         let hm = st.tree.global_matrix(h);
                         let pivot = hm.w_axis.truncate();
                         if let Some(g) = Gizmo::new(&cams, st.mode_3d, st.tool, pivot, hm.to_scale_rotation_translation().1, ppp) {
-                            ui.data_mut(|d| d.insert_temp(drag_id, Drag { nodes, pivot, screen_start: to_px(pp), handle: Handle::Free, giz: g }));
+                            ui.data_mut(|d| d.insert_temp(drag_id, Drag { objects, pivot, screen_start: to_px(pp), handle: Handle::Free, giz: g }));
                         }
                     }
                     None if !st.mode_3d => {
@@ -559,7 +559,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                 let g = d.giz;
                 let drag = now - d.screen_start;
                 let view = g.toward_viewer(&cams);
-                // What the drag means, once for every dragged node.
+                // What the drag means, once for every dragged object.
                 let mut move_by = Vec3::ZERO;
                 let mut turn = Quat::IDENTITY;
                 let mut grow = Vec3::ONE;
@@ -567,7 +567,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                     Tool::Move => {
                         move_by = match d.handle {
                             Handle::Axis(i) => g.axes[i] * g.along(&cams, i, drag),
-                            // Two axes: slide on their plane. The node itself: on the plane facing the camera.
+                            // Two axes: slide on their plane. The object itself: on the plane facing the camera.
                             h => {
                                 let normal = if let Handle::Plane(i) = h { g.axes[i] } else { view };
                                 match (g.on_plane(&cams, d.screen_start, normal), g.on_plane(&cams, now, normal)) {
@@ -618,13 +618,13 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                 }
                 {
                     st.will_change("drag");
-                    for (id, start_m) in &d.nodes {
+                    for (id, start_m) in &d.objects {
                         if !st.tree.contains(*id) {
                             continue;
                         }
                         let (s0, r0, t0) = start_m.to_scale_rotation_translation();
                         let uniform = grow.x == grow.y && grow.y == grow.z;
-                        // Scaling every axis also spreads the other dragged nodes out from the grabbed one.
+                        // Scaling every axis also spreads the other dragged objects out from the grabbed one.
                         let t = d.pivot + turn * (t0 - d.pivot) * if uniform { grow.x } else { 1.0 } + move_by;
                         let mut s1 = s0 * grow;
                         let set = if st.mode_3d { st.snap3 } else { st.snap2 };
@@ -637,10 +637,10 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                             }
                         }
                         let world = Mat4::from_scale_rotation_translation(s1, turn * r0, t);
-                        let parent_inv = st.tree.nodes[*id].parent.map(|p| st.tree.global_matrix(p).inverse()).unwrap_or(Mat4::IDENTITY);
+                        let parent_inv = st.tree.objects[*id].parent.map(|p| st.tree.global_matrix(p).inverse()).unwrap_or(Mat4::IDENTITY);
                         let (s, r, t) = (parent_inv * world).to_scale_rotation_translation();
                         let (ry, rx, rz) = r.to_euler(gex_core::glam::EulerRot::YXZ);
-                        let tr = &mut st.tree.nodes[*id].transform;
+                        let tr = &mut st.tree.objects[*id].transform;
                         tr.position = t;
                         tr.scale = s;
                         tr.rotation = Vec3::new(rx.to_degrees(), ry.to_degrees(), rz.to_degrees()) + Vec3::ZERO; // + 0 turns -0 into 0
@@ -654,15 +654,15 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         if resp.drag_stopped() {
             ui.data_mut(|d| d.remove::<Drag>(drag_id));
             if let (Some(b), Some(pp)) = (ui.data_mut(|m| m.remove_temp::<Pos2>(drag_id.with("box"))), pointer) {
-                // Box select: nodes whose position is inside the box.
+                // Box select: objects whose position is inside the box.
                 let r = Rect::from_two_pos(b, pp);
                 let (a, z) = (cams.screen_to_2d(to_px(r.min)), cams.screen_to_2d(to_px(r.max)));
                 let (lo, hi) = (a.min(z), a.max(z));
-                let found: Vec<NodeId> = st
+                let found: Vec<ObjectId> = st
                     .tree
                     .walk()
                     .into_iter()
-                    .filter(|i| Some(*i) != st.tree.root && !st.tree.nodes[*i].from_instance)
+                    .filter(|i| Some(*i) != st.tree.root && !st.tree.objects[*i].from_instance)
                     .filter(|i| {
                         let p = st.tree.global_matrix(*i).w_axis.truncate().truncate();
                         p.x >= lo.x && p.y >= lo.y && p.x <= hi.x && p.y <= hi.y
@@ -709,7 +709,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     for p in problems {
         st.log(gex_script::LogKind::Error, p);
     }
-    // UI nodes, in game-window pixels.
+    // UI objects, in game-window pixels.
     let [dw, dh] = st.project.config.window_size;
     let design = Vec2::new(dw as f32, dh as f32);
     let events = {
@@ -757,18 +757,18 @@ fn pointer_world(st: &EditorState, cams: &Cameras, screen: Vec2, plane_y: f32) -
 
 fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
     let lower = path.to_ascii_lowercase();
-    let place = |st: &mut EditorState, id: NodeId| {
-        let parent_inv = st.tree.nodes[id].parent.map(|p| st.tree.global_matrix(p).inverse()).unwrap_or(Mat4::IDENTITY);
-        st.tree.nodes[id].transform.position = parent_inv.transform_point3(at);
+    let place = |st: &mut EditorState, id: ObjectId| {
+        let parent_inv = st.tree.objects[id].parent.map(|p| st.tree.global_matrix(p).inverse()).unwrap_or(Mat4::IDENTITY);
+        st.tree.objects[id].transform.position = parent_inv.transform_point3(at);
     };
-    if lower.ends_with(".jscene") {
-        if let Some(id) = st.instance_scene(path) {
+    if lower.ends_with(".jblueprint") {
+        if let Some(id) = st.instance_blueprint(path) {
             place(st, id);
         }
     } else if gex_assets::model::is_model(&lower) {
         st.will_change("drop");
         let name: String = path.rsplit('/').next().unwrap_or("Model").split('.').next().unwrap_or("Model").to_string();
-        let mut n = Node::new(name, NodeKind::Mesh3D);
+        let mut n = Object::new(name, ObjectKind::Mesh3D);
         n.props.insert("mesh".into(), Variant::Text(path.to_string()));
         n.props.insert("color".into(), Variant::Color([1.0; 4]));
         if lower.ends_with(".bsp") {
@@ -780,7 +780,7 @@ fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
         st.mode_3d = true;
     } else if lower.ends_with(".wav") || lower.ends_with(".mp3") || lower.ends_with(".ogg") || lower.ends_with(".flac") {
         st.will_change("drop");
-        let mut n = Node::new("Sound", NodeKind::Sound);
+        let mut n = Object::new("Sound", ObjectKind::Sound);
         n.props.insert("stream".into(), Variant::Res(path.to_string()));
         let id = st.tree.add(st.tree.root, n);
         st.selected = Some(id);
@@ -788,11 +788,11 @@ fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
         st.will_change("drop");
         let name: String = path.rsplit('/').next().unwrap_or("Sprite").split('.').next().unwrap_or("Sprite").to_string();
         let id = if st.mode_3d {
-            let mut n = Node::new(name, NodeKind::Mesh3D);
+            let mut n = Object::new(name, ObjectKind::Mesh3D);
             n.props.insert("texture".into(), Variant::Res(path.to_string()));
             st.tree.add(st.tree.root, n)
         } else {
-            let mut n = Node::new(name, NodeKind::Sprite2D);
+            let mut n = Object::new(name, ObjectKind::Sprite2D);
             n.props.insert("texture".into(), Variant::Res(path.to_string()));
             if let Ok(img) = gex_assets::load_image(&st.vfs, path) {
                 n.props.insert("width".into(), Variant::Num(img.width as f64));
@@ -803,16 +803,16 @@ fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
         place(st, id);
         st.selected = Some(id);
     } else {
-        st.status = format!("{} can't be placed in a scene yet", path);
+        st.status = format!("{} can't be placed in a blueprint yet", path);
     }
 }
 
-/// Particles2D nodes play in the editor too, so their look can be tuned without running the game.
+/// Particles2D objects play in the editor too, so their look can be tuned without running the game.
 fn preview_particles(ctx: &egui::Context, st: &mut EditorState, list: &mut gex_core::render::RenderList) {
     let now = std::time::Instant::now();
     let dt = now.duration_since(st.particle_clock).as_secs_f32().min(0.1);
     st.particle_clock = now;
-    let any = st.tree.walk().into_iter().any(|i| matches!(st.tree.nodes[i].kind, NodeKind::Particles2D | NodeKind::Particles3D));
+    let any = st.tree.walk().into_iter().any(|i| matches!(st.tree.objects[i].kind, ObjectKind::Particles2D | ObjectKind::Particles3D));
     if !any && st.preview_particles.is_empty() && st.preview_particles_3d.is_empty() {
         return;
     }
@@ -825,7 +825,7 @@ fn preview_particles(ctx: &egui::Context, st: &mut EditorState, list: &mut gex_c
     }
 }
 
-/// A scene-change fade over the whole game view.
+/// A blueprint-change fade over the whole game view.
 pub fn paint_fade(ui: &egui::Ui, rect: Rect, c: [f32; 4]) {
     if c[3] > 0.0 {
         let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;

@@ -1,5 +1,5 @@
-//! Property values. Every node property (built-in or custom) is a `Variant`, so the
-//! inspector, scene files and JLB scripts all speak the same small set of types.
+//! Property values. Every object property (built-in or custom) is a `Variant`, so the
+//! inspector, blueprint files and JLB scripts all speak the same small set of types.
 
 use serde::{Deserialize, Serialize};
 

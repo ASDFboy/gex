@@ -1,11 +1,11 @@
-//! Particles2D: lots of small sprites that fly out of a node, fall, fade and shrink.
+//! Particles2D: lots of small sprites that fly out of an object, fall, fade and shrink.
 //! Particles live in world space, so moving the emitter leaves a trail.
 
 use std::collections::HashMap;
 
 use gex_core::glam::{Mat4, Quat, Vec2, Vec3};
 use gex_core::render::{Region, RenderList, Sprite};
-use gex_core::{NodeId, NodeKind, SceneTree};
+use gex_core::{ObjectId, ObjectKind, BlueprintTree};
 
 /// More than this per emitter are dropped (keeps a typo like rate = 100000 from eating memory).
 const MAX_PER_EMITTER: usize = 4000;
@@ -45,18 +45,18 @@ impl Emitter {
     }
 
     /// Adds `n` particles from the emitter's current place and settings.
-    pub fn spawn(&mut self, tree: &SceneTree, id: NodeId, n: usize) {
-        let node = &tree.nodes[id];
+    pub fn spawn(&mut self, tree: &BlueprintTree, id: ObjectId, n: usize) {
+        let object = &tree.objects[id];
         let m = tree.global_matrix(id);
         let (_, rot, pos) = m.to_scale_rotation_translation();
         let base = rot.to_euler(gex_core::glam::EulerRot::YXZ).2.to_degrees();
-        let dir = node.num("direction", -90.0) as f32 + base;
-        let spread = node.num("spread", 30.0) as f32;
-        let speed = node.num("speed", 120.0) as f32;
-        let speed_rand = node.num("speed_random", 0.3).clamp(0.0, 1.0) as f32;
-        let life = node.num("lifetime", 1.0).max(0.01) as f32;
-        let area = node.num("area", 0.0) as f32;
-        let spin = node.num("spin", 0.0) as f32;
+        let dir = object.num("direction", -90.0) as f32 + base;
+        let spread = object.num("spread", 30.0) as f32;
+        let speed = object.num("speed", 120.0) as f32;
+        let speed_rand = object.num("speed_random", 0.3).clamp(0.0, 1.0) as f32;
+        let life = object.num("lifetime", 1.0).max(0.01) as f32;
+        let area = object.num("area", 0.0) as f32;
+        let spin = object.num("spin", 0.0) as f32;
         let n = n.min(MAX_PER_EMITTER.saturating_sub(self.parts.len()));
         for _ in 0..n {
             let a = (dir + (self.rand() * 2.0 - 1.0) * spread).to_radians();
@@ -80,14 +80,14 @@ impl Emitter {
     }
 }
 
-/// Moves every particle on, spawns new ones from emitting nodes, and forgets emitters whose
-/// node is gone.
+/// Moves every particle on, spawns new ones from emitting objects, and forgets emitters whose
+/// object is gone.
 /// `amount` (0 to 1, the particles graphics setting) scales every emitter's rate.
-pub fn update(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter>, dt: f32, frozen: &[NodeId], amount: f64) {
-    emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.nodes[*id].kind == NodeKind::Particles2D));
+pub fn update(tree: &BlueprintTree, emitters: &mut HashMap<ObjectId, Emitter>, dt: f32, frozen: &[ObjectId], amount: f64) {
+    emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.objects[*id].kind == ObjectKind::Particles2D));
     for id in tree.walk() {
-        let n = &tree.nodes[id];
-        if n.kind != NodeKind::Particles2D || frozen.contains(&id) {
+        let n = &tree.objects[id];
+        if n.kind != ObjectKind::Particles2D || frozen.contains(&id) {
             continue;
         }
         let e = emitters.entry(id).or_insert_with(|| Emitter { seed: (id_bits(id) | 1).wrapping_mul(0x9E37_79B9), ..Default::default() });
@@ -111,13 +111,13 @@ pub fn update(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter>, dt: f32
     }
 }
 
-fn id_bits(id: NodeId) -> u64 {
+fn id_bits(id: ObjectId) -> u64 {
     use slotmap::Key;
     id.data().as_ffi()
 }
 
 /// Adds the particles to what's drawn.
-pub fn draw(tree: &SceneTree, emitters: &HashMap<NodeId, Emitter>, list: &mut RenderList) {
+pub fn draw(tree: &BlueprintTree, emitters: &HashMap<ObjectId, Emitter>, list: &mut RenderList) {
     for (id, e) in emitters {
         let Some(n) = tree.get(*id) else { continue };
         let tex = match n.text("texture") {
@@ -136,7 +136,7 @@ pub fn draw(tree: &SceneTree, emitters: &HashMap<NodeId, Emitter>, list: &mut Re
             let size = s0 + (s1 - s0) * t;
             let color = [0, 1, 2, 3].map(|i| (c0[i] + (c1[i] - c0[i]) * t) * tint[i]);
             list.sprites.push(Sprite {
-                node: *id,
+                object: *id,
                 model: Mat4::from_rotation_translation(Quat::from_rotation_z(p.rot.to_radians()), Vec3::new(p.pos.x, p.pos.y, 0.0)),
                 size: Vec2::splat(size),
                 centered: true,
@@ -177,18 +177,18 @@ impl Emitter3 {
         self.parts.len()
     }
 
-    pub fn spawn(&mut self, tree: &SceneTree, id: NodeId, n: usize) {
-        let node = &tree.nodes[id];
+    pub fn spawn(&mut self, tree: &BlueprintTree, id: ObjectId, n: usize) {
+        let object = &tree.objects[id];
         let m = tree.global_matrix(id);
         let pos = m.w_axis.truncate();
         let dir = m
-            .transform_vector3(Vec3::new(node.num("direction_x", 0.0) as f32, node.num("direction_y", 1.0) as f32, node.num("direction_z", 0.0) as f32))
+            .transform_vector3(Vec3::new(object.num("direction_x", 0.0) as f32, object.num("direction_y", 1.0) as f32, object.num("direction_z", 0.0) as f32))
             .normalize_or(Vec3::Y);
-        let spread = (node.num("spread", 25.0) as f32).to_radians();
-        let speed = node.num("speed", 2.0) as f32;
-        let speed_rand = node.num("speed_random", 0.3).clamp(0.0, 1.0) as f32;
-        let life = node.num("lifetime", 1.5).max(0.01) as f32;
-        let area = node.num("area", 0.0) as f32;
+        let spread = (object.num("spread", 25.0) as f32).to_radians();
+        let speed = object.num("speed", 2.0) as f32;
+        let speed_rand = object.num("speed_random", 0.3).clamp(0.0, 1.0) as f32;
+        let life = object.num("lifetime", 1.5).max(0.01) as f32;
+        let area = object.num("area", 0.0) as f32;
         // Two directions across `dir`, to tilt by the spread.
         let side = if dir.y.abs() < 0.9 { dir.cross(Vec3::Y).normalize() } else { dir.cross(Vec3::X).normalize() };
         let up = dir.cross(side);
@@ -206,11 +206,11 @@ impl Emitter3 {
     }
 }
 
-pub fn update_3d(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter3>, dt: f32, frozen: &[NodeId], amount: f64) {
-    emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.nodes[*id].kind == NodeKind::Particles3D));
+pub fn update_3d(tree: &BlueprintTree, emitters: &mut HashMap<ObjectId, Emitter3>, dt: f32, frozen: &[ObjectId], amount: f64) {
+    emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.objects[*id].kind == ObjectKind::Particles3D));
     for id in tree.walk() {
-        let n = &tree.nodes[id];
-        if n.kind != NodeKind::Particles3D || frozen.contains(&id) {
+        let n = &tree.objects[id];
+        if n.kind != ObjectKind::Particles3D || frozen.contains(&id) {
             continue;
         }
         let e = emitters.entry(id).or_insert_with(|| Emitter3 { rng: Emitter { seed: (id_bits(id) | 1).wrapping_mul(0x9E37_79B9), ..Default::default() }, ..Default::default() });
@@ -233,7 +233,7 @@ pub fn update_3d(tree: &SceneTree, emitters: &mut HashMap<NodeId, Emitter3>, dt:
 }
 
 /// 3D particles as camera-facing quads.
-pub fn draw_3d(tree: &SceneTree, emitters: &HashMap<NodeId, Emitter3>, list: &mut RenderList) {
+pub fn draw_3d(tree: &BlueprintTree, emitters: &HashMap<ObjectId, Emitter3>, list: &mut RenderList) {
     for (id, e) in emitters {
         let Some(n) = tree.get(*id) else { continue };
         let tex = match n.text("texture") {

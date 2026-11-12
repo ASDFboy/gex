@@ -27,7 +27,7 @@ DEF on_timer_pipes() {
 
 DEF spawn_pipes() {
 	gap_y = RANDOM(200, 470)
-	SPAWN("res://scenes/pipes.jscene", 1400, gap_y)
+	SPAWN("res://blueprints/pipes.jblueprint", 1400, gap_y)
 }
 
 DEF on_passed() {
@@ -39,7 +39,7 @@ DEF on_passed() {
 DEF on_crashed() {
 	IF over { RETURN }
 	GLOBAL over = TRUE
-	>> A property on this node, so the pipes can see it with GET("..", "over").
+	>> A property on this object, so the pipes can see it with GET("..", "over").
 	self.over = TRUE
 	SHAKE(10, 0.4)
 	PLAY_SOUND("res://assets/hit.wav")
@@ -56,5 +56,5 @@ DEF on_crashed() {
 }
 
 DEF on_press_enter() {
-	IF over { CHANGE_SCENE("res://scenes/flappy.jscene", 0.3) }
+	IF over { CHANGE_BLUEPRINT("res://blueprints/flappy.jblueprint", 0.3) }
 }

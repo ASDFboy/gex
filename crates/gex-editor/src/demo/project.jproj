@@ -1,6 +1,6 @@
 (
     name: "GEX Demo",
-    main_scene: "res://scenes/menu.jscene",
+    main_blueprint: "res://blueprints/menu.jblueprint",
     window_size: (1280, 720),
     mounts: [],
     actions: {

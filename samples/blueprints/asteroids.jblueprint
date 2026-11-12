@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Space",
-    kind: Some(Node2D),
+    kind: Some(Object2D),
     scripts: ["res://scripts/asteroids.jlb", "res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Camera", kind: Some(Camera2D), transform: Some((position: (640.0, 360.0, 0.0))),

@@ -25,17 +25,17 @@ mounts: [(scheme: "hl2", kind: SourceGame(install: "C:\\...\\Half-Life 2", games
 | `.vpk` archives and loose files | read in place; browse them in Assets → `hl2://` |
 | `.vtf` textures | DXT1/3/5 and the 8-bit RGB(A)/BGR(A)/I8/IA88 formats; drop one on a texture field |
 | `.vmt` materials | resolved through `$basetexture`; use them anywhere a texture goes |
-| `.wav` / `.mp3` sounds | `PLAY_SOUND("hl2://sound/weapons/crowbar/crowbar_impact1.wav")`, `MUSIC(...)`, or a Sound node |
-| `.mdl` models | set a Mesh3D's `mesh` to the `.mdl` (or drag it into the 3D view); textures come from its materials, and `ANIMATIONS(node)` / `ANIMATE(node, name)` play its sequences |
+| `.wav` / `.mp3` sounds | `PLAY_SOUND("hl2://sound/weapons/crowbar/crowbar_impact1.wav")`, `MUSIC(...)`, or a Sound object |
+| `.mdl` models | set a Mesh3D's `mesh` to the `.mdl` (or drag it into the 3D view); textures come from its materials, and `ANIMATIONS(object)` / `ANIMATE(object, name)` play its sequences |
 | `.bsp` maps | a Mesh3D with `mesh` = `hl2://maps/d1_trainstation_01.bsp` draws the map with its baked lighting: brushes, displacements, brush entities (doors, func_brush...), static and dynamic props; turn on its `collision` to walk on it |
 
 ## Walking around a map
 
-1. Make a 3D scene. Add a Mesh3D, set `mesh` to a map (browse `hl2://maps/`), and tick
+1. Make a 3D blueprint. Add a Mesh3D, set `mesh` to a map (browse `hl2://maps/`), and tick
    `collision`.
 2. Source maps are measured in inches; GEX converts them to metres, so the first-person player
-   from the demo (`scenes/fps.jscene`, `scripts/fps.jlb`) fits. Copy its Player node (Ctrl+C,
-   Ctrl+V into your scene) and put it somewhere above the floor.
+   from the demo (`blueprints/fps.jblueprint`, `scripts/fps.jlb`) fits. Copy its Player object (Ctrl+C,
+   Ctrl+V into your blueprint) and put it somewhere above the floor.
 3. Add a Light3D (directional) and an Environment, then press F5.
 
 4. Put the player where the map's own spawn point is:
@@ -59,19 +59,19 @@ with `IMPULSE`, shoot them with `RAYCAST_3D`. (Turn the Mesh3D's `map_props` off
 them out.) They don't show in the editor, only when playing.
 
 **Ragdolls.** Characters (`hl2://models/humans/group01/male_07.mdl`, say) load with their
-skeleton. `RAGDOLL(node)` makes one go limp and fall; `IMPULSE(node, x, y, z)` shoves it. The
+skeleton. `RAGDOLL(object)` makes one go limp and fall; `IMPULSE(object, x, y, z)` shoves it. The
 bodies are worked out from the skeleton (a capsule per bone), not from the model's own `.phy`
 file, so they're a rough fit.
 
 **Doors.** While the game runs, each door (`func_door`, `func_door_rotating`,
-`prop_door_rotating`, and `func_movelinear` / `func_button`) is a node of its own in the group
+`prop_door_rotating`, and `func_movelinear` / `func_button`) is an object of its own in the group
 `map_doors`, named after the door's name in the map. `USE_DOOR(door)` opens or closes it the way
 the map says (sliding by its size, or swinging by its angle):
 
 ```
 DEF on_press_e() {
 	>> Open the nearest door within 2 metres.
-	FOR d IN NODES("map_doors") {
+	FOR d IN OBJECTS("map_doors") {
 		IF DISTANCE(d, "Player") < 2 { USE_DOOR(d) }
 	}
 }

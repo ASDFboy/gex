@@ -1,7 +1,7 @@
-//! Plays a scene without a window and prints what its scripts logged: a quick check that a
+//! Plays a blueprint without a window and prints what its scripts logged: a quick check that a
 //! game runs without script errors.
 //!
-//!   cargo run -p gex-script --example run_scene -- <project dir> <res://scene> <seconds> [keys]
+//!   cargo run -p gex-script --example run_blueprint -- <project dir> <res://blueprint> <seconds> [keys]
 //!
 //! keys: comma-separated `name@from-to` (seconds), e.g. `space@0.5-0.6,right@1-3`.
 
@@ -23,7 +23,7 @@ fn main() {
                 .collect()
         })
         .unwrap_or_default();
-    let mut g = gex_script::world::Game::from_scene(project, &a[1], None).expect("scene");
+    let mut g = gex_script::world::Game::from_blueprint(project, &a[1], None).expect("blueprint");
     let dt = 1.0 / 60.0;
     let mut t = 0.0;
     let mut errors = 0;
@@ -39,5 +39,5 @@ fn main() {
         t += dt;
     }
     let tree = g.tree();
-    println!("--- {} nodes after {:.1}s, {} errors", tree.walk().len(), secs, errors);
+    println!("--- {} objects after {:.1}s, {} errors", tree.walk().len(), secs, errors);
 }

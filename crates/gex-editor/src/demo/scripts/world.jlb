@@ -10,9 +10,9 @@ DEF on_step(dt) {
 
 DEF on_mouse_pressed(button, x, y) {
 	IF button == "left" {
-		SPAWN("res://scenes/crate3d.jscene", RANDOM(-3, 3), 8, RANDOM(-2, 2))
+		SPAWN("res://blueprints/crate3d.jblueprint", RANDOM(-3, 3), 8, RANDOM(-2, 2))
 		>> Too many? Remove the oldest.
-		crates = NODES("crates")
+		crates = OBJECTS("crates")
 		IF LEN(crates) > 25 {
 			DESTROY(crates[1])
 		}
@@ -20,5 +20,5 @@ DEF on_mouse_pressed(button, x, y) {
 }
 
 DEF on_press_tab() {
-	CHANGE_SCENE("res://scenes/main.jscene")
+	CHANGE_BLUEPRINT("res://blueprints/main.jblueprint")
 }

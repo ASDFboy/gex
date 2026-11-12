@@ -1,5 +1,5 @@
 >> The player: moves with the arrow keys or WASD.
->> Outside variables like `speed` belong to this node (each Player gets its own).
+>> Outside variables like `speed` belong to this object (each Player gets its own).
 
 speed = 300
 

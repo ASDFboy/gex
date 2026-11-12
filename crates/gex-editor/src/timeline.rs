@@ -1,9 +1,9 @@
-//! The Timeline: making an Animator's clips. Pick a clip, add tracks (a node and one of its
+//! The Timeline: making an Animator's clips. Pick a clip, add tracks (an object and one of its
 //! properties), move the playhead, and press +key to record the property's current value there.
 
 use eframe::egui::{self, Color32, RichText, Sense};
 use gex_core::anim::{self, AnimFile, Clip, Key, Track};
-use gex_core::{NodeId, NodeKind, Variant};
+use gex_core::{ObjectId, ObjectKind, Variant};
 
 use crate::state::EditorState;
 use crate::theme;
@@ -19,31 +19,31 @@ pub struct TimelineState {
     pub new_prop: String,
 }
 
-/// The Animator to edit: the selected node, or its first Animator child.
-fn animator(st: &EditorState) -> Option<NodeId> {
+/// The Animator to edit: the selected object, or its first Animator child.
+fn animator(st: &EditorState) -> Option<ObjectId> {
     let id = st.selected.filter(|s| st.tree.contains(*s))?;
-    let n = &st.tree.nodes[id];
-    if n.kind == NodeKind::Animator {
+    let n = &st.tree.objects[id];
+    if n.kind == ObjectKind::Animator {
         return Some(id);
     }
-    n.children.iter().copied().find(|c| st.tree.nodes[*c].kind == NodeKind::Animator)
+    n.children.iter().copied().find(|c| st.tree.objects[*c].kind == ObjectKind::Animator)
 }
 
-fn load(st: &EditorState, id: NodeId) -> AnimFile {
-    let res = st.tree.nodes[id].text("clips");
+fn load(st: &EditorState, id: ObjectId) -> AnimFile {
+    let res = st.tree.objects[id].text("clips");
     if res.is_empty() {
         return AnimFile::default();
     }
     st.project.read_text(res).ok().and_then(|t| AnimFile::parse(&t).ok()).unwrap_or_default()
 }
 
-fn save(st: &mut EditorState, id: NodeId, file: &AnimFile) {
-    let mut res = st.tree.nodes[id].text("clips").to_string();
+fn save(st: &mut EditorState, id: ObjectId, file: &AnimFile) {
+    let mut res = st.tree.objects[id].text("clips").to_string();
     if res.is_empty() {
-        let base: String = st.tree.nodes[id].parent.map(|p| st.tree.nodes[p].name.clone()).unwrap_or_else(|| "anim".into()).chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+        let base: String = st.tree.objects[id].parent.map(|p| st.tree.objects[p].name.clone()).unwrap_or_else(|| "anim".into()).chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
         res = crate::files::free_name(&st.project, "res://animations", &format!("{}.anim", base)).unwrap_or_else(|| "res://animations/anim.anim".into());
         st.will_change("clips file");
-        st.tree.nodes[id].props.insert("clips".into(), Variant::Res(res.clone()));
+        st.tree.objects[id].props.insert("clips".into(), Variant::Res(res.clone()));
     }
     if let Some(p) = st.project.res_to_path(&res) {
         let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -53,9 +53,9 @@ fn save(st: &mut EditorState, id: NodeId, file: &AnimFile) {
     }
 }
 
-/// Every property a track could animate on a node.
-fn props_of(st: &EditorState, id: NodeId) -> Vec<String> {
-    let n = &st.tree.nodes[id];
+/// Every property a track could animate on an object.
+fn props_of(st: &EditorState, id: ObjectId) -> Vec<String> {
+    let n = &st.tree.objects[id];
     let mut v: Vec<String> = if n.kind.is_3d() {
         ["x", "y", "z", "rotation_x", "rotation_y", "rotation_z", "scale_x", "scale_y", "scale_z", "visible"].iter().map(|s| s.to_string()).collect()
     } else {
@@ -71,7 +71,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
         return;
     }
     let Some(anim_id) = animator(st) else {
-        ui.label(RichText::new("Select an Animator node (or its parent) to make clips. Add one with + Node → General → Animator, as a child of what it animates.").color(theme::TEXT_DIM));
+        ui.label(RichText::new("Select an Animator object (or its parent) to make clips. Add one with + Object → General → Animator, as a child of what it animates.").color(theme::TEXT_DIM));
         return;
     };
     let mut file = load(st, anim_id);
@@ -82,7 +82,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
     }
     // ---- clip bar ----
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("🎞 {}", st.tree.nodes[anim_id].name)).strong());
+        ui.label(RichText::new(format!("🎞 {}", st.tree.objects[anim_id].name)).strong());
         egui::ComboBox::from_id_salt("clip").selected_text(if tl.clip.is_empty() { "no clips" } else { tl.clip.as_str() }).show_ui(ui, |ui| {
             for c in &file.clips {
                 ui.selectable_value(&mut tl.clip, c.name.clone(), &c.name);
@@ -118,11 +118,11 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.label("length");
         changed |= ui.add(egui::DragValue::new(&mut clip.length).range(0.05..=600.0).speed(0.05).suffix(" s")).changed();
         changed |= ui.checkbox(&mut clip.looped, "Loop").changed();
-        let autoplay = st.tree.nodes[anim_id].text("autoplay") == clip.name;
+        let autoplay = st.tree.objects[anim_id].text("autoplay") == clip.name;
         let mut ap = autoplay;
         if ui.checkbox(&mut ap, "Autoplay").changed() {
             st.will_change("autoplay");
-            st.tree.nodes[anim_id].props.insert("autoplay".into(), Variant::Text(if ap { clip.name.clone() } else { String::new() }));
+            st.tree.objects[anim_id].props.insert("autoplay".into(), Variant::Text(if ap { clip.name.clone() } else { String::new() }));
         }
         if ui.small_button(RichText::new("Delete clip").color(theme::BAD)).clicked() {
             file.clips.remove(ci);
@@ -138,7 +138,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
     let length = file.clips[ci].length.max(0.05);
     let mut scrubbed = false;
     ui.horizontal(|ui| {
-        if ui.button(if tl.playing { "⏸" } else { "▶" }).on_hover_text("preview the clip in the scene").clicked() {
+        if ui.button(if tl.playing { "⏸" } else { "▶" }).on_hover_text("preview the clip in the blueprint").clicked() {
             tl.playing = !tl.playing;
             if tl.playing {
                 st.will_change("timeline preview");
@@ -173,7 +173,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
         anim::apply(&mut st.tree, anim_id, &file.clips[ci], tl.time);
     }
     // ---- tracks ----
-    let base = st.tree.nodes[anim_id].parent.unwrap_or(anim_id);
+    let base = st.tree.objects[anim_id].parent.unwrap_or(anim_id);
     let row_h = 22.0;
     let label_w = 190.0;
     let mut remove_track = None;
@@ -187,7 +187,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
             ui.horizontal(|ui| {
                 let tr = &file.clips[ci].tracks[ti];
                 let who = match anim::target(&st.tree, anim_id, &tr.target) {
-                    Some(t) => st.tree.nodes[t].name.clone(),
+                    Some(t) => st.tree.objects[t].name.clone(),
                     None => format!("{} (missing)", tr.target),
                 };
                 let label = format!("{} · {}", who, tr.prop);
@@ -299,7 +299,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.label("+ Track");
         let mut all = Vec::new();
         st.tree.walk_from(base, &mut all);
-        let path_of = |id: NodeId| -> String {
+        let path_of = |id: ObjectId| -> String {
             if id == base {
                 return String::new();
             }
@@ -307,14 +307,14 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
             let b = st.tree.path_of(base);
             full.strip_prefix(&format!("{}/", b)).unwrap_or(&full).to_string()
         };
-        let shown = if tl.new_target.is_empty() { st.tree.nodes[base].name.clone() } else { tl.new_target.clone() };
-        egui::ComboBox::from_id_salt("track node").selected_text(shown).width(140.0).show_ui(ui, |ui| {
+        let shown = if tl.new_target.is_empty() { st.tree.objects[base].name.clone() } else { tl.new_target.clone() };
+        egui::ComboBox::from_id_salt("track object").selected_text(shown).width(140.0).show_ui(ui, |ui| {
             for id in &all {
                 if *id == anim_id {
                     continue;
                 }
                 let p = path_of(*id);
-                let label = if p.is_empty() { st.tree.nodes[*id].name.clone() } else { p.clone() };
+                let label = if p.is_empty() { st.tree.objects[*id].name.clone() } else { p.clone() };
                 ui.selectable_value(&mut tl.new_target, p, label);
             }
         });

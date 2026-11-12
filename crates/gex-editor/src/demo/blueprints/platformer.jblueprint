@@ -2,7 +2,7 @@
   format: 1,
   root: (
     name: "Level",
-    kind: Some(Node2D),
+    kind: Some(Object2D),
     scripts: ["res://scripts/back_to_menu.jlb"],
     children: [
       (name: "Ground", kind: Some(TileMap2D), transform: Some((position: (0.0, 0.0, 0.0))),

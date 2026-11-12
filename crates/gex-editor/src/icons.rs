@@ -1,15 +1,15 @@
-//! Icons: the Silk set by Mark James (famfamfam.com, CC BY 2.5), one for every kind of node
-//! and file. A node or scene can pick any other, or show what it looks like.
+//! Icons: the Silk set by Mark James (famfamfam.com, CC BY 2.5), one for every kind of object
+//! and file. An object or blueprint can pick any other, or show what it looks like.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 use eframe::egui::{self, Color32};
-use gex_core::{NodeId, NodeKind, SceneTree, Variant};
+use gex_core::{ObjectId, ObjectKind, BlueprintTree, Variant};
 
 use crate::state::EditorState;
 
-/// The property a node's chosen icon is kept in ("" = the usual one, "render" = its picture).
+/// The property an object's chosen icon is kept in ("" = the usual one, "render" = its picture).
 pub const PROP: &str = "editor_icon";
 
 static SILK: &[u8] = include_bytes!("../assets/silk.bin");
@@ -35,7 +35,7 @@ pub fn names() -> Vec<&'static str> {
     INDEX.with(|x| x.iter().map(|e| e.0).collect())
 }
 
-/// What stands for a node or file in lists.
+/// What stands for an object or file in lists.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Icon {
     Silk(String),
@@ -45,13 +45,13 @@ pub enum Icon {
     Color([f32; 4]),
 }
 
-pub fn kind(k: NodeKind) -> &'static str {
-    use NodeKind::*;
+pub fn kind(k: ObjectKind) -> &'static str {
+    use ObjectKind::*;
     match k {
-        Node => "shape_handles",
+        Object => "shape_handles",
         Sound => "sound",
         Animator => "film",
-        Node2D => "shape_group",
+        Object2D => "shape_group",
         Sprite2D => "picture",
         Label2D => "font",
         Camera2D => "camera",
@@ -66,7 +66,7 @@ pub fn kind(k: NodeKind) -> &'static str {
         TextInput => "textfield",
         ProgressBar => "chart_bar",
         Image => "photo",
-        Node3D => "box",
+        Object3D => "box",
         Mesh3D => "package",
         Camera3D => "webcam",
         Light3D => "weather_sun",
@@ -83,7 +83,7 @@ pub fn kind(k: NodeKind) -> &'static str {
 pub fn file(name: &str) -> &'static str {
     let n = name.to_ascii_lowercase();
     let ends = |l: &[&str]| l.iter().any(|e| n.ends_with(e));
-    if ends(&[".jscene"]) {
+    if ends(&[".jblueprint"]) {
         "layout_content"
     } else if ends(&[".jlb"]) {
         "script"
@@ -104,13 +104,13 @@ pub fn file(name: &str) -> &'static str {
     }
 }
 
-/// What a node looks like: its texture or color, or (`deep`) the first one under it.
-fn render(tree: &SceneTree, id: NodeId, deep: bool) -> Option<Icon> {
+/// What an object looks like: its texture or color, or (`deep`) the first one under it.
+fn render(tree: &BlueprintTree, id: ObjectId, deep: bool) -> Option<Icon> {
     let mut all = Vec::new();
     tree.walk_from(id, &mut all);
     for i in all.into_iter().take(if deep { 64 } else { 1 }) {
-        let n = &tree.nodes[i];
-        if !matches!(n.kind, NodeKind::Sprite2D | NodeKind::Sprite3D | NodeKind::Mesh3D | NodeKind::Image) {
+        let n = &tree.objects[i];
+        if !matches!(n.kind, ObjectKind::Sprite2D | ObjectKind::Sprite3D | ObjectKind::Mesh3D | ObjectKind::Image) {
             continue;
         }
         match n.props.get("texture") {
@@ -124,14 +124,14 @@ fn render(tree: &SceneTree, id: NodeId, deep: bool) -> Option<Icon> {
     None
 }
 
-/// A node's icon: the one picked for it, or its picture (sprites, meshes and scenes holding
+/// An object's icon: the one picked for it, or its picture (sprites, meshes and blueprints holding
 /// them), or its kind's.
-pub fn node(tree: &SceneTree, id: NodeId) -> Icon {
-    let n = &tree.nodes[id];
+pub fn object(tree: &BlueprintTree, id: ObjectId) -> Icon {
+    let n = &tree.objects[id];
     let by_kind = || Icon::Silk(kind(n.kind).to_string());
     match n.text(PROP) {
         "" => {
-            let pictured = matches!(n.kind, NodeKind::Sprite2D | NodeKind::Sprite3D | NodeKind::Mesh3D | NodeKind::Image) || n.instance_of.is_some();
+            let pictured = matches!(n.kind, ObjectKind::Sprite2D | ObjectKind::Sprite3D | ObjectKind::Mesh3D | ObjectKind::Image) || n.instance_of.is_some();
             pictured.then(|| render(tree, id, false)).flatten().unwrap_or_else(by_kind)
         }
         "render" => render(tree, id, true).unwrap_or_else(by_kind),
@@ -140,8 +140,8 @@ pub fn node(tree: &SceneTree, id: NodeId) -> Icon {
     }
 }
 
-/// A scene file's icon (its root node's), read from disk and remembered until the file changes.
-pub fn scene(st: &EditorState, res: &str) -> Icon {
+/// A blueprint file's icon (its root object's), read from disk and remembered until the file changes.
+pub fn blueprint(st: &EditorState, res: &str) -> Icon {
     thread_local! {
         static SEEN: RefCell<HashMap<String, (Option<std::time::SystemTime>, Icon)>> = RefCell::new(HashMap::new());
     }
@@ -153,11 +153,11 @@ pub fn scene(st: &EditorState, res: &str) -> Icon {
     }
     let icon = std::fs::read_to_string(&path)
         .ok()
-        .and_then(|t| gex_core::scene::load(&t, &st.reader()).ok())
+        .and_then(|t| gex_core::blueprint::load(&t, &st.reader()).ok())
         .and_then(|tree| {
             let root = tree.root?;
-            // A scene is its file's icon unless it has a look (or a picked icon) of its own.
-            match tree.nodes[root].text(PROP) {
+            // A blueprint is its file's icon unless it has a look (or a picked icon) of its own.
+            match tree.objects[root].text(PROP) {
                 "" => render(&tree, root, false),
                 "render" => render(&tree, root, true),
                 "kind" => None,
@@ -228,7 +228,7 @@ pub fn paint(ui: &egui::Ui, st: &EditorState, icon: &Icon, rect: egui::Rect) {
     }
 }
 
-/// A selectable row with an icon in front of its text (lists of nodes and files).
+/// A selectable row with an icon in front of its text (lists of objects and files).
 pub fn row(ui: &mut egui::Ui, st: &EditorState, icon: &Icon, text: egui::RichText, selected: bool) -> egui::Response {
     let pad = ui.spacing().button_padding;
     let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
@@ -245,13 +245,13 @@ pub fn row(ui: &mut egui::Ui, st: &EditorState, icon: &Icon, text: egui::RichTex
     resp
 }
 
-/// The window for picking a node's icon. Gives the pick ("" = the usual one).
+/// The window for picking an object's icon. Gives the pick ("" = the usual one).
 pub fn picker(ui: &mut egui::Ui, st: &EditorState, current: &str) -> Option<String> {
     let mut pick = None;
     let id = egui::Id::new("icon picker filter");
     let mut filter: String = ui.data(|d| d.get_temp(id).unwrap_or_default());
     ui.horizontal(|ui| {
-        for (value, label, tip) in [("", "Automatic", "Its picture for sprites, meshes and scenes; its kind's icon otherwise"), ("render", "Its picture", "What it looks like: its texture or color, or the first one inside it"), ("kind", "Its kind", "The icon of its kind of node")] {
+        for (value, label, tip) in [("", "Automatic", "Its picture for sprites, meshes and blueprints; its kind's icon otherwise"), ("render", "Its picture", "What it looks like: its texture or color, or the first one inside it"), ("kind", "Its kind", "The icon of its kind of object")] {
             if ui.selectable_label(current == value, label).on_hover_text(tip).clicked() {
                 pick = Some(value.to_string());
             }

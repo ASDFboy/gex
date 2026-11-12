@@ -3,7 +3,7 @@
 use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
 
-use gex_core::{NodeId, SceneTree};
+use gex_core::{ObjectId, BlueprintTree};
 use jlb::embed::{as_f64, list_table, named_table, num};
 use jlb::Value;
 
@@ -11,8 +11,8 @@ use jlb::Value;
 /// walkable. Gives world-space cell centers from start to goal, or None. Diagonal steps
 /// are allowed when they don't cut a corner. The search stays within the map's bounds
 /// plus a margin of a few cells.
-pub fn find_path(tree: &SceneTree, map: NodeId, from: glam::Vec2, to: glam::Vec2) -> Option<Vec<glam::Vec2>> {
-    let n = &tree.nodes[map];
+pub fn find_path(tree: &BlueprintTree, map: ObjectId, from: glam::Vec2, to: glam::Vec2) -> Option<Vec<glam::Vec2>> {
+    let n = &tree.objects[map];
     let grid = gex_core::tiles::parse(n.text("tiles"));
     let only = gex_core::tiles::solid_set(n.text("solid_tiles"));
     let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
