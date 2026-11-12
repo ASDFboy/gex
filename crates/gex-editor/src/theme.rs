@@ -2,6 +2,7 @@
 //! orange, yellow, purple and cyan), square corners everywhere, and gradients kept to three
 //! places: the backdrop (seen faintly through the panels), header strips, and primary buttons.
 
+use crate::docs::Tip as _;
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, Visuals};
 
 // Monokai's colors.
@@ -183,7 +184,7 @@ pub fn window_buttons(ui: &mut egui::Ui) {
                 p.line_segment([c + egui::vec2(-4.5, 0.5), c + egui::vec2(4.5, 0.5)], st);
             }
         }
-        if resp.on_hover_text(tip).clicked() {
+        if resp.tip(tip).clicked() {
             ctx.send_viewport_cmd(match i {
                 0 => egui::ViewportCommand::Close,
                 1 => egui::ViewportCommand::Maximized(!maximized),

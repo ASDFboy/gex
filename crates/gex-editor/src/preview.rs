@@ -1,6 +1,7 @@
 //! Asset previews in the Assets panel: models (a small shaded view you can turn by dragging)
 //! and sounds (play / stop). Models load on a background thread, since maps take a moment.
 
+use crate::docs::Tip as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -152,7 +153,7 @@ impl Previews {
                 for l in &m.info {
                     ui.label(RichText::new(l).small().color(theme::TEXT_DIM));
                 }
-                resp.on_hover_text("drag to turn it");
+                resp.tip("drag to turn it");
             }
         }
     }

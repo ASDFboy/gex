@@ -1,5 +1,6 @@
 //! Editor tool panels: the profiler and find-in-files.
 
+use crate::docs::Tip as _;
 use eframe::egui::{self, Color32, RichText};
 
 use crate::state::EditorState;
@@ -122,8 +123,8 @@ pub fn search(ui: &mut egui::Ui, st: &mut EditorState) {
         if std::mem::take(&mut st.search.focus) {
             r.request_focus();
         }
-        ui.checkbox(&mut st.search.case, "Aa").on_hover_text("match case");
-        if ui.button("Find").clicked() {
+        ui.checkbox(&mut st.search.case, "Aa").tip("match case");
+        if ui.button("Find").tip("Searches now.").clicked() {
             go = true;
         }
     });

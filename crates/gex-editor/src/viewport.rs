@@ -1,6 +1,7 @@
 //! The blueprint view: draws the blueprint (or the running game) with gex-render, and handles
 //! camera controls, picking, dragging objects and dropping assets.
 
+use crate::docs::Tip as _;
 use std::collections::HashSet;
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense};
@@ -334,31 +335,31 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         crate::docs::mark(ui, a.rect.union(b.rect), "ui:2d3d");
         ui.separator();
         for (t, label, key) in [(Tool::Move, "Move", "1"), (Tool::Rotate, "Rotate", "2"), (Tool::Scale, "Scale", "3")] {
-            if crate::docs::on(ui.selectable_label(st.tool == t, label).on_hover_text(format!("Key: {}", key)), ui, "ui:tools").clicked() {
+            if crate::docs::on(ui.selectable_label(st.tool == t, label).tip(format!("Key: {}", key)), ui, "ui:tools").clicked() {
                 st.tool = t;
             }
         }
         ui.separator();
         let snap0 = ui.label("Snap").rect;
         let (step, unit, speed) = if st.mode_3d { (&mut st.snap3, " m", 0.05) } else { (&mut st.snap2, " px", 1.0) };
-        ui.add(egui::DragValue::new(step).range(0.0..=10000.0).speed(speed).suffix(unit)).on_hover_text("Moving and scaling go in steps of this (scaling in 2D: steps of 0.25). 0 is off.\nHolding Ctrl while dragging flips snapping.");
-        ui.add(egui::DragValue::new(&mut st.snap_angle).range(0.0..=180.0).speed(1.0).suffix("°")).on_hover_text("Rotating goes in steps of this. 0 is off.\nHolding Ctrl while dragging flips snapping.");
+        ui.add(egui::DragValue::new(step).range(0.0..=10000.0).speed(speed).suffix(unit)).tip("Moving and scaling go in steps of this (scaling in 2D: steps of 0.25). 0 is off.\nHolding Ctrl while dragging flips snapping.");
+        ui.add(egui::DragValue::new(&mut st.snap_angle).range(0.0..=180.0).speed(1.0).suffix("°")).tip("Rotating goes in steps of this. 0 is off.\nHolding Ctrl while dragging flips snapping.");
         crate::docs::mark(ui, snap0.union(ui.min_rect().intersect(egui::Rect::everything_right_of(snap0.left()))), "ui:snap");
         ui.separator();
-        let r = ui.checkbox(&mut st.show_grid, "Grid");
+        let r = ui.checkbox(&mut st.show_grid, "Grid").tip("Shows or hides the grid in the blueprint view. It isn't part of the game.");
         crate::docs::mark(ui, r.rect, "ui:grid");
-        let r = ui.checkbox(&mut st.show_colliders, "Colliders").on_hover_text("Outline 2D colliders and bodies (in the editor and while playing)");
+        let r = ui.checkbox(&mut st.show_colliders, "Colliders").tip("Outline 2D colliders and bodies (in the editor and while playing)");
         crate::docs::mark(ui, r.rect, "ui:colliders");
         if let Some(p) = &mut st.playing {
             ui.separator();
-            let r = ui.checkbox(&mut p.game_camera, "Game camera").on_hover_text("Off: look around with the editor camera while the game runs");
+            let r = ui.checkbox(&mut p.game_camera, "Game camera").tip("Off: look around with the editor camera while the game runs");
             crate::docs::mark(ui, r.rect, "ui:game_camera");
             if !ui.ctx().memory(|m| m.focused().is_some_and(|f| Some(f) == ui.ctx().data(|d| d.get_temp::<egui::Id>(egui::Id::new("gex viewport id"))))) {
                 ui.label(egui::RichText::new("Click the view to give the game the keyboard").small().color(theme::WARN));
             }
         } else {
             ui.separator();
-            ui.label(egui::RichText::new("Controls").small().color(theme::TEXT_DIM)).on_hover_text(if st.mode_3d {
+            ui.label(egui::RichText::new("Controls").small().color(theme::TEXT_DIM)).tip(if st.mode_3d {
                 "Click the view, then W A S D: move, Q / E: down / up (Shift: fast)\nRight-drag: look around\nMiddle-drag or Shift+right-drag: pan\nWheel: zoom\nLeft-click: select, drag to move"
             } else {
                 "Click the view, then W A S D: move (Shift: fast)\nRight-drag or middle-drag: pan\nWheel: zoom\nLeft-click: select, drag to move (drag empty space to box-select)"
@@ -510,7 +511,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         let drag_id = egui::Id::new("viewport drag");
         let ctrl = ui.input(|i| i.modifiers.command);
         // The handles on the selected object.
-        let giz = st.selected.filter(|s| st.tree.contains(*s) && Some(*s) != st.tree.root && (st.tree.objects[*s].kind.is_3d() == st.mode_3d)).and_then(|s| {
+        let giz = st.selected.filter(|s| st.tree.contains(*s) && (st.tree.objects[*s].kind.is_3d() == st.mode_3d)).and_then(|s| {
             let m = st.tree.global_matrix(s);
             Gizmo::new(&cams, st.mode_3d, st.tool, m.w_axis.truncate(), m.to_scale_rotation_translation().1, ppp)
         });
@@ -525,9 +526,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
             // Where the button went down (the pointer may already have moved on).
             if let Some(pp) = ui.input(|i| i.pointer.press_origin()).or(pointer) {
                 let grabbed = giz.and_then(|g| g.hit(&cams, to_px(pp), ppp).map(|h| (g, h)));
-                let hit = if grabbed.is_some() { None } else { pick(st, &list, &cams, to_px(pp)).filter(|h| Some(*h) != st.tree.root) };
+                let hit = if grabbed.is_some() { None } else { pick(st, &list, &cams, to_px(pp)) };
                 if let Some((g, handle)) = grabbed {
-                    let objects: Vec<(ObjectId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
+                    let objects: Vec<(ObjectId, Mat4)> = st.selected_roots().into_iter().map(|i| (i, st.tree.global_matrix(i))).collect();
                     ui.data_mut(|d| d.insert_temp(drag_id, Drag { objects, pivot: g.pivot, screen_start: to_px(pp), handle, giz: g }));
                 }
                 match hit {
@@ -539,7 +540,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                                 st.select(Some(h));
                             }
                         }
-                        let objects: Vec<(ObjectId, Mat4)> = st.selected_roots().into_iter().filter(|i| Some(*i) != st.tree.root).map(|i| (i, st.tree.global_matrix(i))).collect();
+                        let objects: Vec<(ObjectId, Mat4)> = st.selected_roots().into_iter().map(|i| (i, st.tree.global_matrix(i))).collect();
                         let hm = st.tree.global_matrix(h);
                         let pivot = hm.w_axis.truncate();
                         if let Some(g) = Gizmo::new(&cams, st.mode_3d, st.tool, pivot, hm.to_scale_rotation_translation().1, ppp) {

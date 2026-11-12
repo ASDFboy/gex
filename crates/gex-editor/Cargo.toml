@@ -20,6 +20,7 @@ egui_dock.workspace = true
 egui-wgpu.workspace = true
 ron.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 gilrs.workspace = true
 editpe = "0.2"
 image.workspace = true

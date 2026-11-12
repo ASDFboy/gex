@@ -492,6 +492,42 @@ impl EditorState {
         }
     }
 
+    /// Files were changed outside the editor (by REX): what's open and has no unsaved changes
+    /// of its own is read again.
+    pub fn reload_from_disk(&mut self) {
+        if self.playing.is_some() {
+            return;
+        }
+        for sc in self.scripts.values_mut() {
+            if !sc.dirty() {
+                if let Ok(t) = self.project.read_text(&sc.res) {
+                    if t != sc.text {
+                        sc.text = t.clone();
+                        sc.saved = t;
+                    }
+                }
+            }
+        }
+        // Other open blueprints are read again when they're next shown.
+        let project = &self.project;
+        self.docs.retain(|d| {
+            let dirty = blueprint::save(&d.tree, &|p: &str| project.read_text(p)).ok().is_some_and(|t| t != d.blueprint_saved);
+            dirty
+        });
+        if let Some(res) = self.blueprint_res.clone() {
+            if !self.blueprint_dirty() {
+                let on_disk = self.project.read_text(&res).ok().and_then(|t| blueprint::load(&t, &self.reader()).ok());
+                if let Some(tree) = on_disk {
+                    if blueprint::save(&tree, &self.reader()).ok().as_ref() != Some(&self.blueprint_saved) {
+                        let (cam2, cam3, mode) = (self.cam2, self.cam3, self.mode_3d);
+                        self.load_blueprint(&res);
+                        (self.cam2, self.cam3, self.mode_3d, self.cam_fitted) = (cam2, cam3, mode, true);
+                    }
+                }
+            }
+        }
+    }
+
     // ---------- undo ----------
 
     /// Call before changing the tree. Changes to the same thing within a second share one

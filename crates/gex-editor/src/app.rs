@@ -1,5 +1,6 @@
 //! The editor window: launcher (project library) or the docked editor.
 
+use crate::docs::Tip as _;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -111,7 +112,7 @@ fn blueprint_tabs(ui: &mut egui::Ui, st: &mut EditorState) {
     ui.horizontal(|ui| {
         let name = |r: &Option<String>| r.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
         ui.add(egui::Button::selectable(true, name(&st.blueprint_res)));
-        if ui.small_button("✖").on_hover_text("close this blueprint (Ctrl+W)").clicked() {
+        if ui.small_button("✖").tip("close this blueprint (Ctrl+W)").clicked() {
             close = true;
         }
         for (i, d) in st.docs.iter().enumerate() {
@@ -180,6 +181,7 @@ pub struct EditorApp {
     previews: HashMap<String, egui::TextureHandle>,
     // Launcher fields.
     launcher: crate::launcher::Launcher,
+    rex: crate::rex::Rex,
     // Neovim-style command line.
     cmd: Option<String>,
     settings: SettingsForm,
@@ -251,6 +253,7 @@ impl EditorApp {
             viewport_tex: None,
             previews: HashMap::new(),
             launcher: Default::default(),
+            rex: Default::default(),
             cmd: None,
             settings: SettingsForm::default(),
             pads: crate::gamepad::Pads::new(),
@@ -301,12 +304,12 @@ impl EditorApp {
         let top = ui.cursor().top();
         theme::window_drag(ui, egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + 24.0));
         let bar = egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| { crate::theme::fade_in(ui);
-                if theme::menu_item(ui, "Save all", "Ctrl+S").clicked() {
+            crate::docs::menu(ui, "File", |ui| { crate::theme::fade_in(ui);
+                if theme::menu_item(ui, "Save all", "Ctrl+S").tip("Saves every changed blueprint and script.").clicked() {
                     st.save_all();
                     ui.close();
                 }
-                ui.menu_button("Open blueprint", |ui| { crate::theme::fade_in(ui);
+                crate::docs::menu(ui, "Open blueprint", |ui| { crate::theme::fade_in(ui);
                     for s in panels::list_files(st, "res://", "jblueprint") {
                         if ui.button(&s).clicked() {
                             st.open_blueprint(&s);
@@ -314,7 +317,7 @@ impl EditorApp {
                         }
                     }
                 });
-                ui.menu_button("New blueprint", |ui| { crate::theme::fade_in(ui);
+                crate::docs::menu(ui, "New blueprint", |ui| { crate::theme::fade_in(ui);
                     for k in [gex_core::ObjectKind::Object2D, gex_core::ObjectKind::Object3D, gex_core::ObjectKind::Object] {
                         if ui.button(format!("{} root", k.name())).clicked() {
                             let mut res = "res://blueprints/new_blueprint.jblueprint".to_string();
@@ -332,7 +335,7 @@ impl EditorApp {
                         }
                     }
                 });
-                if ui.button("Set as main blueprint").on_hover_text("The game starts in this blueprint").clicked() {
+                if ui.button("Set as main blueprint").tip("The game starts in this blueprint").clicked() {
                     if let Some(r) = st.blueprint_res.clone() {
                         st.project.config.main_blueprint = r;
                         let _ = st.project.save();
@@ -340,26 +343,26 @@ impl EditorApp {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("Export game…").on_hover_text("A folder with the game, ready to run or share").clicked() {
+                if ui.button("Export game…").tip("A folder with the game, ready to run or share").clicked() {
                     st.show_export = true;
                     ui.close();
                 }
-                if ui.button("Project settings…").clicked() {
+                if ui.button("Project settings…").tip("The game's name, window, start blueprint, input actions, graphics and physics.").clicked() {
                     st.show_settings = true;
                     ui.close();
                 }
-                if ui.button("Close project").clicked() {
+                if ui.button("Close project").tip("Back to the start screen. Unsaved changes are kept in memory only until then: save first.").clicked() {
                     st.stop();
                     close = true;
                     ui.close();
                 }
             });
-            ui.menu_button("Edit", |ui| { crate::theme::fade_in(ui);
-                if theme::menu_item(ui, "Undo", "Ctrl+Z").clicked() {
+            crate::docs::menu(ui, "Edit", |ui| { crate::theme::fade_in(ui);
+                if theme::menu_item(ui, "Undo", "Ctrl+Z").tip("Takes back the last change to the blueprint being edited.").clicked() {
                     st.undo();
                     ui.close();
                 }
-                if theme::menu_item(ui, "Redo", "Ctrl+Y").clicked() {
+                if theme::menu_item(ui, "Redo", "Ctrl+Y").tip("Puts back what Undo took away.").clicked() {
                     st.redo();
                     ui.close();
                 }
@@ -369,17 +372,17 @@ impl EditorApp {
                     ui.close();
                 }
                 ui.separator();
-                if theme::menu_item(ui, "Duplicate", "Ctrl+D").clicked() {
+                if theme::menu_item(ui, "Duplicate", "Ctrl+D").tip("Makes a copy of the selected objects next to them.").clicked() {
                     st.duplicate_selected();
                     ui.close();
                 }
-                if theme::menu_item(ui, "Delete", "Del").clicked() {
+                if theme::menu_item(ui, "Delete", "Del").tip("Removes the selected objects (and what's inside them) from the blueprint.").clicked() {
                     st.delete_selected();
                     ui.close();
                 }
             });
-            ui.menu_button("Object", |ui| panels::add_object_menu(ui, st));
-            ui.menu_button("View", |ui| { crate::theme::fade_in(ui);
+            crate::docs::menu(ui, "Object", |ui| panels::add_object_menu(ui, st));
+            crate::docs::menu(ui, "View", |ui| { crate::theme::fade_in(ui);
                 if self.classic {
                     for t in [Tab::Blueprint, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler] {
                         let name = match &t {
@@ -391,13 +394,13 @@ impl EditorApp {
                             ui.close();
                         }
                     }
-                    if ui.button("Reset layout").clicked() {
+                    if ui.button("Reset layout").tip("Puts the docked panels back where they started.").clicked() {
                         self.dock = default_dock();
                         ui.close();
                     }
                 } else {
-                    ui.checkbox(&mut self.ws.show_assets, "Assets");
-                    ui.checkbox(&mut self.ws.show_console, "Console");
+                    ui.checkbox(&mut self.ws.show_assets, "Assets").tip("Shows or hides the Assets panel.");
+                    ui.checkbox(&mut self.ws.show_console, "Console").tip("Shows or hides the Console panel.");
                     ui.separator();
                     for t in ["Timeline", "Profiler"] {
                         if ui.button(t).clicked() {
@@ -406,14 +409,16 @@ impl EditorApp {
                         }
                     }
                 }
-                if theme::menu_item(ui, "Find in files", "Ctrl+F").clicked() {
+                ui.separator();
+                ui.checkbox(&mut self.rex.open, "REX").tip("The assistant: answers questions about GEX and your project, and can make changes for you. It runs Claude Code with your own sign-in.");
+                if theme::menu_item(ui, "Find in files", "Ctrl+F").tip("Searches every script and blueprint in the project.").clicked() {
                     st.search.open = true;
                     st.search.focus = true;
                     ui.close();
                 }
                 ui.separator();
                 let mut classic = self.classic;
-                if ui.checkbox(&mut classic, "Classic docked layout").on_hover_text("Panels docked around one blueprint view, instead of workspaces and blueprint tabs").changed() {
+                if ui.checkbox(&mut classic, "Classic docked layout").tip("Panels docked around one blueprint view, instead of workspaces and blueprint tabs").changed() {
                     self.classic = classic;
                     if classic {
                         let _ = std::fs::create_dir_all(state::config_dir());
@@ -431,10 +436,10 @@ impl EditorApp {
             ui.add_space(24.0);
             let playing = st.playing.is_some();
             if !playing {
-                if theme::primary_button(ui, "▶  Play", egui::Color32::from_rgb(0x86, 0xb8, 0x22)).on_hover_text("Run this blueprint (F5)").clicked() {
+                if theme::primary_button(ui, "▶  Play", egui::Color32::from_rgb(0x86, 0xb8, 0x22)).tip("Run this blueprint (F5)").clicked() {
                     st.play();
                 }
-            } else if theme::primary_button(ui, "■  Stop", egui::Color32::from_rgb(0xc8, 0x1e, 0x5c)).on_hover_text("Stop the game (F5)").clicked() {
+            } else if theme::primary_button(ui, "■  Stop", egui::Color32::from_rgb(0xc8, 0x1e, 0x5c)).tip("Stop the game (F5)").clicked() {
                 st.stop();
             }
             crate::docs::mark(ui, egui::Rect::from_min_max(egui::pos2(ui.min_rect().right() - 80.0, ui.min_rect().top()), ui.min_rect().max), "ui:play");
@@ -590,14 +595,14 @@ impl EditorApp {
                     }
                     ui.add(egui::Label::new(RichText::new(msg).color(theme::TEXT_DIM)).truncate());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(": commands").small().color(theme::TEXT_DIM)).on_hover_text("Press : for the command line (:w save, :e file, :play, :add Kind...)");
+                        ui.label(RichText::new(": commands").small().color(theme::TEXT_DIM)).tip("Press : for the command line (:w save, :e file, :play, :add Kind...)");
                         if let Some(p) = &st.playing {
                             let n = p.stats.len().min(30);
                             if n > 0 {
                                 let avg: f32 = p.stats.iter().rev().take(n).map(|(ms, _)| *ms).sum::<f32>() / n as f32;
                                 let fps = if avg > 0.0 { 1000.0 / avg } else { 0.0 };
                                 let c = if fps >= 55.0 { theme::GOOD } else if fps >= 30.0 { theme::WARN } else { theme::BAD };
-                                ui.label(RichText::new(format!("{:.0} FPS", fps)).small().color(c)).on_hover_text("Frames per second (View → Profiler for more)");
+                                ui.label(RichText::new(format!("{:.0} FPS", fps)).small().color(c)).tip("Frames per second (View → Profiler for more)");
                             }
                         }
                         if let Some(sel) = st.selected.filter(|s| st.view_tree().contains(*s)) {
@@ -685,7 +690,7 @@ impl EditorApp {
                             Err(e) => e,
                         };
                     }
-                    if ui.button("Reset to defaults").on_hover_text("Every setting on this page").clicked() {
+                    if ui.button("Reset to defaults").tip("Every setting on this page").clicked() {
                         if graphics {
                             st.project.config.graphics = Default::default();
                         } else {
@@ -725,9 +730,9 @@ impl EditorApp {
                 ui.end_row();
                 ui.label("Window");
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut f.fullscreen, "Full screen").on_hover_text("start the exported game full screen (Alt+Enter or F11 switches)");
+                    ui.checkbox(&mut f.fullscreen, "Full screen").tip("start the exported game full screen (Alt+Enter or F11 switches)");
                     ui.checkbox(&mut f.resizable, "Resizable");
-                    ui.checkbox(&mut f.vsync, "Vsync").on_hover_text("no tearing; frames capped to the screen's refresh rate");
+                    ui.checkbox(&mut f.vsync, "Vsync").tip("no tearing; frames capped to the screen's refresh rate");
                 });
                 ui.end_row();
                 ui.label("Icon");
@@ -777,7 +782,7 @@ impl EditorApp {
                     if let Some(p) = browse_button(ui) {
                         f.hl2_path = p;
                     }
-                    if ui.button("Detect").on_hover_text("look in Steam's library folders").clicked() {
+                    if ui.button("Detect").tip("look in Steam's library folders").clicked() {
                         match gex_assets::source::find_hl2() {
                             Some(p) => f.hl2_path = p.to_string_lossy().into_owned(),
                             None => f.message = "Couldn't find Half-Life 2 through Steam; enter the folder yourself.".into(),
@@ -1106,6 +1111,12 @@ impl eframe::App for EditorApp {
             return;
         }
         self.command_line(ui);
+        if let Some(st) = &mut self.st {
+            self.rex.show(ui, st);
+            if std::mem::take(&mut self.rex.reload) {
+                st.reload_from_disk();
+            }
+        }
         self.settings_window(&ctx);
         self.export_window(&ctx);
         let rs = frame.wgpu_render_state();
@@ -1340,7 +1351,7 @@ fn settings_rows(ui: &mut egui::Ui, fields: &[gex_core::settings::FieldInfo], ge
             egui::Grid::new(("settings grid", sec, fields.len())).num_columns(2).spacing([12.0, 4.0]).striped(true).show(ui, |ui| {
                 for f in fields.iter().filter(|f| f.section == sec) {
                     let Some(mut v) = get(f.name) else { continue };
-                    ui.label(f.name).on_hover_text(f.doc);
+                    ui.label(f.name).tip(f.doc);
                     let changed = match (&mut v, f.kind) {
                         (Variant::Text(cur), "choice") => {
                             let mut ch = false;

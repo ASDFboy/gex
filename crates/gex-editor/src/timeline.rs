@@ -1,6 +1,7 @@
 //! The Timeline: making an Animator's clips. Pick a clip, add tracks (an object and one of its
 //! properties), move the playhead, and press +key to record the property's current value there.
 
+use crate::docs::Tip as _;
 use eframe::egui::{self, Color32, RichText, Sense};
 use gex_core::anim::{self, AnimFile, Clip, Key, Track};
 use gex_core::{ObjectId, ObjectKind, Variant};
@@ -88,7 +89,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
                 ui.selectable_value(&mut tl.clip, c.name.clone(), &c.name);
             }
         });
-        if ui.button("+ Clip").clicked() {
+        if ui.button("+ Clip").tip("Adds an animation clip to this Animator.").clicked() {
             let mut k = file.clips.len() + 1;
             while file.clip(&format!("clip{}", k)).is_some() {
                 k += 1;
@@ -117,10 +118,10 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
         }
         ui.label("length");
         changed |= ui.add(egui::DragValue::new(&mut clip.length).range(0.05..=600.0).speed(0.05).suffix(" s")).changed();
-        changed |= ui.checkbox(&mut clip.looped, "Loop").changed();
+        changed |= ui.checkbox(&mut clip.looped, "Loop").tip("The clip starts over when it ends.").changed();
         let autoplay = st.tree.objects[anim_id].text("autoplay") == clip.name;
         let mut ap = autoplay;
-        if ui.checkbox(&mut ap, "Autoplay").changed() {
+        if ui.checkbox(&mut ap, "Autoplay").tip("The clip starts when the blueprint loads.").changed() {
             st.will_change("autoplay");
             st.tree.objects[anim_id].props.insert("autoplay".into(), Variant::Text(if ap { clip.name.clone() } else { String::new() }));
         }
@@ -138,7 +139,7 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
     let length = file.clips[ci].length.max(0.05);
     let mut scrubbed = false;
     ui.horizontal(|ui| {
-        if ui.button(if tl.playing { "⏸" } else { "▶" }).on_hover_text("preview the clip in the blueprint").clicked() {
+        if ui.button(if tl.playing { "⏸" } else { "▶" }).tip("preview the clip in the blueprint").clicked() {
             tl.playing = !tl.playing;
             if tl.playing {
                 st.will_change("timeline preview");
@@ -192,10 +193,10 @@ pub fn timeline(ui: &mut egui::Ui, st: &mut EditorState) {
                 };
                 let label = format!("{} · {}", who, tr.prop);
                 ui.add_sized([label_w - 50.0, row_h], egui::Label::new(RichText::new(label).monospace()).truncate());
-                if ui.small_button("+ Key").on_hover_text("key the property's current value at the playhead").clicked() {
+                if ui.small_button("+ Key").tip("key the property's current value at the playhead").clicked() {
                     key_track = Some(ti);
                 }
-                if ui.small_button("✖").on_hover_text("remove this track").clicked() {
+                if ui.small_button("✖").tip("remove this track").clicked() {
                     remove_track = Some(ti);
                 }
                 // The strip: keys as diamonds; drag to move, right-click to delete.

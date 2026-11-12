@@ -1,5 +1,6 @@
 //! The first screen: your projects (open, rename, delete) and making a new one.
 
+use crate::docs::Tip as _;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, RichText};
@@ -192,7 +193,7 @@ impl Launcher {
                                 ui.spacing_mut().item_spacing.y = 2.0;
                                 match &e.name {
                                     Ok(_) => ui.label(RichText::new(&name).size(15.0).strong()),
-                                    Err(why) => ui.label(RichText::new(format!("{} (can't be read)", name)).size(15.0).color(theme::WARN)).on_hover_text(why),
+                                    Err(why) => ui.label(RichText::new(format!("{} (can't be read)", name)).size(15.0).color(theme::WARN)).tip(why),
                                 };
                                 ui.add(egui::Label::new(RichText::new(e.dir.to_string_lossy()).small().color(theme::TEXT_DIM)).truncate());
                             });
@@ -204,7 +205,7 @@ impl Launcher {
                                 for dx in [-5.0, 0.0, 5.0] {
                                     ui.painter().circle_filled(mr.center() + egui::vec2(dx, 0.0), 1.5, if more.hovered() { theme::TEXT } else { theme::TEXT_DIM });
                                 }
-                                let more = more.on_hover_text("Rename, delete, more");
+                                let more = more.tip("Rename, delete, more");
                                 let menu = |ui: &mut egui::Ui| {
                                     theme::fade_in(ui);
                                     for (label, what) in [("Open", "open"), ("Rename…", "rename"), ("Show in file manager", "reveal"), ("Remove from this list", "forget")] {
@@ -260,7 +261,7 @@ impl Launcher {
                             }
                         });
                         let dir = self.new_dir();
-                        ui.add(egui::Label::new(RichText::new(format!("Folder: {}", dir.display())).small().color(theme::TEXT_DIM)).truncate()).on_hover_text(dir.to_string_lossy());
+                        ui.add(egui::Label::new(RichText::new(format!("Folder: {}", dir.display())).small().color(theme::TEXT_DIM)).truncate()).tip(dir.to_string_lossy());
                         ui.add_space(8.0);
                         ui.label(RichText::new("Starts with").small().color(theme::TEXT_DIM));
                         for (demo, label, what) in [(false, "Nothing", "An empty project."), (true, "Demo games", "Five small games with commented scripts.")] {
@@ -285,7 +286,7 @@ impl Launcher {
                     theme::title(ui, "Open a project from disk");
                     ui.add_space(6.0);
                     #[cfg(windows)]
-                    if ui.button("Choose a folder…").on_hover_text(format!("The folder with {} in it", PROJECT_FILE)).clicked() {
+                    if ui.button("Choose a folder…").tip(format!("The folder with {} in it", PROJECT_FILE)).clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_folder() {
                             open = Some(p);
                         }
@@ -379,7 +380,7 @@ impl Launcher {
                                 Err(e) => self.error = format!("couldn't delete {}: {}", dir.display(), e),
                             }
                         }
-                        if ui.button("Only remove from the list").on_hover_text("Leaves the folder alone").clicked() {
+                        if ui.button("Only remove from the list").tip("Leaves the folder alone").clicked() {
                             state::forget_project(dir);
                             done = true;
                         }

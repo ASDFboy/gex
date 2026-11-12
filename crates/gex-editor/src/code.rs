@@ -1,5 +1,6 @@
 //! The script editor: JLB syntax highlighting, line numbers, live syntax checks.
 
+use crate::docs::Tip as _;
 use eframe::egui::{self, text::LayoutJob, Color32, FontId, RichText, TextFormat};
 
 use crate::vim::{Mode, Outcome};
@@ -216,13 +217,13 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     let mut save = false;
     let mut toggle_vim = false;
     ui.horizontal(|ui| {
-        if ui.add_enabled(s.dirty(), egui::Button::new("Save")).on_hover_text("Ctrl+S").clicked() {
+        if ui.add_enabled(s.dirty(), egui::Button::new("Save")).tip("Saves this script (Ctrl+S).").clicked() {
             save = true;
         }
-        if ui.selectable_label(s.find.is_some(), "Find").on_hover_text("Find and replace in this script (Ctrl+H)").clicked() {
+        if ui.selectable_label(s.find.is_some(), "Find").tip("Find and replace in this script (Ctrl+H)").clicked() {
             s.find = if s.find.is_some() { None } else { Some((String::new(), String::new())) };
         }
-        if ui.selectable_label(vim_on, "Vim").on_hover_text("Vim keys: Esc for normal mode, i to type").clicked() {
+        if ui.selectable_label(vim_on, "Vim").tip("Vim keys: Esc for normal mode, i to type").clicked() {
             toggle_vim = true;
         }
         if vim_on {
@@ -259,9 +260,9 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                 fr.request_focus();
             }
             ui.add(egui::TextEdit::singleline(r).hint_text("replace with").desired_width(160.0));
-            next |= ui.button("Next").clicked();
-            replace_one = ui.button("Replace").clicked();
-            replace_all = ui.button("All").clicked();
+            next |= ui.button("Next").tip("Jumps to the next match.").clicked();
+            replace_one = ui.button("Replace").tip("Replaces this match and moves to the next.").clicked();
+            replace_all = ui.button("All").tip("Replaces every match in this script.").clicked();
             close = ui.small_button("✖").clicked();
             let n = if q.is_empty() { 0 } else { s.text.matches(q.as_str()).count() };
             ui.label(RichText::new(format!("{} found", n)).small().color(theme::TEXT_DIM));
@@ -437,7 +438,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                     edit_condition = Some(l);
                 }
             }
-            let g_resp = g_resp.on_hover_text("click a line number for a breakpoint (the game stops there); right-click for one that stops only when something is true");
+            let g_resp = g_resp.tip("click a line number for a breakpoint (the game stops there); right-click for one that stops only when something is true");
             let _ = g_resp;
             let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
                 let job = highlight(text.as_str(), font.clone());
@@ -557,7 +558,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                     let help = gex_script::commands::COMMANDS.iter().find(|c| c.0 == w.as_str()).map(|c| format!("{}{}  {}", c.0, c.1, c.2));
                     let r = ui.add(egui::Button::selectable(i == *sel, RichText::new(format!("{}  ", w)).monospace()).right_text(RichText::new(*kind).small().color(theme::TEXT_DIM)));
                     if let Some(h) = help {
-                        r.on_hover_text(h);
+                        r.tip(h);
                     }
                 }
                 ui.label(RichText::new("Tab to accept, Up/Down to choose").small().color(theme::TEXT_DIM));
@@ -631,10 +632,10 @@ fn condition_window(ctx: &egui::Context, st: &mut EditorState) {
         }
         let enter = (r.has_focus() || r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.horizontal(|ui| {
-            if ui.button("Set").clicked() || enter {
+            if ui.button("Set").tip("Keeps this condition: the game stops here only when it's true.").clicked() || enter {
                 done = Some(true);
             }
-            if ui.button("Remove breakpoint").clicked() {
+            if ui.button("Remove breakpoint").tip("The game no longer stops at this line.").clicked() {
                 done = Some(false);
             }
         });

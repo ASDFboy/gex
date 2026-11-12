@@ -6,6 +6,7 @@
 //!
 //! The older docked layout is still there (View → Classic docked layout).
 
+use crate::docs::Tip as _;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
@@ -455,7 +456,7 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
             ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(0x1e, 0x1e, 0x1e));
         }
         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(15.0), theme::TEXT_DIM);
-        if r.on_hover_text("New workspace").clicked() {
+        if r.tip("New workspace").clicked() {
             let n = l.workspaces.len() + 1;
             l.workspaces.push(Workspace { name: format!("Workspace {}", n), ..Default::default() });
             l.tabs.push(TopTab::Workspace(l.workspaces.len() - 1));
@@ -525,8 +526,8 @@ fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &
             let id = egui::Id::new("blueprint tab side events");
             let mut ev: bool = ui.data(|d| d.get_temp(id).unwrap_or(false));
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut ev, false, "Properties");
-                ui.selectable_value(&mut ev, true, "Events").on_hover_text("The selected instance's scripts and the events they handle");
+                ui.selectable_value(&mut ev, false, "Properties").tip("The selected instance's values.");
+                ui.selectable_value(&mut ev, true, "Events").tip("The selected instance's scripts and the events they handle");
             });
             ui.data_mut(|d| d.insert_temp(id, ev));
             ui.separator();
@@ -538,7 +539,7 @@ fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &
         });
         ui.horizontal(|ui| {
             theme::title(ui, "Instances");
-            if ui.small_button("Open as window").on_hover_text("Open this blueprint's window in the workspace (its objects, properties and events)").clicked() {
+            if ui.small_button("Open as window").tip("Open this blueprint's window in the workspace (its objects, properties and events)").clicked() {
                 l.open_blueprint_window(res);
             }
         });
@@ -835,14 +836,14 @@ fn blueprint_window(ui: &mut egui::Ui, st: &mut EditorState, res: &str, object: 
         let mut events = false;
         let mut tab = false;
         ui.horizontal(|ui| {
-            if ui.button("Open in tab").on_hover_text("Open the blueprint in its own tab, to place and edit instances").clicked() {
+            if ui.button("Open in tab").tip("Open the blueprint in its own tab, to place and edit instances").clicked() {
                 tab = true;
             }
-            if ui.button("Events").on_hover_text("The events of the picked object's scripts").clicked() {
+            if ui.button("Events").tip("The events of the picked object's scripts").clicked() {
                 events = true;
             }
             let dirty = st.blueprint_dirty();
-            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+            if ui.add_enabled(dirty, egui::Button::new("Save")).tip("Saves this blueprint (Ctrl+S saves everything)").clicked() {
                 st.save_blueprint();
             }
         });

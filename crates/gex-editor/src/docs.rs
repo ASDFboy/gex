@@ -40,6 +40,62 @@ pub fn on(r: egui::Response, ui: &egui::Ui, topic: impl Into<String>) -> egui::R
     r
 }
 
+/// Hover text that is also the control's documentation (middle-click or mouse 4 on it).
+pub trait Tip {
+    /// The same as `on_hover_text`, and the text is what the documentation window says.
+    fn tip(self, text: impl Into<egui::WidgetText>) -> Self;
+    /// Documentation with a title of its own, for controls whose label says little.
+    fn named(self, title: &str, text: &str) -> Self;
+}
+
+impl Tip for egui::Response {
+    fn tip(self, text: impl Into<egui::WidgetText>) -> Self {
+        let text: egui::WidgetText = text.into();
+        let m = Mark { rect: self.rect, layer: self.layer_id, topic: format!("tip:\u{1}{}", text.text()) };
+        self.ctx.data_mut(|d| d.get_temp_mut_or_default::<Marks>(marks_id()).0.push(m));
+        self.on_hover_text(text)
+    }
+    fn named(self, title: &str, text: &str) -> Self {
+        let m = Mark { rect: self.rect, layer: self.layer_id, topic: format!("tip:{}\u{1}{}", title, text) };
+        self.ctx.data_mut(|d| d.get_temp_mut_or_default::<Marks>(marks_id()).0.push(m));
+        self.on_hover_text(text)
+    }
+}
+
+/// What the menus are for, by label.
+const MENUS: &[(&str, &str)] = &[
+    ("File", "Saving, opening and making blueprints, project settings, exporting the game, closing the project."),
+    ("Edit", "Undo and redo, and duplicating or deleting the selected objects."),
+    ("Object", "Adds an object to the blueprint being edited."),
+    ("View", "Which panels show, tool windows (Timeline, Profiler), find in files, and the layout."),
+    ("Open blueprint", "Opens one of the project's blueprints in its own tab."),
+    ("New blueprint", "Makes a new blueprint file with a 2D, 3D or plain root object."),
+    ("+ Object", "Adds an object at the top of the blueprint (a collider goes on the selected object)."),
+    ("+ Blueprint", "Places an instance of another blueprint in this one. Instances follow their file when it changes."),
+    ("Add child", "Adds an object inside this one: it follows this one's position and visibility."),
+    ("Add event", "Adds a function the engine calls (when the object is created, every step, on a key, a collision...) to this object's script, making the script if there is none."),
+    ("Mouse", "Events for mouse buttons, movement and the wheel."),
+    ("Collision", "Events for when this object's collider or body starts, keeps or stops touching another."),
+    ("Other", "Timers, UI buttons and text boxes, animations and tweens finishing."),
+    ("Custom", "Your own events: BROADCAST(\"name\") runs on_name() on every object that has it."),
+    ("Attach", "Attaches an existing script to this object as well."),
+    ("+", "New folder, blueprint or script in the selected folder; import files."),
+    ("Key pressed", "Runs once when a key goes down."),
+    ("Key released", "Runs once when a key comes up."),
+];
+
+/// A menu button that explains itself like the other controls.
+pub fn menu<R>(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    let label: egui::WidgetText = label.into();
+    let text = MENUS.iter().find(|m| m.0 == label.text()).map(|m| m.1);
+    let title = label.text().to_string();
+    let mut r = ui.menu_button(label, add);
+    if let Some(t) = text {
+        r.response = r.response.named(&title, t);
+    }
+    r
+}
+
 /// True on the frame the documentation button was clicked (middle, or mouse 4).
 pub fn clicked(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.pointer.button_clicked(egui::PointerButton::Middle) || i.pointer.button_clicked(egui::PointerButton::Extra1))
@@ -48,8 +104,11 @@ pub fn clicked(ctx: &egui::Context) -> bool {
 /// Opens a topic directly (the script editor knows the word under the pointer).
 pub fn open(ctx: &egui::Context, topic: impl Into<String>) {
     let at = ctx.pointer_latest_pos().unwrap_or_default();
+    // Read before taking the lock on the context's data: asking the context for anything
+    // while holding it would wait forever.
+    let frame = ctx.cumulative_frame_nr();
     ctx.data_mut(|d| {
-        d.insert_temp(egui::Id::new("gex doc direct frame"), ctx.cumulative_frame_nr());
+        d.insert_temp(egui::Id::new("gex doc direct frame"), frame);
         d.insert_temp(egui::Id::new("gex doc open"), Some(Open { topic: topic.into(), at }));
     });
 }
@@ -64,8 +123,13 @@ pub fn show(ctx: &egui::Context) {
         let direct = ctx.data(|d| d.get_temp::<u64>(direct_id)) == Some(ctx.cumulative_frame_nr());
         if let (false, Some(p)) = (direct, ctx.pointer_latest_pos()) {
             let top = ctx.layer_id_at(p);
-            let best = marks.iter().filter(|m| m.rect.contains(p) && Some(m.layer) == top).min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()));
-            let topic = best.map(|m| m.topic.clone()).unwrap_or_else(|| "ui:editor".into());
+            let under = |tips: bool| marks.iter().filter(|m| m.rect.contains(p) && Some(m.layer) == top && m.topic.starts_with("tip:") == tips).min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()));
+            // A control's own text first, then what it's part of.
+            let part_of = under(false).map(|m| m.topic.clone()).unwrap_or_else(|| "ui:editor".into());
+            let topic = match under(true) {
+                Some(t) => format!("{}\u{1}{}", t.topic, part_of),
+                None => part_of,
+            };
             ctx.data_mut(|d| d.insert_temp(open_id, Some(Open { topic, at: p })));
         }
     }
@@ -170,6 +234,7 @@ const UI: &[(&str, &str, &str)] = &[
     ("groups", "Groups", "Names this object goes by together with others (\"enemies\"). OBJECTS(\"enemies\") gives them all; colliders can ask whether the other is in a group."),
     ("icon", "Icon", "What stands for this object in lists. Automatic shows a sprite's or mesh's own picture and the kind's icon for the rest. A blueprint's root icon is the blueprint's icon in Assets."),
     ("find", "Find in files", "Searches every script and blueprint in the project (Ctrl+F). Click a result to go there."),
+    ("rex", "REX", "The assistant. Ask it about GEX or your project (\"why doesn't my coin disappear?\"), or tell it what to make.\n\nIt runs Claude Code in the project's folder, using the Claude Code you have installed and are signed in to: GEX holds no key and it counts against your own Claude plan.\n\n- May change files: off, it only reads and answers; on, it can create and change blueprints and scripts\n- New chat: forgets the conversation\n- Stop: ends what it's doing\n\nView > REX shows or hides it."),
     ("status", "Status bar", "The last thing the editor did, and at the right the blueprint and selected object. Click `commands` (or press :) for the command line."),
 ];
 
@@ -177,6 +242,18 @@ const UI: &[(&str, &str, &str)] = &[
 fn lookup(topic: &str) -> (String, &'static str, String) {
     let (group, name) = topic.split_once(':').unwrap_or(("ui", topic));
     match group {
+        "tip" => {
+            // title, the control's text, and the topic of what it's in.
+            let mut parts = name.splitn(3, '\u{1}');
+            let (title, text, within) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or("ui:editor"));
+            let (in_title, _, in_body) = lookup(within);
+            let mut text = text.to_string();
+            if let Some(c) = text.chars().next().filter(|c| c.is_lowercase()) {
+                text = format!("{}{}", c.to_uppercase(), &text[c.len_utf8()..]);
+            }
+            let title = if title.is_empty() { in_title.clone() } else { title.to_string() };
+            (title, "control", format!("{}\n\n# In: {}\n{}", text, in_title, in_body))
+        }
         "object" => {
             let Some(k) = ObjectKind::from_name(name) else { return (name.to_string(), "object", String::new()) };
             let mut body = format!("{}\n\n# Properties\n", kind_doc(k));
@@ -205,6 +282,35 @@ fn lookup(topic: &str) -> (String, &'static str, String) {
         "cmd" => {
             if let Some((n, args, doc)) = gex_script::commands::COMMANDS.iter().find(|c| c.0 == name) {
                 return (n.to_string(), "engine command", format!("    {}{}\n\n{}{}", n, args, doc[..1].to_uppercase(), &doc[1..]));
+            }
+            const WORDS: &[(&str, &str, &str)] = &[
+                ("DEF", "DEF name(inputs) {\n        ...\n    }", "Defines a function. Functions named on_... are events the engine calls."),
+                ("RETURN", "RETURN value", "Leaves the function, giving a value back (or nothing)."),
+                ("IF", "IF speed > 10 {\n        ...\n    } ELIF speed > 5 {\n        ...\n    } ELSE {\n        ...\n    }", "Runs the block only when the condition is true."),
+                ("ELIF", "} ELIF other_condition {", "After an IF: tried when the conditions before it were false."),
+                ("ELSE", "} ELSE {", "After an IF: runs when none of its conditions were true."),
+                ("WHILE", "WHILE lives > 0 {\n        ...\n    }", "Repeats the block for as long as the condition stays true."),
+                ("REPEAT", "REPEAT 5 {\n        ...\n    }", "Runs the block a number of times."),
+                ("FOR", "FOR i IN 1 TO 10 {\n        ...\n    }\n    FOR enemy IN OBJECTS(\"enemies\") {\n        ...\n    }", "Runs the block once for each number in a range, or each thing in a table."),
+                ("IN", "FOR i IN 1 TO 10 { }", "Part of FOR: what to go through."),
+                ("TO", "FOR i IN 1 TO 10 { }", "Part of FOR: the last number of the range."),
+                ("STEP", "FOR i IN 0 TO 100 STEP 10 { }", "Part of FOR: how much to count by."),
+                ("BREAK", "BREAK", "Leaves the loop it's in right away."),
+                ("SKIP", "SKIP", "Jumps to the loop's next turn."),
+                ("GLOBAL", "GLOBAL score += 1", "Inside a function: changes a variable written at the top of the script instead of making a new one that's forgotten when the function ends."),
+                ("LOCAL", "LOCAL n = 0", "Makes a variable that exists only inside this block."),
+                ("CONST", "CONST max_speed = 400", "A variable that can't be changed afterwards."),
+                ("TRUE", "alive = TRUE", "Yes / on."),
+                ("FALSE", "alive = FALSE", "No / off."),
+                ("NULL", "target = NULL", "Nothing: no value."),
+                ("AND", "IF a AND b { }", "True when both sides are."),
+                ("OR", "IF a OR b { }", "True when either side is."),
+                ("NOT", "IF NOT ready { }", "Turns true into false and false into true."),
+                ("TRY", "TRY {\n        ...\n    } FAIL {\n        ...\n    }", "Runs the block; if something in it goes wrong, runs the FAIL block instead of stopping the script."),
+                ("START", "START task_name()", "Starts a function running alongside the rest (it can WAIT without holding anything up)."),
+            ];
+            if let Some((n, example, what)) = WORDS.iter().find(|w| w.0 == name) {
+                return (n.to_string(), "JLB keyword", format!("{}\n\n    {}", what, example.replace("\n    ", "\n    ")));
             }
             if jlb::lexer::KEYWORDS.contains(&name) {
                 return (name.to_string(), "JLB keyword", "Part of the JLB language itself (flow control, definitions). See the language reference in docs/SCRIPTING.md.".into());

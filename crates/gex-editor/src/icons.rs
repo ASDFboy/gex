@@ -1,6 +1,7 @@
 //! Icons: the Silk set by Mark James (famfamfam.com, CC BY 2.5), one for every kind of object
 //! and file. An object or blueprint can pick any other, or show what it looks like.
 
+use crate::docs::Tip as _;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -252,7 +253,7 @@ pub fn picker(ui: &mut egui::Ui, st: &EditorState, current: &str) -> Option<Stri
     let mut filter: String = ui.data(|d| d.get_temp(id).unwrap_or_default());
     ui.horizontal(|ui| {
         for (value, label, tip) in [("", "Automatic", "Its picture for sprites, meshes and blueprints; its kind's icon otherwise"), ("render", "Its picture", "What it looks like: its texture or color, or the first one inside it"), ("kind", "Its kind", "The icon of its kind of object")] {
-            if ui.selectable_label(current == value, label).on_hover_text(tip).clicked() {
+            if ui.selectable_label(current == value, label).tip(tip).clicked() {
                 pick = Some(value.to_string());
             }
         }
@@ -272,7 +273,7 @@ pub fn picker(ui: &mut egui::Ui, st: &EditorState, current: &str) -> Option<Stri
                     ui.painter().rect_filled(rect, 0.0, crate::theme::GRAY_LIGHT);
                 }
                 paint(ui, st, &Icon::Silk(name.to_string()), rect.shrink(2.0));
-                if r.on_hover_text(name.replace('_', " ")).clicked() {
+                if r.tip(name.replace('_', " ")).clicked() {
                     pick = Some(name.to_string());
                 }
             }
