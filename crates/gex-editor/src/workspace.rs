@@ -384,7 +384,6 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
         });
     }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-        tab_strip(ui, l, st);
         // Again: the Assets and Console panels above may have just opened a blueprint.
         follow_blueprint(l, st);
         match l.tabs.get(l.active).cloned() {
@@ -395,81 +394,62 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
     });
 }
 
-fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
+/// The tabs (workspaces, then open blueprints), drawn in the top bar. Drag one sideways to
+/// reorder.
+pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
     let mut activate = None;
     let mut close = None;
-    // A strip of real tabs: the open one is lit and joins the page under it.
-    let strip_bg = ui.painter().add(egui::Shape::Noop);
-    let row = ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
-        ui.add_space(6.0);
-        let h = 24.0;
-        for (i, t) in l.tabs.iter().enumerate() {
-            let active = i == l.active;
-            let (label, dirty) = match t {
-                TopTab::Workspace(w) => (l.workspaces[*w].name.clone(), false),
-                TopTab::Blueprint(r) => (r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jblueprint").to_string(), st.is_dirty(r)),
-            };
-            let closeable = match t {
-                TopTab::Workspace(_) => l.tabs.iter().filter(|t| matches!(t, TopTab::Workspace(_))).count() > 1,
-                TopTab::Blueprint(_) => true,
-            };
-            let galley = ui.painter().layout_no_wrap(label, egui::FontId::proportional(13.0), theme::TEXT);
-            let w = (galley.size().x + 28.0 + if closeable || dirty { 18.0 } else { 0.0 }).max(78.0);
-            let (rect, r) = ui.allocate_exact_size(Vec2::new(w, h), Sense::click());
-            let lit = ui.ctx().animate_bool_with_time(r.id, active, 0.12);
-            let hover = ui.ctx().animate_bool_with_time(r.id.with("h"), r.hovered(), 0.1);
-            let p = ui.painter();
-            let base = theme::mix(Color32::from_rgb(0x17, 0x17, 0x17), Color32::from_rgb(0x20, 0x20, 0x20), hover);
-            // A trapezoid: wider at the bottom, where it joins the page.
-            let slant = 9.0;
-            let (top, bottom) = (rect.top() + if active { 0.0 } else { 2.0 }, rect.bottom());
-            let shape = vec![Pos2::new(rect.left() - slant / 2.0, bottom), Pos2::new(rect.left() + slant / 2.0, top), Pos2::new(rect.right() - slant / 2.0, top), Pos2::new(rect.right() + slant / 2.0, bottom)];
-            let edge = Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34));
-            p.add(egui::Shape::convex_polygon(shape.clone(), theme::mix(base, Color32::from_rgb(0x2a, 0x2a, 0x2a), lit), Stroke::NONE));
-            p.add(egui::Shape::line(shape, edge));
-            p.galley(Pos2::new(rect.left() + 12.0, (top + bottom) / 2.0 - galley.size().y / 2.0), galley, if active { theme::TEXT } else { theme::TEXT_DIM });
-            // The right end: a dot while there are unsaved changes, a cross to close when pointed at.
-            let x = Rect::from_center_size(Pos2::new(rect.right() - 16.0, rect.center().y + 1.0), Vec2::splat(16.0));
-            let over_x = closeable && ui.rect_contains_pointer(x);
-            if closeable && (r.hovered() || !dirty) && (r.hovered() || active) {
-                let c = if over_x { theme::TEXT } else { theme::TEXT_DIM };
-                if over_x {
-                    p.rect_filled(x, 0.0, theme::GRAY_LIGHT);
-                }
-                let (c0, d) = (x.center(), 3.5);
-                p.line_segment([c0 + Vec2::new(-d, -d), c0 + Vec2::new(d, d)], Stroke::new(1.2, c));
-                p.line_segment([c0 + Vec2::new(-d, d), c0 + Vec2::new(d, -d)], Stroke::new(1.2, c));
-            } else if dirty {
-                p.circle_filled(x.center(), 3.5, theme::WARN);
+    let mut swap = None;
+    ui.spacing_mut().item_spacing.x = 3.0;
+    ui.add_space(8.0);
+    let mut rects: Vec<Rect> = Vec::new();
+    for (i, t) in l.tabs.iter().enumerate() {
+        let active = i == l.active;
+        let (label, dirty) = match t {
+            TopTab::Workspace(w) => (l.workspaces[*w].name.clone(), false),
+            TopTab::Blueprint(r) => (r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jblueprint").to_string(), st.is_dirty(r)),
+        };
+        let closeable = match t {
+            TopTab::Workspace(_) => l.tabs.iter().filter(|t| matches!(t, TopTab::Workspace(_))).count() > 1,
+            TopTab::Blueprint(_) => true,
+        };
+        let out = theme::tab(ui, &label, active, closeable, dirty);
+        crate::docs::mark(ui, out.resp.rect, "ui:tabs");
+        rects.push(out.resp.rect);
+        if out.close {
+            close = Some(i);
+        } else if out.resp.clicked() || out.resp.drag_started() {
+            activate = Some(i);
+        }
+        // Dragged past the middle of a neighbor: they trade places.
+        if let (true, Some(p)) = (out.resp.dragged(), ui.ctx().pointer_latest_pos()) {
+            if i > 0 && p.x < rects[i - 1].center().x {
+                swap = Some((i, i - 1));
             }
-            if r.clicked() {
-                if over_x {
-                    close = Some(i);
-                } else {
-                    activate = Some(i);
+            if swap.is_none() {
+                // The neighbor to the right isn't laid out yet: go by this tab's own width.
+                if i + 1 < l.tabs.len() && p.x > out.resp.rect.right() + 40.0 {
+                    swap = Some((i, i + 1));
                 }
             }
         }
-        let (rect, r) = ui.allocate_exact_size(Vec2::new(26.0, h), Sense::click());
-        if r.hovered() {
-            ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(0x1e, 0x1e, 0x1e));
-        }
-        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(15.0), theme::TEXT_DIM);
-        if r.tip("New workspace").clicked() {
-            let n = l.workspaces.len() + 1;
-            l.workspaces.push(Workspace { name: format!("Workspace {}", n), ..Default::default() });
-            l.tabs.push(TopTab::Workspace(l.workspaces.len() - 1));
-            activate = Some(l.tabs.len() - 1);
-        }
-    });
-    let strip = Rect::from_x_y_ranges(ui.max_rect().x_range(), row.response.rect.y_range());
-    crate::docs::mark(ui, strip, "ui:tabs");
-    ui.painter().set(strip_bg, egui::Shape::Vec(vec![
-        egui::Shape::rect_filled(strip, 0.0, Color32::from_rgb(0x0c, 0x0c, 0x0c)),
-        egui::Shape::line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2a, 0x2a))),
-    ]));
-    ui.add_space(3.0);
+    }
+    let (rect, r) = ui.allocate_exact_size(Vec2::new(26.0, 24.0), Sense::click());
+    if r.hovered() {
+        ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(0x2a, 0x2a, 0x2a));
+    }
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "+", egui::FontId::proportional(15.0), theme::TEXT_DIM);
+    if r.tip("New workspace").clicked() {
+        let n = l.workspaces.len() + 1;
+        l.workspaces.push(Workspace { name: format!("Workspace {}", n), ..Default::default() });
+        l.tabs.push(TopTab::Workspace(l.workspaces.len() - 1));
+        activate = Some(l.tabs.len() - 1);
+    }
+    if let Some((a, b)) = swap {
+        l.tabs.swap(a, b);
+        l.active = if l.active == a { b } else if l.active == b { a } else { l.active };
+        activate = None;
+    }
     // While playing, the game stays in its own tab (other blueprints open once it stops).
     if let (Some(i), true) = (activate, st.playing.is_some()) {
         if matches!(l.tabs.get(i), Some(TopTab::Blueprint(r)) if Some(r) != st.blueprint_res.as_ref()) {
@@ -524,13 +504,10 @@ fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &
     egui::Panel::left("blueprint tab side").resizable(true).default_size(290.0).frame(glass).show(ui, |ui| {
         egui::Panel::bottom("blueprint tab inspector").resizable(true).default_size(ui.available_height() * 0.6).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
             let id = egui::Id::new("blueprint tab side events");
-            let mut ev: bool = ui.data(|d| d.get_temp(id).unwrap_or(false));
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut ev, false, "Properties").tip("The selected instance's values.");
-                ui.selectable_value(&mut ev, true, "Events").tip("The selected instance's scripts and the events they handle");
-            });
-            ui.data_mut(|d| d.insert_temp(id, ev));
-            ui.separator();
+            let mut page: usize = ui.data(|d| d.get_temp(id).unwrap_or(0));
+            theme::tab_row(ui, &["Properties", "Events"], &mut page);
+            ui.data_mut(|d| d.insert_temp(id, page));
+            let ev = page == 1;
             if ev {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::events(ui, st));
             } else {

@@ -381,7 +381,6 @@ impl EditorApp {
                     ui.close();
                 }
             });
-            crate::docs::menu(ui, "Object", |ui| panels::add_object_menu(ui, st));
             crate::docs::menu(ui, "View", |ui| { crate::theme::fade_in(ui);
                 if self.classic {
                     for t in [Tab::Blueprint, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler] {
@@ -447,6 +446,15 @@ impl EditorApp {
                 theme::window_buttons(ui);
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
+                ui.add_space(8.0);
+                // The tabs take what's left between Play and the project's name.
+                if !self.classic {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
+                        egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                            ui.horizontal(|ui| crate::workspace::tab_strip(ui, &mut self.ws, st));
+                        });
+                    });
+                }
             });
         });
         let full = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), bar.response.rect.y_range()).expand2(egui::vec2(8.0, 2.0));
@@ -570,50 +578,48 @@ impl EditorApp {
     /// The Neovim-style command line (press `:`).
     fn command_line(&mut self, ui: &mut egui::Ui) {
         let Some(st) = &mut self.st else { return };
-        let status_bg = ui.painter().add(egui::Shape::Noop);
-        let status = egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(cmd) = &mut self.cmd {
+        // No bar along the bottom: the command line shows only while it's being typed in,
+        // and messages appear for a few seconds over the bottom left corner.
+        if let Some(cmd) = &mut self.cmd {
+            let bg = ui.painter().add(egui::Shape::Noop);
+            let bar = egui::Panel::bottom("command line").show(ui, |ui| {
+                ui.horizontal(|ui| {
                     ui.label(RichText::new(":").monospace().color(theme::ACCENT));
                     let r = ui.add(egui::TextEdit::singleline(cmd).font(egui::TextStyle::Monospace).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
                     r.request_focus();
-                    let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
-                    if esc {
-                        self.cmd = None;
-                    } else if enter {
-                        let c = std::mem::take(cmd);
-                        self.cmd = None;
-                        run_command(st, &c, &mut self.dock);
-                    }
-                } else {
-                    let mode = if st.playing.is_some() { RichText::new("PLAYING").color(theme::GOOD) } else { RichText::new("EDITING").color(theme::TEXT_DIM) };
-                    ui.label(mode.small().strong());
-                    // Messages start with a capital, wherever they came from.
-                    let mut msg = st.status.clone();
-                    if let Some(c) = msg.chars().next() {
-                        msg.replace_range(..c.len_utf8(), &c.to_uppercase().to_string());
-                    }
-                    ui.add(egui::Label::new(RichText::new(msg).color(theme::TEXT_DIM)).truncate());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(": commands").small().color(theme::TEXT_DIM)).tip("Press : for the command line (:w save, :e file, :play, :add Kind...)");
-                        if let Some(p) = &st.playing {
-                            let n = p.stats.len().min(30);
-                            if n > 0 {
-                                let avg: f32 = p.stats.iter().rev().take(n).map(|(ms, _)| *ms).sum::<f32>() / n as f32;
-                                let fps = if avg > 0.0 { 1000.0 / avg } else { 0.0 };
-                                let c = if fps >= 55.0 { theme::GOOD } else if fps >= 30.0 { theme::WARN } else { theme::BAD };
-                                ui.label(RichText::new(format!("{:.0} FPS", fps)).small().color(c)).tip("Frames per second (View → Profiler for more)");
-                            }
-                        }
-                        if let Some(sel) = st.selected.filter(|s| st.view_tree().contains(*s)) {
-                            ui.label(RichText::new(st.view_tree().path_of(sel)).small().color(theme::TEXT_DIM));
-                        }
-                    });
-                }
+                });
             });
-        });
-        ui.painter().set(status_bg, theme::header(status.response.rect, true));
-        crate::docs::mark(ui, status.response.rect, "ui:status");
+            ui.painter().set(bg, theme::header(bar.response.rect, true));
+            crate::docs::mark(ui, bar.response.rect, "ui:status");
+            let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+            if esc {
+                self.cmd = None;
+            } else if enter {
+                let c = self.cmd.take().unwrap_or_default();
+                run_command(st, &c, &mut self.dock);
+            }
+        }
+        let ctx = ui.ctx().clone();
+        let now = ctx.input(|i| i.time);
+        let id = egui::Id::new("status toast");
+        let (shown, since): (String, f64) = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
+        let since = if shown != st.status { now } else { since };
+        ctx.data_mut(|d| d.insert_temp(id, (st.status.clone(), since)));
+        let age = now - since;
+        if !st.status.is_empty() && age < 4.0 {
+            let fade = ((4.0 - age) / 0.6).clamp(0.0, 1.0) as f32;
+            let mut msg = st.status.clone();
+            if let Some(c) = msg.chars().next() {
+                msg.replace_range(..c.len_utf8(), &c.to_uppercase().to_string());
+            }
+            egui::Area::new(id).anchor(egui::Align2::LEFT_BOTTOM, [10.0, -10.0]).order(egui::Order::Foreground).interactable(false).show(&ctx, |ui| {
+                ui.set_opacity(fade);
+                egui::Frame::new().fill(egui::Color32::from_rgb(0x26, 0x26, 0x26)).stroke(theme::glass_edge()).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
+                    ui.label(RichText::new(msg).color(theme::TEXT));
+                });
+            });
+            ctx.request_repaint_after(std::time::Duration::from_millis(if age > 3.3 { 16 } else { 300 }));
+        }
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -650,12 +656,7 @@ impl EditorApp {
         let mut open = true;
         egui::Window::new("Project settings").collapsible(false).open(&mut open).default_width(560.0).default_height(560.0).show(ctx, |ui| {
             theme::fade_in(ui);
-            ui.horizontal(|ui| {
-                for (i, t) in ["General", "Graphics", "Physics", "Input", "Half-Life 2"].iter().enumerate() {
-                    ui.selectable_value(&mut f.tab, i, *t);
-                }
-            });
-            ui.separator();
+            theme::tab_row(ui, &["General", "Graphics", "Physics", "Input", "Half-Life 2"], &mut f.tab);
             if f.tab == 1 || f.tab == 2 {
                 let graphics = f.tab == 1;
                 ui.label(

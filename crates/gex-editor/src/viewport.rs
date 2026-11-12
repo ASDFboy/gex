@@ -354,16 +354,10 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
             ui.separator();
             let r = ui.checkbox(&mut p.game_camera, "Game camera").tip("Off: look around with the editor camera while the game runs");
             crate::docs::mark(ui, r.rect, "ui:game_camera");
-            if !ui.ctx().memory(|m| m.focused().is_some_and(|f| Some(f) == ui.ctx().data(|d| d.get_temp::<egui::Id>(egui::Id::new("gex viewport id"))))) {
+            let view: Option<egui::Id> = ui.ctx().data(|d| d.get_temp(egui::Id::new("gex viewport id")));
+            if ui.ctx().memory(|m| m.focused()) != view || view.is_none() {
                 ui.label(egui::RichText::new("Click the view to give the game the keyboard").small().color(theme::WARN));
             }
-        } else {
-            ui.separator();
-            ui.label(egui::RichText::new("Controls").small().color(theme::TEXT_DIM)).tip(if st.mode_3d {
-                "Click the view, then W A S D: move, Q / E: down / up (Shift: fast)\nRight-drag: look around\nMiddle-drag or Shift+right-drag: pan\nWheel: zoom\nLeft-click: select, drag to move"
-            } else {
-                "Click the view, then W A S D: move (Shift: fast)\nRight-drag or middle-drag: pan\nWheel: zoom\nLeft-click: select, drag to move (drag empty space to box-select)"
-            });
         }
     });
     let size = ui.available_size().max(egui::vec2(16.0, 16.0));

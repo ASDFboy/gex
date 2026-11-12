@@ -250,3 +250,62 @@ pub fn fade_in(ui: &mut egui::Ui) -> f32 {
     }
     t
 }
+
+/// What a tab did this frame.
+pub struct TabOut {
+    pub resp: egui::Response,
+    /// Its close cross was clicked.
+    pub close: bool,
+}
+
+/// One tab, the same everywhere: a trapezoid, lit when it's the open one; optionally a cross
+/// to close it and a dot for unsaved changes.
+pub fn tab(ui: &mut egui::Ui, label: &str, active: bool, closeable: bool, dirty: bool) -> TabOut {
+    let h = 24.0;
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(13.0), TEXT);
+    let w = (galley.size().x + 28.0 + if closeable || dirty { 18.0 } else { 0.0 }).max(78.0);
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click_and_drag());
+    let lit = ui.ctx().animate_bool_with_time(r.id, active, 0.12);
+    let hover = ui.ctx().animate_bool_with_time(r.id.with("h"), r.hovered(), 0.1);
+    let p = ui.painter();
+    let base = mix(Color32::from_rgb(0x17, 0x17, 0x17), Color32::from_rgb(0x20, 0x20, 0x20), hover);
+    // Wider at the bottom, where it joins the page.
+    let slant = 9.0;
+    let (top, bottom) = (rect.top() + if active { 0.0 } else { 2.0 }, rect.bottom());
+    let shape = vec![Pos2::new(rect.left() - slant / 2.0, bottom), Pos2::new(rect.left() + slant / 2.0, top), Pos2::new(rect.right() - slant / 2.0, top), Pos2::new(rect.right() + slant / 2.0, bottom)];
+    p.add(Shape::convex_polygon(shape.clone(), mix(base, Color32::from_rgb(0x2a, 0x2a, 0x2a), lit), Stroke::NONE));
+    p.add(Shape::line(shape, Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34))));
+    p.galley(Pos2::new(rect.left() + 12.0, (top + bottom) / 2.0 - galley.size().y / 2.0), galley, if active { TEXT } else { TEXT_DIM });
+    let x = Rect::from_center_size(Pos2::new(rect.right() - 16.0, rect.center().y + 1.0), egui::vec2(16.0, 16.0));
+    let over_x = closeable && ui.rect_contains_pointer(x);
+    if closeable && (r.hovered() || !dirty) && (r.hovered() || active) {
+        let c = if over_x { TEXT } else { TEXT_DIM };
+        if over_x {
+            p.rect_filled(x, 0.0, GRAY_LIGHT);
+        }
+        let (c0, d) = (x.center(), 3.5);
+        p.line_segment([c0 + egui::vec2(-d, -d), c0 + egui::vec2(d, d)], Stroke::new(1.2, c));
+        p.line_segment([c0 + egui::vec2(-d, d), c0 + egui::vec2(d, -d)], Stroke::new(1.2, c));
+    } else if dirty {
+        p.circle_filled(x.center(), 3.5, WARN);
+    }
+    let close = over_x && r.clicked();
+    TabOut { resp: r, close }
+}
+
+/// A row of tabs that only switch between pages (no closing): gives the page picked.
+pub fn tab_row(ui: &mut egui::Ui, labels: &[&str], current: &mut usize) {
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.add_space(6.0);
+        for (i, l) in labels.iter().enumerate() {
+            if tab(ui, l, *current == i, false, false).resp.clicked() {
+                *current = i;
+            }
+        }
+    });
+    // The line the tabs sit on.
+    let y = row.response.rect.bottom();
+    ui.painter().line_segment([Pos2::new(ui.max_rect().left(), y), Pos2::new(ui.max_rect().right(), y)], Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34)));
+    ui.add_space(4.0);
+}
