@@ -1095,6 +1095,12 @@ fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
     };
     let label = name.rsplit_once('.').map_or(name, |x| x.0);
     let r = crate::icons::row(ui, st, &icon, RichText::new(label), sel).on_hover_text(name);
+    asset_interact(ui, st, &r, path);
+}
+
+/// What every file in the tree does: select, drag, right-click menu, double-click to open.
+fn asset_interact(ui: &egui::Ui, st: &mut EditorState, r: &egui::Response, path: &str) {
+    let name = path.rsplit('/').next().unwrap_or(path);
     crate::docs::mark(ui, r.rect, format!("file:{}", path));
     r.dnd_set_drag_payload(AssetPath(path.to_string()));
     let in_project = path.starts_with("res://");
@@ -1104,7 +1110,7 @@ fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
             st.asset_dir = parent_dir(path).to_string();
         }
     }
-    asset_context_menu(&r, st, &gex_assets::vfs::Entry { name: name.to_string(), path: path.to_string(), is_dir: false }, in_project);
+    asset_context_menu(r, st, &gex_assets::vfs::Entry { name: name.to_string(), path: path.to_string(), is_dir: false }, in_project);
     if r.double_clicked() && in_project && st.playing.is_none() {
         if name.ends_with(".jblueprint") {
             st.open_windows.push(path.to_string());
@@ -1112,6 +1118,32 @@ fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
             st.open_script(path, None);
         }
     }
+}
+
+/// The pictures of a folder, as a grid of thumbnails (their names show when pointed at).
+fn asset_tiles(ui: &mut egui::Ui, st: &mut EditorState, paths: &[&str]) {
+    if paths.is_empty() {
+        return;
+    }
+    const SIZE: f32 = 44.0;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+        for path in paths {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(SIZE, SIZE), egui::Sense::click_and_drag());
+            if ui.is_rect_visible(rect) {
+                let sel = st.asset_selected.as_deref() == Some(*path);
+                ui.painter().rect_filled(rect, 0.0, if sel { theme::GRAY_LIGHT } else if r.hovered() { theme::GRAY } else { Color32::from_rgb(0x16, 0x16, 0x16) });
+                crate::icons::paint(ui, st, &crate::icons::Icon::Image(path.to_string()), rect.shrink(3.0));
+                if sel {
+                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
+                }
+            }
+            let r = r.on_hover_text(name);
+            asset_interact(ui, st, &r, path);
+        }
+    });
+    ui.add_space(2.0);
 }
 
 /// A folder in the asset tree and, when open, what's in it. Project folders take drops
@@ -1174,9 +1206,11 @@ fn asset_level(ui: &mut egui::Ui, st: &mut EditorState, files: &[(String, bool)]
     for (p, _) in here.iter().filter(|e| e.1) {
         asset_dir_row(ui, st, p, p.rsplit('/').next().unwrap_or(p), Some(files));
     }
-    for (p, _) in here.iter().filter(|e| !e.1) {
+    for (p, _) in here.iter().filter(|e| !e.1 && !gex_assets::image_load::is_image(&e.0)) {
         asset_row(ui, st, p);
     }
+    let pictures: Vec<&str> = here.iter().filter(|e| !e.1 && gex_assets::image_load::is_image(&e.0)).map(|e| e.0.as_str()).collect();
+    asset_tiles(ui, st, &pictures);
 }
 
 fn thumb<'a>(ui: &egui::Ui, st: &EditorState, tex: &'a mut std::collections::HashMap<String, egui::TextureHandle>, path: &str) -> &'a egui::TextureHandle {
@@ -1193,9 +1227,11 @@ fn asset_folder(ui: &mut egui::Ui, st: &mut EditorState, dir: &str) {
     for e in entries.iter().filter(|e| e.is_dir).take(2000) {
         asset_dir_row(ui, st, &e.path, &e.name, None);
     }
-    for e in entries.iter().filter(|e| !e.is_dir).take(2000) {
+    for e in entries.iter().filter(|e| !e.is_dir && !gex_assets::image_load::is_image(&e.name)).take(2000) {
         asset_row(ui, st, &e.path);
     }
+    let pictures: Vec<&str> = entries.iter().filter(|e| !e.is_dir && gex_assets::image_load::is_image(&e.name)).take(2000).map(|e| e.path.as_str()).collect();
+    asset_tiles(ui, st, &pictures);
 }
 
 /// The asset tree: the project's folders and files as they are on disk (drag things onto

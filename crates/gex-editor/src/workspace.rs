@@ -400,7 +400,8 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
     // A strip of real tabs: the open one is lit and joins the page under it.
     let strip_bg = ui.painter().add(egui::Shape::Noop);
     let row = ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 1.0;
+        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.add_space(6.0);
         let h = 24.0;
         for (i, t) in l.tabs.iter().enumerate() {
             let active = i == l.active;
@@ -413,19 +414,22 @@ fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
                 TopTab::Blueprint(_) => true,
             };
             let galley = ui.painter().layout_no_wrap(label, egui::FontId::proportional(13.0), theme::TEXT);
-            let w = (galley.size().x + 22.0 + if closeable || dirty { 18.0 } else { 0.0 }).max(72.0);
+            let w = (galley.size().x + 28.0 + if closeable || dirty { 18.0 } else { 0.0 }).max(78.0);
             let (rect, r) = ui.allocate_exact_size(Vec2::new(w, h), Sense::click());
             let lit = ui.ctx().animate_bool_with_time(r.id, active, 0.12);
             let hover = ui.ctx().animate_bool_with_time(r.id.with("h"), r.hovered(), 0.1);
             let p = ui.painter();
             let base = theme::mix(Color32::from_rgb(0x17, 0x17, 0x17), Color32::from_rgb(0x20, 0x20, 0x20), hover);
-            p.rect_filled(rect, 0.0, theme::mix(base, Color32::from_rgb(0x2a, 0x2a, 0x2a), lit));
-            if lit > 0.0 {
-                p.rect_filled(Rect::from_min_size(rect.min, Vec2::new(rect.width(), 2.0)), 0.0, theme::alpha(theme::ACCENT, (lit * 255.0) as u8));
-            }
-            p.galley(Pos2::new(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0), galley, if active { theme::TEXT } else { theme::TEXT_DIM });
+            // A trapezoid: wider at the bottom, where it joins the page.
+            let slant = 9.0;
+            let (top, bottom) = (rect.top() + if active { 0.0 } else { 2.0 }, rect.bottom());
+            let shape = vec![Pos2::new(rect.left() - slant / 2.0, bottom), Pos2::new(rect.left() + slant / 2.0, top), Pos2::new(rect.right() - slant / 2.0, top), Pos2::new(rect.right() + slant / 2.0, bottom)];
+            let edge = Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34));
+            p.add(egui::Shape::convex_polygon(shape.clone(), theme::mix(base, Color32::from_rgb(0x2a, 0x2a, 0x2a), lit), Stroke::NONE));
+            p.add(egui::Shape::line(shape, edge));
+            p.galley(Pos2::new(rect.left() + 12.0, (top + bottom) / 2.0 - galley.size().y / 2.0), galley, if active { theme::TEXT } else { theme::TEXT_DIM });
             // The right end: a dot while there are unsaved changes, a cross to close when pointed at.
-            let x = Rect::from_center_size(Pos2::new(rect.right() - 13.0, rect.center().y), Vec2::splat(16.0));
+            let x = Rect::from_center_size(Pos2::new(rect.right() - 16.0, rect.center().y + 1.0), Vec2::splat(16.0));
             let over_x = closeable && ui.rect_contains_pointer(x);
             if closeable && (r.hovered() || !dirty) && (r.hovered() || active) {
                 let c = if over_x { theme::TEXT } else { theme::TEXT_DIM };

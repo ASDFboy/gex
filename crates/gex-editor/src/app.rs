@@ -9,7 +9,7 @@ use gex_core::project::{MountConfig, MountKind, Project};
 use gex_script::LogKind;
 
 use crate::state::{self, EditorState};
-use crate::{code, panels, templates, theme, tools, viewport};
+use crate::{code, panels, theme, tools, viewport};
 
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
@@ -179,10 +179,7 @@ pub struct EditorApp {
     viewport_tex: Option<egui::TextureId>,
     previews: HashMap<String, egui::TextureHandle>,
     // Launcher fields.
-    new_path: String,
-    new_name: String,
-    open_path: String,
-    launcher_error: String,
+    launcher: crate::launcher::Launcher,
     // Neovim-style command line.
     cmd: Option<String>,
     settings: SettingsForm,
@@ -248,16 +245,12 @@ impl EditorApp {
     pub fn new(cc: &eframe::CreationContext, project: Option<PathBuf>) -> EditorApp {
         theme::apply(&cc.egui_ctx);
         gex_script::commands::register();
-        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
         let mut app = EditorApp {
             st: None,
             dock: default_dock(),
             viewport_tex: None,
             previews: HashMap::new(),
-            new_path: home.join("GEX Projects").join("my-game").to_string_lossy().into_owned(),
-            new_name: "My Game".into(),
-            open_path: String::new(),
-            launcher_error: String::new(),
+            launcher: Default::default(),
             cmd: None,
             settings: SettingsForm::default(),
             pads: crate::gamepad::Pads::new(),
@@ -291,96 +284,14 @@ impl EditorApp {
                 self.previews.clear();
                 self.settings.loaded = false;
             }
-            Err(e) => self.launcher_error = e,
+            Err(e) => self.launcher.error = e,
         }
     }
 
     fn launcher(&mut self, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(32.0)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("GEX").size(30.0).strong().color(theme::ACCENT));
-                ui.label(RichText::new("2D & 3D · blueprints all the way down · scripted in .jlb").color(theme::TEXT_DIM));
-            });
-            ui.add_space(16.0);
-            ui.columns(2, |cols| {
-                let ui = &mut cols[0];
-                theme::title(ui, "Projects");
-                ui.add_space(4.0);
-                let recent = state::recent_projects();
-                if recent.is_empty() {
-                    ui.label(RichText::new("No projects yet: make one, or try the demo.").color(theme::TEXT_DIM));
-                }
-                let mut open = None;
-                for p in recent {
-                    let name = Project::open(&p).map(|x| x.config.name).unwrap_or_default();
-                    egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(10.0).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&name).size(16.0).strong());
-                                ui.label(RichText::new(p.to_string_lossy()).small().color(theme::TEXT_DIM));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if theme::primary_button(ui, "Open", theme::ACCENT_DIM).clicked() {
-                                    open = Some(p.clone());
-                                }
-                            });
-                        });
-                    });
-                    ui.add_space(4.0);
-                }
-                if let Some(p) = open {
-                    self.open_project(&p);
-                }
-
-                let ui = &mut cols[1];
-                theme::title(ui, "New project");
-                egui::Grid::new("new").num_columns(2).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut self.new_name);
-                    ui.end_row();
-                    ui.label("Folder");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.new_path).desired_width(320.0));
-                        if let Some(p) = browse_button(ui) {
-                            self.new_path = p;
-                        }
-                    });
-                    ui.end_row();
-                });
-                ui.horizontal(|ui| {
-                    if theme::primary_button(ui, "Create empty project", theme::ACCENT_DIM).clicked() {
-                        let dir = PathBuf::from(&self.new_path);
-                        match templates::create_project(&dir, &self.new_name) {
-                            Ok(p) => self.open_project(&p.dir),
-                            Err(e) => self.launcher_error = e,
-                        }
-                    }
-                    if ui.button("Create demo project").on_hover_text("a small 2D game and a 3D blueprint, with scripts to read").clicked() {
-                        let dir = PathBuf::from(&self.new_path);
-                        match templates::create_demo(&dir) {
-                            Ok(p) => self.open_project(&p.dir),
-                            Err(e) => self.launcher_error = e,
-                        }
-                    }
-                });
-                ui.add_space(16.0);
-                theme::title(ui, "Open a project folder");
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.open_path).hint_text("folder with project.jproj").desired_width(320.0));
-                    if let Some(p) = browse_button(ui) {
-                        self.open_path = p;
-                    }
-                    if ui.button("Open").clicked() {
-                        let p = PathBuf::from(&self.open_path);
-                        self.open_project(&p);
-                    }
-                });
-                if !self.launcher_error.is_empty() {
-                    ui.colored_label(theme::BAD, &self.launcher_error);
-                }
-            });
-        });
+        if let Some(dir) = self.launcher.show(ui) {
+            self.open_project(&dir);
+        }
     }
 
     fn menu(&mut self, ui: &mut egui::Ui) {

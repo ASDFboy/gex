@@ -86,6 +86,14 @@ impl Project {
         config.migrate();
         Ok(Project { dir: dir.to_path_buf(), config })
     }
+    /// Reads a project's settings without opening it (nothing in the folder is touched).
+    pub fn peek(dir: &Path) -> Result<ProjectConfig, String> {
+        let f = dir.join(PROJECT_FILE);
+        let text = std::fs::read_to_string(&f).map_err(|e| format!("couldn't open {}: {}", f.display(), e))?;
+        let mut config: ProjectConfig = ron::from_str(&text).map_err(|e| format!("{}: {}", f.display(), e))?;
+        config.migrate();
+        Ok(config)
+    }
     pub fn save(&self) -> Result<(), String> {
         let text = ron::ser::to_string_pretty(&self.config, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string())?;
         std::fs::write(self.dir.join(PROJECT_FILE), text).map_err(|e| e.to_string())

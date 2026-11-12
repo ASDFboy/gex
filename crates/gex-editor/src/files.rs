@@ -291,7 +291,6 @@ mod tests {
         assert!(!st.blueprint_dirty(), "the open blueprint matches the fixed file");
         st.delete_asset("res://code/player.jlb").unwrap();
         assert!(!st.scripts.contains_key("res://code/player.jlb"));
-        assert!(st.delete_asset("res://blueprints/main.jblueprint").is_err(), "open blueprints can't be deleted");
         // Undo: the delete, then the rename, then a new script.
         st.undo_file_op();
         assert!(dir.join("code/player.jlb").exists(), "put back from the trash");
@@ -301,6 +300,10 @@ mod tests {
         assert_eq!(st.tree.objects[player].scripts, vec!["res://scripts/player.jlb".to_string()]);
         assert!(std::fs::read_to_string(dir.join("blueprints/main.jblueprint")).unwrap().contains("res://scripts/player.jlb"));
         assert!(st.file_undo.is_empty());
+        // Deleting the blueprint being edited closes it.
+        st.delete_asset("res://blueprints/main.jblueprint").unwrap();
+        assert!(st.blueprint_res.as_deref() != Some("res://blueprints/main.jblueprint") && st.tree.root.is_some());
+        st.undo_file_op();
         let made = st.new_script_file("res://scripts").unwrap();
         assert!(st.project.res_to_path(&made).unwrap().exists());
         st.undo_file_op();

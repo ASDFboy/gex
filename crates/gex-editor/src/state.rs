@@ -391,7 +391,15 @@ impl EditorState {
 
     /// Closes the blueprint being edited (unsaved changes are lost), switching to another.
     pub fn close_blueprint(&mut self) {
-        if self.docs.is_empty() || self.playing.is_some() {
+        if self.playing.is_some() {
+            return;
+        }
+        if self.docs.is_empty() {
+            // The last one: nothing is open.
+            let _ = self.swap_out();
+            self.tree.add(None, gex_core::Object::new("Root", gex_core::ObjectKind::Object2D));
+            self.selection.clear();
+            self.last_change = None;
             return;
         }
         let d = self.docs.remove(0);
@@ -770,8 +778,11 @@ impl EditorState {
         if self.playing.is_some() {
             return Err("stop the game first".into());
         }
-        if self.blueprint_res.as_deref() == Some(res) || self.docs.iter().any(|d| d.blueprint_res.as_deref() == Some(res)) {
-            return Err("close that blueprint first".into());
+        // Open blueprints being deleted (or inside a folder being deleted) close first.
+        let inside = format!("{}/", res);
+        let open: Vec<String> = self.blueprint_res.iter().chain(self.docs.iter().filter_map(|d| d.blueprint_res.as_ref())).filter(|r| r.as_str() == res || r.starts_with(&inside)).cloned().collect();
+        for r in open {
+            self.close_blueprint_res(&r);
         }
         let to = crate::files::trash(&self.project, res)?;
         self.scripts.retain(|k, _| k != res && !k.starts_with(&format!("{}/", res)));
@@ -1491,8 +1502,32 @@ pub fn remember_project(dir: &Path) {
     let mut list = recent_projects();
     list.retain(|p| p != dir);
     list.insert(0, dir.to_path_buf());
-    list.truncate(12);
+    list.truncate(40);
     let _ = std::fs::create_dir_all(config_dir());
     let text: Vec<String> = list.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let _ = std::fs::write(config_dir().join("recent.txt"), text.join("\n"));
+}
+
+fn write_recent(list: &[PathBuf]) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let text: Vec<String> = list.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let _ = std::fs::write(config_dir().join("recent.txt"), text.join("\n"));
+}
+
+/// Takes a project off the launcher's list (its folder isn't touched).
+pub fn forget_project(dir: &Path) {
+    let mut list = recent_projects();
+    list.retain(|p| p != dir);
+    write_recent(&list);
+}
+
+/// A project's folder was renamed.
+pub fn replace_project(old: &Path, new: &Path) {
+    let list: Vec<PathBuf> = recent_projects().into_iter().map(|p| if p == old { new.to_path_buf() } else { p }).collect();
+    // recent_projects drops folders that are gone; the new one exists by now.
+    let mut list = list;
+    if !list.iter().any(|p| p == new) {
+        list.insert(0, new.to_path_buf());
+    }
+    write_recent(&list);
 }

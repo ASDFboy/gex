@@ -24,6 +24,7 @@ mod tools;
 mod ui_layer;
 mod vim;
 mod gizmo;
+mod launcher;
 mod docs;
 mod icons;
 mod viewport;
