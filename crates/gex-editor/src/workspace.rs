@@ -125,6 +125,14 @@ pub struct Layout {
     pub show_console: bool,
     /// The console is folded down to its title bar (double-click folds, a click unfolds).
     pub console_min: bool,
+    /// Scripts open beside the view in the blueprint tabs, and the one showing.
+    #[serde(default)]
+    pub scripts: Vec<String>,
+    #[serde(default)]
+    pub script_at: usize,
+    /// A script just asked for: its window comes to the front showing it.
+    #[serde(skip)]
+    script_focus: Option<String>,
     /// The blueprint being edited last frame (to notice it changing from elsewhere).
     #[serde(skip)]
     pub last_blueprint: Option<String>,
@@ -150,6 +158,9 @@ impl Default for Layout {
             show_assets: true,
             show_console: true,
             console_min: false,
+            scripts: Vec::new(),
+            script_at: 0,
+            script_focus: None,
             last_blueprint: None,
             tab_before_play: None,
             was_playing: false,
@@ -360,13 +371,27 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
         }
     }
     l.was_playing = playing;
-    // Scripts asked for from outside the workspace windows open in the workspace.
+    // Scripts open beside the view of the blueprint being edited (in the workspace only when
+    // there's no blueprint).
     if !st.open_requests.is_empty() {
-        let wi = l.current_workspace();
-        for r in std::mem::take(&mut st.open_requests) {
-            l.open_window(wi, WinKind::Script { res: r }, None);
+        match st.blueprint_res.clone() {
+            Some(bp) => {
+                for r in std::mem::take(&mut st.open_requests) {
+                    if !l.scripts.contains(&r) {
+                        l.scripts.push(r.clone());
+                    }
+                    l.script_focus = Some(r);
+                }
+                l.open_blueprint_tab(&bp);
+            }
+            None => {
+                let wi = l.current_workspace();
+                for r in std::mem::take(&mut st.open_requests) {
+                    l.open_window(wi, WinKind::Script { res: r }, None);
+                }
+                l.show_workspace(wi);
+            }
         }
-        l.show_workspace(wi);
     }
     let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0);
     if l.show_assets {
@@ -425,7 +450,7 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
 pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
     let mut activate = None;
     let mut close = None;
-    let mut swap = None;
+    let mut started = None;
     ui.spacing_mut().item_spacing.x = 3.0;
     ui.add_space(8.0);
     let mut rects: Vec<Rect> = Vec::new();
@@ -447,19 +472,11 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
         } else if out.resp.clicked() || out.resp.drag_started() {
             activate = Some(i);
         }
-        // Dragged past the middle of a neighbor: they trade places.
-        if let (true, Some(p)) = (out.resp.dragged(), ui.ctx().pointer_latest_pos()) {
-            if i > 0 && p.x < rects[i - 1].center().x {
-                swap = Some((i, i - 1));
-            }
-            if swap.is_none() {
-                // The neighbor to the right isn't laid out yet: go by this tab's own width.
-                if i + 1 < l.tabs.len() && p.x > out.resp.rect.right() + 40.0 {
-                    swap = Some((i, i + 1));
-                }
-            }
+        if out.resp.drag_started() {
+            started = Some(i);
         }
     }
+    let swap = theme::tab_reorder(ui, "top", &rects, started);
     let (rect, r) = ui.allocate_exact_size(Vec2::new(26.0, 24.0), Sense::click());
     if r.hovered() {
         ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(0x2a, 0x2a, 0x2a));
@@ -548,7 +565,104 @@ fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &
         });
         panels::hierarchy(ui, st);
     });
-    egui::CentralPanel::default().frame(glass).show(ui, |ui| viewport::viewport(ui, st, rs, viewport_tex));
+    let view = egui::CentralPanel::default().frame(glass).show(ui, |ui| viewport::viewport(ui, st, rs, viewport_tex)).response.rect;
+    // The open scripts: small windows floating over the view, each wired to its object.
+    l.scripts.retain(|r| st.scripts.contains_key(r));
+    if l.scripts.is_empty() || st.playing.is_some() {
+        return;
+    }
+    let ctx = ui.ctx().clone();
+    let wires = ui.painter().with_clip_rect(view);
+    // One window per object: its scripts are tabs in it. (A script no object here has gets
+    // a window of its own.)
+    let mut owner: std::collections::HashMap<&str, gex_core::ObjectId> = Default::default();
+    for (id, n) in st.tree.objects.iter() {
+        for sc in &n.scripts {
+            owner.entry(sc.as_str()).or_insert(id);
+        }
+    }
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, res) in l.scripts.iter().enumerate() {
+        let key = owner.get(res.as_str()).map(|o| format!("{:?}", o)).unwrap_or_else(|| res.clone());
+        match groups.iter_mut().find(|g| g.0 == key) {
+            Some(g) => g.1.push(i),
+            None => groups.push((key, vec![i])),
+        }
+    }
+    drop(owner);
+    let focus = l.script_focus.take();
+    let mut close = None;
+    let mut swap = None;
+    for (gi, (key, members)) in groups.iter().enumerate() {
+        let at_id = egui::Id::new(("blueprint script at", key));
+        let mut showing: String = ctx.data(|d| d.get_temp(at_id)).filter(|r| members.iter().any(|i| l.scripts[*i] == *r)).unwrap_or_else(|| l.scripts[members[0]].clone());
+        let wanted = focus.as_ref().filter(|f| members.iter().any(|i| l.scripts[*i] == **f));
+        if let Some(f) = wanted {
+            showing = f.clone();
+        }
+        let frame = egui::Frame::new().fill(Color32::from_rgb(0x1a, 0x1a, 0x1a)).stroke(Stroke::new(1.0, theme::GRAY)).inner_margin(6.0);
+        let k = (gi % 6) as f32 * 26.0;
+        let win_id = egui::Id::new(("blueprint script", key));
+        let shown = egui::Window::new(key.as_str())
+            .id(win_id)
+            .title_bar(false)
+            .frame(frame)
+            .resizable(true)
+            .default_pos(Pos2::new(view.right() - 500.0 + k, view.top() + 130.0 + k))
+            .default_size([460.0, 360.0])
+            .min_size([240.0, 140.0])
+            .constrain_to(view)
+            .show(&ctx, |ui| {
+                egui::ScrollArea::horizontal().id_salt("tabs").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let (mut rects, mut started) = (Vec::new(), None);
+                        for (n, i) in members.iter().enumerate() {
+                            let res = &l.scripts[*i];
+                            let dirty = st.scripts.get(res).is_some_and(|s| s.dirty());
+                            let out = theme::tab(ui, short(res).trim_end_matches(".jlb"), *res == showing, true, dirty);
+                            rects.push(out.resp.rect);
+                            if out.close || out.resp.middle_clicked() {
+                                close = Some(*i);
+                            } else if out.resp.clicked() || out.resp.drag_started() {
+                                showing = res.clone();
+                            }
+                            if out.resp.drag_started() {
+                                started = Some(n);
+                            }
+                        }
+                        if let Some((a, b)) = theme::tab_reorder(ui, key.as_str(), &rects, started) {
+                            swap = Some((members[a], members[b]));
+                        }
+                    });
+                });
+                code::script_ui(ui, st, &showing);
+            });
+        ctx.data_mut(|d| d.insert_temp(at_id, showing.clone()));
+        let Some(shown) = shown else { continue };
+        if wanted.is_some() {
+            ctx.move_to_top(shown.response.layer_id);
+        }
+        let r = shown.response.rect;
+        // The wire to the object.
+        if let Some(a) = members.iter().find_map(|i| st.view_anchors.get(&l.scripts[*i])) {
+            let from = Pos2::new(a[0], a[1]);
+            let left = from.x <= r.center().x;
+            let to = Pos2::new(if left { r.left() } else { r.right() }, r.top() + 14.0);
+            let bend = Vec2::new(((to.x - from.x).abs() * 0.5).max(30.0) * if left { 1.0 } else { -1.0 }, 0.0);
+            if !r.contains(from) {
+                wires.add(egui::epaint::CubicBezierShape::from_points_stroke([from, from + bend, to - bend, to], false, Color32::TRANSPARENT, Stroke::new(1.5, Color32::from_gray(0x90))));
+                wires.circle_filled(from, 3.0, Color32::from_gray(0x90));
+            }
+        }
+    }
+    if let Some((a, b)) = swap {
+        l.scripts.swap(a, b);
+    }
+    if let Some(i) = close {
+        st.save_script(&l.scripts[i]);
+        l.scripts.remove(i);
+    }
 }
 
 /// A workspace: a canvas of windows. Drag the background (or hold the middle button) to look around.

@@ -128,6 +128,9 @@ pub struct EditorState {
     pub playing: Option<Playing>,
     /// The game built and running in a window of its own (the Build button).
     pub build: Option<Build>,
+    /// Where the object each script belongs to is in the blueprint view (script → screen
+    /// point), for the wires of the script windows.
+    pub view_anchors: std::collections::HashMap<String, [f32; 2]>,
     pub renderer: Option<Renderer>,
     pub mode_3d: bool,
     pub cam2: EditorCamera2D,
@@ -207,6 +210,7 @@ impl EditorState {
             open_windows: Vec::new(),
             playing: None,
             build: None,
+            view_anchors: Default::default(),
             renderer: None,
             mode_3d: false,
             cam2: EditorCamera2D::default(),
@@ -816,6 +820,23 @@ impl EditorState {
         if let Some(x) = swap(&self.asset_dir) {
             self.asset_dir = x;
         }
+        // A blueprint's main object is named after it, and keeps up with a new name.
+        if let (Some(a), Some(b)) = (old.strip_suffix(".jblueprint"), new.strip_suffix(".jblueprint")) {
+            let (a, b) = (a.rsplit('/').next().unwrap_or(a).to_string(), b.rsplit('/').next().unwrap_or(b).to_string());
+            if self.blueprint_res.as_deref() == Some(new.as_str()) {
+                if let Some(r) = self.tree.root.filter(|r| self.tree.objects[*r].name == a) {
+                    self.tree.objects[r].name = b;
+                    self.save_blueprint();
+                }
+            } else if let Some(path) = self.project.res_to_path(&new) {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let first = format!("name: \"{}\"", a);
+                    if text.find("name: \"") == text.find(&first) && text.contains(&first) {
+                        let _ = std::fs::write(&path, text.replacen(&first, &format!("name: \"{}\"", b), 1));
+                    }
+                }
+            }
+        }
         self.renderer.as_mut().map(|r| r.reload_textures());
         self.file_undo.push(FileOp::Renamed { old: old.to_string(), new: new.clone() });
         self.previews.forget(old);
@@ -1003,7 +1024,9 @@ impl EditorState {
         let first = !self.project.res_to_path(&main).is_some_and(|p| p.is_file());
         let res = crate::files::free_name(&self.project, dir, if first { "main.jblueprint" } else { "new_blueprint.jblueprint" })?;
         let path = self.project.res_to_path(&res)?;
-        let root = if kind.is_3d() { "World" } else { "Main" };
+        // The blueprint's main object is called what the blueprint is.
+        let root = res.rsplit('/').next().unwrap_or("main").trim_end_matches(".jblueprint").to_string();
+        let root = root.as_str();
         if first {
             self.project.config.main_blueprint = res.clone();
             let _ = self.project.save();
@@ -1518,6 +1541,25 @@ impl EditorState {
     pub fn build_and_run(&mut self) {
         self.build = None; // closes a build that's still running
         self.save_all();
+        // The other open blueprints too: the build reads everything from the files.
+        let unsaved: Vec<(usize, String, String)> = {
+            let read = self.reader();
+            self.docs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, d)| Some((i, d.blueprint_res.clone()?, blueprint::save(&d.tree, &read).ok()?)))
+                .filter(|(i, _, t)| *t != self.docs[*i].blueprint_saved)
+                .collect()
+        };
+        for (i, res, text) in unsaved {
+            if let Some(p) = self.project.res_to_path(&res) {
+                if std::fs::write(&p, &text).is_ok() {
+                    self.docs[i].blueprint_saved = text;
+                }
+            }
+        }
+        // Like Play, it starts in the blueprint being edited.
+        let start = self.blueprint_res.clone();
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!("gex-build-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1537,6 +1579,12 @@ impl EditorState {
                         std::fs::copy(e.path(), out.join(&name)).map_err(|x| format!("{}: {}", e.path().display(), x))?;
                     }
                 }
+            }
+            if let Some(start) = &start {
+                let mut cfg = self.project.config.clone();
+                cfg.main_blueprint = start.clone();
+                let text = ron::ser::to_string_pretty(&cfg, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string())?;
+                std::fs::write(dir.join(gex_core::project::PROJECT_FILE), text).map_err(|e| e.to_string())?;
             }
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             let mut child = std::process::Command::new(exe)

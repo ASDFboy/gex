@@ -363,3 +363,32 @@ pub fn tinted(ui: &mut egui::Ui, color: Option<Color32>, row: impl FnOnce(&mut e
     ui.painter().set(slot, egui::Shape::rect_filled(rect, 0.0, c.gamma_multiply(0.20)));
     r
 }
+
+/// Dragging tabs of a row into another order. Call after drawing the row, with each tab's
+/// rect and the tab a drag just started on (if any); gives the two places to swap. The tab
+/// held is remembered by place, so it's followed through swaps, and a swap only happens once
+/// the pointer would still be over the tab afterwards (no trading back and forth).
+pub fn tab_reorder(ui: &egui::Ui, salt: &str, rects: &[Rect], started: Option<usize>) -> Option<(usize, usize)> {
+    let id = egui::Id::new(("tab reorder", salt));
+    if let Some(i) = started {
+        ui.data_mut(|d| d.insert_temp(id, i));
+    }
+    let held: Option<usize> = ui.data(|d| d.get_temp(id));
+    let (down, pos) = ui.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
+    let i = held.filter(|i| *i < rects.len())?;
+    if !down {
+        ui.data_mut(|d| d.remove::<usize>(id));
+        return None;
+    }
+    let x = pos?.x;
+    let w = rects[i].width();
+    let to = if i > 0 && x < rects[i - 1].center().x.min(rects[i - 1].left() + w) {
+        i - 1
+    } else if i + 1 < rects.len() && x > rects[i + 1].center().x.max(rects[i + 1].right() - w) {
+        i + 1
+    } else {
+        return None;
+    };
+    ui.data_mut(|d| d.insert_temp(id, to));
+    Some((i, to))
+}

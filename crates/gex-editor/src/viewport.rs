@@ -668,26 +668,33 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     } else {
         editor_overlay(st, &list, &cams)
     };
+    st.view_anchors.clear();
+    if !playing {
+        for (id, n) in st.tree.objects.iter() {
+            if n.scripts.is_empty() {
+                continue;
+            }
+            let p = st.tree.global_matrix(id).w_axis.truncate();
+            let at = if st.mode_3d { cams.world_3d_to_screen(p) } else { Some(cams.world_2d_to_screen(p.truncate())) };
+            if let Some(at) = at {
+                let at = rect.min + egui::vec2(at.x, at.y) / ppp;
+                for sc in &n.scripts {
+                    st.view_anchors.entry(sc.clone()).or_insert([at.x, at.y]);
+                }
+            }
+        }
+    }
     if !game_cam {
-        // While editing, what's behind the blueprint is the workspace's backdrop, a shade
+        // While editing, what's behind the blueprint is the workspace's gradient, a shade
         // lighter: the view is drawn see-through over it.
         list.clear = [0.0; 4];
         let painter = ui.painter_at(rect);
         painter.add(theme::vgradient(rect, Color32::from_rgb(0x36, 0x36, 0x36), Color32::from_rgb(0x1c, 0x1c, 0x1c)));
-        let step = 32.0;
-        let o = if st.mode_3d { Vec2::ZERO } else { cams.world_2d_to_screen(Vec2::ZERO) / ppp };
-        let dot = Color32::from_rgba_unmultiplied(255, 255, 255, 22);
-        let mut y = rect.top() + o.y.rem_euclid(step);
-        while y < rect.bottom() {
-            let mut x = rect.left() + o.x.rem_euclid(step);
-            while x < rect.right() {
-                painter.circle_filled(Pos2::new(x, y), 1.0, dot);
-                x += step;
-            }
-            y += step;
-        }
     }
     let problems = paint_list(ui, rs, &mut st.renderer, textures, &st.vfs, rect, &list, &cams, &overlay);
+    if !playing {
+        compass(ui, rect, st.mode_3d, &cams);
+    }
     for p in problems {
         st.log(gex_script::LogKind::Error, p);
     }
@@ -809,5 +816,56 @@ pub fn paint_fade(ui: &egui::Ui, rect: Rect, c: [f32; 4]) {
     if c[3] > 0.0 {
         let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
         ui.painter().with_clip_rect(rect).rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(to(c[0]), to(c[1]), to(c[2]), to(c[3])));
+    }
+}
+
+/// The little see-through cube in the view's corner: which way X, Y and Z point, and which
+/// side of the world you're looking at.
+fn compass(ui: &egui::Ui, view: Rect, mode_3d: bool, cams: &Cameras) {
+    let p = ui.painter_at(view);
+    let c = Pos2::new(view.right() - 58.0, view.top() + 62.0);
+    let font = egui::FontId::proportional(10.0);
+    let axis_colors = [Color32::from_rgb(0xf9, 0x26, 0x72), Color32::from_rgb(0xa6, 0xe2, 0x2e), Color32::from_rgb(0x66, 0xd9, 0xef)];
+    if !mode_3d {
+        // 2D: x goes right, y goes down.
+        let o = c + egui::vec2(-18.0, -18.0);
+        for (d, name, col) in [(egui::vec2(36.0, 0.0), "X", axis_colors[0]), (egui::vec2(0.0, 36.0), "Y", axis_colors[1])] {
+            p.arrow(o, d, egui::Stroke::new(1.5, col));
+            p.text(o + d * 1.28, egui::Align2::CENTER_CENTER, name, font.clone(), col);
+        }
+        return;
+    }
+    let f = (cams.focus - cams.eye).normalize_or_zero();
+    let right = f.cross(Vec3::Y).normalize_or_zero();
+    let up = right.cross(f);
+    let h = 20.0;
+    let flat = |v: Vec3| c + egui::vec2(v.dot(right), -v.dot(up)) * h;
+    // Faces: the way they face, their name, and two directions across them.
+    let faces = [
+        (Vec3::X, "Right", Vec3::Y, Vec3::Z),
+        (Vec3::NEG_X, "Left", Vec3::Y, Vec3::Z),
+        (Vec3::Y, "Top", Vec3::X, Vec3::Z),
+        (Vec3::NEG_Y, "Bottom", Vec3::X, Vec3::Z),
+        (Vec3::Z, "Front", Vec3::X, Vec3::Y),
+        (Vec3::NEG_Z, "Back", Vec3::X, Vec3::Y),
+    ];
+    let mut order: Vec<usize> = (0..6).collect();
+    order.sort_by(|a, b| faces[*b].0.dot(f).total_cmp(&faces[*a].0.dot(f)));
+    let edge = egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 70));
+    for i in order {
+        let (n, name, a, b) = faces[i];
+        let facing = -n.dot(f);
+        let quad: Vec<Pos2> = [a + b, a - b, -a - b, -a + b].iter().map(|k| flat(n + *k)).collect();
+        let fill = if facing > 0.0 { 26 + (facing * 34.0) as u8 } else { 10 };
+        p.add(egui::Shape::convex_polygon(quad, Color32::from_rgba_unmultiplied(255, 255, 255, fill), edge));
+        if facing > 0.35 {
+            p.text(flat(n), egui::Align2::CENTER_CENTER, name, font.clone(), Color32::from_rgba_unmultiplied(255, 255, 255, (110.0 + facing * 145.0) as u8));
+        }
+    }
+    // The axes, from the cube's low corner like the ones on a selected object.
+    let o = Vec3::splat(-1.0);
+    for (d, name, col) in [(Vec3::X, "X", axis_colors[0]), (Vec3::Y, "Y", axis_colors[1]), (Vec3::Z, "Z", axis_colors[2])] {
+        p.line_segment([flat(o), flat(o + d * 2.6)], egui::Stroke::new(1.5, col));
+        p.text(flat(o + d * 3.0), egui::Align2::CENTER_CENTER, name, font.clone(), col);
     }
 }
