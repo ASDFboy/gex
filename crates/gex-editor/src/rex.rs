@@ -46,27 +46,117 @@ pub struct Rex {
     project: std::path::PathBuf,
     /// Files may have changed: the editor should read them again.
     pub reload: bool,
+    /// Where Claude Code is, once found.
+    program: Option<std::path::PathBuf>,
+    /// It wasn't found: the panel asks where it is.
+    ask_path: bool,
+    path_input: String,
 }
 
 impl Default for Rex {
     fn default() -> Self {
-        Rex { open: false, lines: Vec::new(), input: String::new(), can_edit: false, session: None, running: None, project: Default::default(), reload: false }
+        Rex { open: false, lines: Vec::new(), input: String::new(), can_edit: false, session: None, running: None, project: Default::default(), reload: false, program: None, ask_path: false, path_input: String::new() }
     }
 }
 
-/// The `claude` program, started so that it works whether it's a .exe or a .cmd on Windows,
-/// without a console window flashing up.
-fn claude() -> Command {
+/// Where a path override for the `claude` program is kept, for installs REX can't find.
+fn override_file() -> std::path::PathBuf {
+    crate::state::config_dir().join("claude_path.txt")
+}
+
+/// Finds the `claude` program. The editor's own PATH can be out of date (programs started
+/// before Claude Code was installed keep the old one) or lack what a terminal's profile adds,
+/// so this also looks where the installers put it and at the PATH Windows has on record.
+fn find_claude() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    if let Some(p) = std::fs::read_to_string(override_file()).ok().map(|s| PathBuf::from(s.trim().trim_matches('"'))).filter(|p| p.is_file()) {
+        return Some(p);
+    }
+    let names: &[&str] = if cfg!(windows) { &["claude.exe", "claude.cmd", "claude.bat"] } else { &["claude"] };
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    dirs.push(home.join(".local").join("bin"));
+    dirs.push(home.join(".claude").join("local"));
+    dirs.push(home.join(".claude").join("bin"));
+    #[cfg(windows)]
+    {
+        for v in ["APPDATA", "LOCALAPPDATA"] {
+            if let Some(d) = std::env::var_os(v).map(PathBuf::from) {
+                dirs.push(d.join("npm"));
+                dirs.push(d.join("Programs").join("claude"));
+                dirs.push(d.join("Programs").join("Claude Code"));
+                dirs.push(d.join("Microsoft").join("WinGet").join("Links"));
+                dirs.push(d.join("pnpm"));
+            }
+        }
+        dirs.push(home.join(".bun").join("bin"));
+        dirs.push(home.join("scoop").join("shims"));
+        // The PATH on record for this user and the machine, which may be newer than ours.
+        use std::os::windows::process::CommandExt;
+        for key in [r"HKCU\Environment", r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment"] {
+            let out = Command::new("reg").args(["query", key, "/v", "Path"]).creation_flags(0x0800_0000).output();
+            if let Ok(o) = out {
+                let text = String::from_utf8_lossy(&o.stdout).to_string();
+                if let Some(value) = text.lines().find_map(|l| l.split_once("REG_EXPAND_SZ").or_else(|| l.split_once("REG_SZ")).map(|x| x.1.trim().to_string())) {
+                    for d in value.split(';').filter(|d| !d.trim().is_empty()) {
+                        let d = expand_percent(d.trim());
+                        dirs.push(PathBuf::from(d));
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(home.join(".npm-global").join("bin"));
+    }
+    dirs.iter().flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
+}
+
+/// Fills in %NAME% parts of a Windows path from the environment.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn expand_percent(s: &str) -> String {
+    let mut out = String::new();
+    let mut parts = s.split('%');
+    out.push_str(parts.next().unwrap_or(""));
+    // Odd pieces are names between two percent signs; a last unpaired one is kept as text.
+    let rest: Vec<&str> = parts.collect();
+    let mut i = 0;
+    while i < rest.len() {
+        if i + 1 < rest.len() {
+            out.push_str(&std::env::var(rest[i]).unwrap_or_default());
+            out.push_str(rest[i + 1]);
+            i += 2;
+        } else {
+            out.push('%');
+            out.push_str(rest[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The command that runs Claude Code: the program itself, or through `cmd` when it's a
+/// .cmd / .bat on Windows; never with a console window flashing up.
+fn claude(at: &std::path::Path) -> Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let mut c = Command::new("cmd");
-        c.args(["/C", "claude"]);
+        let script = at.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+        let mut c = if script {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(at);
+            c
+        } else {
+            Command::new(at)
+        };
         c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         c
     }
     #[cfg(not(windows))]
-    Command::new("claude")
+    Command::new(at)
 }
 
 /// What REX is told about where it is, ahead of the first question.
@@ -110,8 +200,17 @@ impl Rex {
             prompt.push_str(")\n\n");
         }
         prompt.push_str(&ask);
+        let ask_again = ask.clone();
         self.lines.push(Line::You(ask));
-        let mut cmd = claude();
+        let Some(at) = self.program.clone().filter(|p| p.is_file()).or_else(find_claude) else {
+            self.lines.push(Line::Problem("REX works through Claude Code, and can't find it on this computer.\n\nIf it's installed, paste the full path of its program below (in a terminal, `where claude` on Windows or `which claude` elsewhere shows it). Otherwise install Claude Code and run `claude` once to sign in.".into()));
+            self.ask_path = true;
+            self.input = ask_again;
+            return;
+        };
+        self.program = Some(at.clone());
+        self.ask_path = false;
+        let mut cmd = claude(&at);
         cmd.current_dir(&st.project.dir).args(["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", if self.can_edit { "acceptEdits" } else { "plan" }]);
         if let Some(s) = &self.session {
             cmd.args(["--resume", s]);
@@ -274,7 +373,7 @@ impl Rex {
                 });
             });
             ui.add_space(4.0);
-            let input_h = 96.0;
+            let input_h = if self.ask_path { 124.0 } else { 96.0 };
             egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).max_height((ui.available_height() - input_h).max(40.0)).show(ui, |ui| {
                 if self.lines.is_empty() {
                     ui.label(RichText::new("Ask about GEX or your project, or tell me what to make.").color(INK));
@@ -320,7 +419,24 @@ impl Rex {
                 }
             });
             ui.add_space(4.0);
-            let r = ui.add(egui::TextEdit::multiline(&mut self.input).hint_text("Ask REX… (Enter sends, Shift+Enter: new line)").desired_rows(2).desired_width(f32::INFINITY).text_color(Color32::WHITE));
+            if self.ask_path {
+                ui.horizontal(|ui| {
+                    let r = ui.add(egui::TextEdit::singleline(&mut self.path_input).hint_text(RichText::new("path to claude").color(Color32::from_rgb(0xc8, 0x9a, 0x6a))).desired_width(ui.available_width() - 50.0).text_color(Color32::WHITE));
+                    if ui.button(RichText::new("Use").color(Color32::WHITE)).clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                        let p = std::path::PathBuf::from(self.path_input.trim().trim_matches('"'));
+                        if p.is_file() {
+                            let _ = std::fs::create_dir_all(crate::state::config_dir());
+                            let _ = std::fs::write(override_file(), p.to_string_lossy().as_bytes());
+                            self.program = Some(p);
+                            self.ask_path = false;
+                            self.lines.push(Line::Did("found Claude Code: ask again".into()));
+                        } else {
+                            self.lines.push(Line::Problem(format!("There's no file at {}", p.display())));
+                        }
+                    }
+                });
+            }
+            let r = ui.add(egui::TextEdit::multiline(&mut self.input).hint_text(RichText::new("Ask REX… (Enter sends, Shift+Enter: new line)").color(Color32::from_rgb(0xc8, 0x9a, 0x6a))).desired_rows(2).desired_width(f32::INFINITY).text_color(Color32::WHITE));
             let enter = r.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             ui.horizontal(|ui| {
                 if self.running.is_some() {
@@ -333,5 +449,16 @@ impl Rex {
                 ui.checkbox(&mut self.can_edit, RichText::new("May change files").color(INK)).tip("Off: REX only reads the project and answers.\nOn: it can also create and change blueprints and scripts in this project. Everything is saved before it starts, and the editor shows its changes when it's done.");
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn percent_names_are_filled_in() {
+        std::env::set_var("GEX_TEST_HOME", "C:\\Users\\me");
+        assert_eq!(super::expand_percent("%GEX_TEST_HOME%\\.local\\bin"), "C:\\Users\\me\\.local\\bin");
+        assert_eq!(super::expand_percent("C:\\plain"), "C:\\plain");
+        assert_eq!(super::expand_percent("50% off"), "50% off");
     }
 }
