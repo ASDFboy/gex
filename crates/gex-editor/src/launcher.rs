@@ -75,7 +75,7 @@ fn load() -> Vec<Entry> {
     state::recent_projects()
         .into_iter()
         .map(|dir| {
-            let used = [dir.join(".gex").join("workspace.ron"), dir.join(PROJECT_FILE)].iter().filter_map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok()).max();
+            let used = [dir.join(".gex").join("layout.ron"), dir.join(PROJECT_FILE)].iter().filter_map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok()).max();
             Entry { name: Project::peek(&dir).map(|c| c.name), dir, used }
         })
         .collect()

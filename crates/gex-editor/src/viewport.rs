@@ -685,8 +685,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         }
     }
     if !game_cam {
-        // While editing, what's behind the blueprint is the workspace's gradient, a shade
-        // lighter: the view is drawn see-through over it.
+        // While editing, what's behind the blueprint is a plain gradient: the view is drawn see-through over it.
         list.clear = [0.0; 4];
         let painter = ui.painter_at(rect);
         painter.add(theme::vgradient(rect, Color32::from_rgb(0x36, 0x36, 0x36), Color32::from_rgb(0x1c, 0x1c, 0x1c)));
@@ -838,34 +837,63 @@ fn compass(ui: &egui::Ui, view: Rect, mode_3d: bool, cams: &Cameras) {
     let f = (cams.focus - cams.eye).normalize_or_zero();
     let right = f.cross(Vec3::Y).normalize_or_zero();
     let up = right.cross(f);
-    let h = 20.0;
+    let h = 24.0;
+    let c = Pos2::new(view.right() - 70.0, view.top() + 72.0);
     let flat = |v: Vec3| c + egui::vec2(v.dot(right), -v.dot(up)) * h;
-    // Faces: the way they face, their name, and two directions across them.
+    // A solid cube, seen the way the camera looks: each side that faces you is drawn, lit
+    // from above, with its name written on it (lying on the side, turning with it).
+    // Faces: the way they face, their name, and the name's "right" and "up" on the face.
     let faces = [
-        (Vec3::X, "Right", Vec3::Y, Vec3::Z),
-        (Vec3::NEG_X, "Left", Vec3::Y, Vec3::Z),
-        (Vec3::Y, "Top", Vec3::X, Vec3::Z),
+        (Vec3::X, "Right", Vec3::NEG_Z, Vec3::Y),
+        (Vec3::NEG_X, "Left", Vec3::Z, Vec3::Y),
+        (Vec3::Y, "Top", Vec3::X, Vec3::NEG_Z),
         (Vec3::NEG_Y, "Bottom", Vec3::X, Vec3::Z),
         (Vec3::Z, "Front", Vec3::X, Vec3::Y),
-        (Vec3::NEG_Z, "Back", Vec3::X, Vec3::Y),
+        (Vec3::NEG_Z, "Back", Vec3::NEG_X, Vec3::Y),
     ];
-    let mut order: Vec<usize> = (0..6).collect();
-    order.sort_by(|a, b| faces[*b].0.dot(f).total_cmp(&faces[*a].0.dot(f)));
-    let edge = egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 70));
-    for i in order {
-        let (n, name, a, b) = faces[i];
-        let facing = -n.dot(f);
-        let quad: Vec<Pos2> = [a + b, a - b, -a - b, -a + b].iter().map(|k| flat(n + *k)).collect();
-        let fill = if facing > 0.0 { 26 + (facing * 34.0) as u8 } else { 10 };
-        p.add(egui::Shape::convex_polygon(quad, Color32::from_rgba_unmultiplied(255, 255, 255, fill), edge));
-        if facing > 0.35 {
-            p.text(flat(n), egui::Align2::CENTER_CENTER, name, font.clone(), Color32::from_rgba_unmultiplied(255, 255, 255, (110.0 + facing * 145.0) as u8));
+    // The axes, out of the cube's sides: those pointing away are drawn first (behind it).
+    let axes = [(Vec3::X, "X", axis_colors[0]), (Vec3::Y, "Y", axis_colors[1]), (Vec3::Z, "Z", axis_colors[2])];
+    let axis = |d: Vec3, name: &str, col: Color32| {
+        if d.dot(f).abs() < 0.95 {
+            p.line_segment([flat(d), flat(d * 1.75)], egui::Stroke::new(2.0, col));
+            p.text(flat(d * 2.05), egui::Align2::CENTER_CENTER, name, font.clone(), col);
+        }
+    };
+    for (d, name, col) in axes {
+        if d.dot(f) > 0.0 {
+            axis(d, name, col);
         }
     }
-    // The axes, from the cube's low corner like the ones on a selected object.
-    let o = Vec3::splat(-1.0);
-    for (d, name, col) in [(Vec3::X, "X", axis_colors[0]), (Vec3::Y, "Y", axis_colors[1]), (Vec3::Z, "Z", axis_colors[2])] {
-        p.line_segment([flat(o), flat(o + d * 2.6)], egui::Stroke::new(1.5, col));
-        p.text(flat(o + d * 3.0), egui::Align2::CENTER_CENTER, name, font.clone(), col);
+    let atlas = ui.ctx().fonts(|f| f.font_image_size());
+    let edge = egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 120));
+    for (n, name, a, b) in faces {
+        let facing = -n.dot(f);
+        if facing <= 0.02 {
+            continue;
+        }
+        let quad: Vec<Pos2> = [a + b, a - b, -a - b, -a + b].iter().map(|k| flat(n + *k)).collect();
+        let light = (0.62 + 0.30 * n.y + 0.10 * n.z - 0.06 * n.x).clamp(0.3, 1.0);
+        let g = (light * 235.0) as u8;
+        p.add(egui::Shape::convex_polygon(quad, Color32::from_rgba_unmultiplied(g, g, (g as f32 * 1.04).min(255.0) as u8, 225), edge));
+        // The name: the text's own triangles, laid onto the side.
+        let galley = p.layout_no_wrap(name.to_string(), egui::FontId::proportional(22.0), Color32::from_rgb(0x18, 0x18, 0x1c));
+        let size = galley.size();
+        let k = 1.5 / size.x.max(52.0);
+        let mut mesh = egui::Mesh::default();
+        for row in &galley.rows {
+            let base = mesh.vertices.len() as u32;
+            for v in &row.row.visuals.mesh.vertices {
+                let q = row.pos + v.pos.to_vec2();
+                let at = n * 1.001 + a * ((q.x - size.x / 2.0) * k) - b * ((q.y - size.y / 2.0) * k);
+                mesh.vertices.push(egui::epaint::Vertex { pos: flat(at), uv: Pos2::new(v.uv.x / atlas[0] as f32, v.uv.y / atlas[1] as f32), color: Color32::from_rgba_unmultiplied(0x18, 0x18, 0x1c, (facing.min(1.0) * 400.0).min(255.0) as u8) });
+            }
+            mesh.indices.extend(row.row.visuals.mesh.indices.iter().map(|i| base + i));
+        }
+        p.add(egui::Shape::mesh(mesh));
+    }
+    for (d, name, col) in axes {
+        if d.dot(f) <= 0.0 {
+            axis(d, name, col);
+        }
     }
 }

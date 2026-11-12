@@ -352,9 +352,8 @@ fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: ObjectId) {
         ui.horizontal(|ui| {
             drag(ui, &mut t.position.x, speed, "x ");
             drag(ui, &mut t.position.y, speed, "y ");
-            if !flat {
-                drag(ui, &mut t.position.z, speed, "z ");
-            }
+            // In 2D, z is the drawing order: higher draws on top.
+            drag(ui, &mut t.position.z, speed, "z ");
         });
         ui.end_row();
         ui.label("Rotation");
@@ -977,8 +976,8 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
     if in_project {
         r.context_menu(|ui| { crate::theme::fade_in(ui);
             if e.name.ends_with(".jblueprint") {
-                if ui.button("Open").tip("Its objects, properties and events, as a window in the workspace").clicked() {
-                    st.open_windows.push(e.path.clone());
+                if ui.button("Open").tip("Opens the blueprint in a tab of its own").clicked() {
+                    st.open_blueprint(&e.path);
                     ui.close();
                 }
                 if ui.button("Open in its own tab").tip("The blueprint view, to place and arrange things in it").clicked() {
@@ -1134,7 +1133,7 @@ fn asset_interact(ui: &egui::Ui, st: &mut EditorState, r: &egui::Response, path:
     asset_context_menu(r, st, &gex_assets::vfs::Entry { name: name.to_string(), path: path.to_string(), is_dir: false }, in_project);
     if r.double_clicked() && in_project && st.playing.is_none() {
         if name.ends_with(".jblueprint") {
-            st.open_windows.push(path.to_string());
+            st.open_blueprint(path);
         } else if [".jlb", ".txt", ".vmt", ".wgsl", ".json", ".md"].iter().any(|x| name.ends_with(x)) {
             st.open_script(path, None);
         }

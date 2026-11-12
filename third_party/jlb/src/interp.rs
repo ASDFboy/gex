@@ -57,6 +57,8 @@ pub struct Interp {
     pub debug_input: Option<std::sync::mpsc::Receiver<String>>,
     /// How many TRY blocks are running, so the debugger knows whether an error will be caught.
     pub try_depth: usize,
+    /// Variables made with GLOBAL, shared by every file of the program (read as GLOBAL.name).
+    pub shared: HashMap<Rc<str>, Slot>,
     imported: HashSet<PathBuf>,
     loaded: HashMap<PathBuf, Value>,
     /// Tasks (see tasks.rs): empty until the first START. Task 0 is the program itself.
@@ -404,6 +406,7 @@ impl Interp {
             debug: None,
             debug_input: None,
             try_depth: 0,
+            shared: HashMap::new(),
             imported: HashSet::new(),
             loaded: HashMap::new(),
             tasks: Vec::new(),
@@ -684,6 +687,9 @@ impl Interp {
     }
 
     fn lookup_var(&self, name: &str) -> Option<Slot> {
+        if let Some(g) = name.strip_prefix("GLOBAL.") {
+            return self.shared.get(g).cloned();
+        }
         let f = self.frame();
         for s in f.scopes.iter().rev() {
             if let Some(x) = s.get(name) {
@@ -695,6 +701,10 @@ impl Interp {
     }
 
     fn create_var(&mut self, name: Rc<str>, s: Slot) {
+        if let Some(g) = name.strip_prefix("GLOBAL.") {
+            self.shared.insert(Rc::from(g), s);
+            return;
+        }
         let f = self.frame_mut();
         if f.func.is_some() {
             f.scopes[0].insert(name, s);
@@ -714,6 +724,9 @@ impl Interp {
     /// A name of the running function (its locals, FOR and FAIL names), or, outside
     /// functions, any name. Inside a function, outside names are only read.
     fn lookup_own(&self, name: &str) -> Option<Slot> {
+        if name.starts_with("GLOBAL.") {
+            return self.lookup_var(name);
+        }
         let f = self.frame();
         if f.func.is_none() {
             return self.lookup_var(name);
@@ -867,6 +880,30 @@ impl Interp {
 
     fn exec_global(&mut self, k: &StmtKind) -> R<()> {
         let env = self.frame().env.clone();
+        // A GLOBAL variable is one variable for the whole program: a file naming it for the
+        // first time joins the one that's there, or puts its own in for the others.
+        let name = match k {
+            StmtKind::Expr(Expr::Var(n)) | StmtKind::Assign(Expr::Var(n), _, _) => Some(n.clone()),
+            _ => None,
+        };
+        if let Some(n) = &name {
+            if env.borrow().get(n).is_none() {
+                if let Some(s) = self.shared.get(n).cloned() {
+                    env.borrow_mut().insert(n.clone(), s);
+                }
+            }
+        }
+        let r = self.exec_global_in(&env, k);
+        if let Some(n) = name {
+            if let Some(s) = env.borrow().get(&n).cloned() {
+                self.shared.insert(n, s);
+            }
+        }
+        r
+    }
+
+    fn exec_global_in(&mut self, env: &Env, k: &StmtKind) -> R<()> {
+        let env = env.clone();
         match k {
             StmtKind::Typed(ty, inner) => self.exec_typed(ty, inner, true),
             // GLOBAL name by itself: the outside name, made with NULL if it has no value yet.

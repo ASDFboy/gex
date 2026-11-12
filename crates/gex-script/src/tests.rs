@@ -916,6 +916,25 @@ fn dollar_variables_are_set_per_instance() {
 }
 
 #[test]
+fn global_variables_are_shared_by_every_script() {
+    let blueprint = r#"(root: (name: "Root", kind: Some(Object2D), scripts: ["res://a.jlb"], children: [
+        (name: "B", kind: Some(Sprite2D), scripts: ["res://b.jlb"]),
+        (name: "C", kind: Some(Sprite2D), scripts: ["res://b.jlb"]),
+    ]))"#;
+    let a = "GLOBAL score = 10\nDEF on_step(dt) {\n    x = GLOBAL.score + GLOBAL.bonus\n}\n";
+    let b = "DEF on_create() {\n    GLOBAL.score += 1\n    GLOBAL.bonus = 100\n}\n";
+    let p = project("globals", &[("blueprints/main.jblueprint", blueprint), ("a.jlb", a), ("b.jlb", b)]);
+    let mut g = Game::from_blueprint(p, "res://blueprints/main.jblueprint", None).unwrap();
+    for _ in 0..3 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    }
+    let errors: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errors.is_empty(), "{:#?}", errors);
+    let t = g.tree();
+    assert_eq!(t.objects[t.root.unwrap()].transform.position.x, 112.0);
+}
+
+#[test]
 fn properties_can_be_named_without_self() {
     let blueprint = r#"(root: (name: "Root", kind: Some(Object2D), children: [
         (name: "A", kind: Some(Sprite2D), scripts: ["res://mover.jlb"], props: {"speed": Num(60.0), "hits": Num(0.0)}),

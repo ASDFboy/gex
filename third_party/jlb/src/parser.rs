@@ -200,6 +200,8 @@ impl Parser {
                     let name = self.expect_name("a function name")?;
                     StmtKind::Global(Box::new(StmtKind::FuncDef(self.func_rest(Some(name))?)))
                 }
+                // GLOBAL.score: the program-wide variable, used like any other name.
+                "GLOBAL" if matches!(self.peek_at(1), Tok::Op(".")) => self.expr_or_assign()?,
                 "GLOBAL" => {
                     self.advance();
                     let inner = if self.is_kw("DEF") && matches!(self.peek_at(1), Tok::Name(_)) {
@@ -630,6 +632,13 @@ impl Parser {
             Tok::Name(n) => {
                 self.advance();
                 Ok(Expr::Var(n))
+            }
+            // GLOBAL.name: a variable made with GLOBAL, from any file of the program.
+            Tok::Kw("GLOBAL") if matches!(self.peek_at(1), Tok::Op(".")) && matches!(self.peek_at(2), Tok::Name(_)) => {
+                self.advance();
+                self.advance();
+                let name = self.expect_name("a name")?;
+                Ok(Expr::Var(Rc::from(format!("GLOBAL.{}", name).as_str())))
             }
             Tok::Op("(") => {
                 self.advance();

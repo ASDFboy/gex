@@ -188,7 +188,7 @@ pub struct EditorApp {
     pads: crate::gamepad::Pads,
     /// The window holds and hides the mouse for the game right now.
     cursor_locked: bool,
-    /// The GameMaker-style layout (workspaces and blueprint tabs) of the open project.
+    /// The layout (a tab per open blueprint) of the open project.
     ws: crate::workspace::Layout,
     /// Use the older docked layout instead.
     classic: bool,
@@ -276,10 +276,11 @@ impl EditorApp {
                 let mut st = EditorState::new(p);
                 st.load_asset_colors();
                 // The blueprint opened at start doesn't take over the tab that was showing.
-                if !self.ws.tabs.iter().any(|t| matches!(t, crate::workspace::TopTab::Blueprint(r) if Some(r) == st.blueprint_res.as_ref())) {
-                    if let Some(r) = &st.blueprint_res {
-                        self.ws.tabs.push(crate::workspace::TopTab::Blueprint(r.clone()));
+                if let Some(r) = &st.blueprint_res {
+                    if !self.ws.tabs.contains(r) {
+                        self.ws.tabs.push(r.clone());
                     }
+                    self.ws.active = self.ws.tabs.iter().position(|t| t == r).unwrap_or(0);
                 }
                 self.ws.last_blueprint = st.blueprint_res.clone();
                 self.st = Some(st);
@@ -418,7 +419,7 @@ impl EditorApp {
                 }
                 ui.separator();
                 let mut classic = self.classic;
-                if ui.checkbox(&mut classic, "Classic docked layout").tip("Panels docked around one blueprint view, instead of workspaces and blueprint tabs").changed() {
+                if ui.checkbox(&mut classic, "Classic docked layout").tip("Panels docked around one blueprint view, instead of a tab per blueprint").changed() {
                     self.classic = classic;
                     if classic {
                         let _ = std::fs::create_dir_all(state::config_dir());
@@ -1095,14 +1096,8 @@ impl eframe::App for EditorApp {
                     }
                 }
             }
-            // Script tabs to open / close (the workspace layout opens its own windows).
+            // Script tabs to open / close (the tabbed layout opens its own script windows).
             let requests = if self.classic { std::mem::take(&mut st.open_requests) } else { Vec::new() };
-            if self.classic {
-                // The classic layout has no blueprint windows: opening a blueprint edits it.
-                for r in std::mem::take(&mut st.open_windows) {
-                    st.open_blueprint(&r);
-                }
-            }
             for r in requests {
                 let t = Tab::Script(r);
                 match self.dock.find_tab(&t) {

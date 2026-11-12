@@ -76,7 +76,7 @@ pub fn kind(k: ObjectKind) -> &'static str {
         Sprite3D => "image",
         Label3D => "text_uppercase",
         Particles3D => "asterisk_orange",
-        Environment => "weather_cloudy",
+        Environment => "world",
     }
 }
 
@@ -85,7 +85,7 @@ pub fn file(name: &str) -> &'static str {
     let n = name.to_ascii_lowercase();
     let ends = |l: &[&str]| l.iter().any(|e| n.ends_with(e));
     if ends(&[".jblueprint"]) {
-        "layout_content"
+        "plugin"
     } else if ends(&[".jlb"]) {
         "script"
     } else if ends(&[".wav", ".mp3", ".ogg", ".flac"]) {
@@ -96,7 +96,11 @@ pub fn file(name: &str) -> &'static str {
         "picture"
     } else if ends(&[".ttf", ".otf"]) {
         "font"
-    } else if ends(&[".wgsl", ".json", ".vmt"]) {
+    } else if ends(&[".wgsl"]) {
+        "rainbow"
+    } else if ends(&[".vmt"]) {
+        "page_paintbrush"
+    } else if ends(&[".json"]) {
         "page_white_code"
     } else if ends(&[".txt", ".md"]) {
         "page_white_text"

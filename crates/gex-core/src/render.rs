@@ -427,7 +427,10 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
             continue;
         }
         let n = &tree.objects[id];
-        let model = tree.global_matrix(id);
+        let mut model = tree.global_matrix(id);
+        // 2D things are flat: their z (with their parents') is the order they draw in,
+        // higher on top.
+        let z = if n.kind.is_2d() { std::mem::take(&mut model.w_axis.z) } else { 0.0 };
         let blend = Blend::from_name(n.text("blend"));
         let pixel = filter_of(n);
         let lit = n.prop("lit").is_none_or(|v| v.as_bool());
@@ -442,7 +445,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 pixel,
                 lit,
                 texture: n.text("texture").to_string(),
-                layer: n.num("layer", 0.0) as f32,
+                layer: n.num("layer", 0.0) as f32 + z,
                 region: {
                     let (h, v) = (n.num("hframes", 1.0).max(1.0) as u32, n.num("vframes", 1.0).max(1.0) as u32);
                     if h * v > 1 { Region::Frame { h, v, frame: n.num("frame", 0.0).max(0.0) as u32 } } else { Region::Whole }
@@ -456,7 +459,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
                 let tex = n.text("tileset").to_string();
                 let color = tinted(tree, id, n.color("color"));
-                let layer = n.num("layer", -5.0) as f32;
+                let layer = n.num("layer", -5.0) as f32 + z;
                 let parallax = Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32);
                 for (r, row) in grid.iter().enumerate() {
                     for (c, tile) in row.iter().enumerate() {
@@ -497,7 +500,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 text: n.text("text").to_string(),
                 size: n.num("size", 16.0) as f32,
                 color: tinted(tree, id, n.color("color")),
-                layer: n.num("layer", 10.0) as f32,
+                layer: n.num("layer", 10.0) as f32 + z,
                 font: n.text("font").to_string(),
             }),
             ObjectKind::Collider2D => out.colliders.push(Rect2D {

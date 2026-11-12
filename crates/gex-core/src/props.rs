@@ -93,7 +93,7 @@ pub fn info(kind: ObjectKind, k: &str) -> PropInfo {
         (_, "shader") => p(&[], None, "A .wgsl file with a custom material function (see docs/SHADERS.md)."),
         (_, "color") => p(&[], None, "Its color (multiplies the texture, if there is one)."),
         (_, "texture") => p(&[], None, "An image file. Drag one in from the Assets panel."),
-        (_, "layer") if kind.is_2d() && !matches!(kind, Body2D | Collider2D) => p(&[], None, "Drawing order: higher layers draw on top."),
+        (_, "layer") if kind.is_2d() && !matches!(kind, Body2D | Collider2D) => p(&[], None, "Drawing order: higher layers draw on top. Added to the object's z (Position), which does the same and carries to its children."),
         (_, "anchor") => p(ANCHOR, None, "Which corner or edge of the game window its position counts from."),
         (_, "align") => p(&["left", "center", "right"], None, "How the text lines up."),
         // ---- lights ----

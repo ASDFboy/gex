@@ -123,8 +123,6 @@ pub struct EditorState {
     pub scripts: HashMap<String, Script>,
     /// Scripts the dock should open as tabs.
     pub open_requests: Vec<String>,
-    /// Blueprints to open as windows in the workspace.
-    pub open_windows: Vec<String>,
     pub playing: Option<Playing>,
     /// The game built and running in a window of its own (the Build button).
     pub build: Option<Build>,
@@ -207,7 +205,6 @@ impl EditorState {
             logs: Vec::new(),
             scripts: HashMap::new(),
             open_requests: Vec::new(),
-            open_windows: Vec::new(),
             playing: None,
             build: None,
             view_anchors: Default::default(),

@@ -23,7 +23,7 @@ DEF on_collide_start(other) {
 
 | Entry | Meaning |
 |---|---|
-| `self.x`, `self.y`, `self.z` | position (2D: pixels, y down; 3D: metres, y up) |
+| `self.x`, `self.y`, `self.z` | position (2D: pixels, y down, and z is the drawing order: higher draws on top; 3D: metres, y up) |
 | `self.rotation` | 2D rotation in degrees (same as `rotation_z`); 3D also has `rotation_x`, `rotation_y` |
 | `self.scale_x`, `self.scale_y`, `self.scale_z` | scale |
 | `self.visible`, `self.name` | |
@@ -53,6 +53,23 @@ DEF on_step(dt) {
 So inside a function, giving a value to a name the object has changes the object; write
 `LOCAL` for a throwaway variable that happens to share a property's name. Only properties the
 object actually has are found this way (`self.anything` still reads NULL for one it hasn't).
+
+## Variables for the whole game: `GLOBAL`
+
+A variable made with `GLOBAL` is one variable for the whole game. Every script can use it as
+`GLOBAL.name`, whichever object made it:
+
+```
+GLOBAL score = 0              >> in any script: makes it (or joins the one already there)
+
+DEF on_collide_start(other) {
+	GLOBAL.score += 1         >> in any other script
+	SET("Hud", "text", "Score " + GLOBAL.score)
+}
+```
+
+`GLOBAL.name = value` also works without declaring it first. A `GLOBAL.name` nobody has set
+yet isn't defined. Globals start over each time the game runs.
 
 ## Variables set per instance: `$name`
 
