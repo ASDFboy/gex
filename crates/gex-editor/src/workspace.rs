@@ -380,7 +380,10 @@ fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &
     }
     let glass = egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(6.0);
     egui::Panel::left("blueprint tab side").resizable(true).default_size(290.0).frame(glass).show(ui, |ui| {
-        egui::Panel::bottom("blueprint tab inspector").resizable(true).default_size(ui.available_height() * 0.6).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
+        // (Kept from covering the object list when the column gets shorter, as when the
+        // console opens.)
+        let room = ui.available_height();
+        egui::Panel::bottom("blueprint tab inspector").resizable(true).default_size(room * 0.6).size_range(80.0..=(room - 90.0).max(80.0)).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
             let id = egui::Id::new("blueprint tab side events");
             let mut page: usize = ui.data(|d| d.get_temp(id).unwrap_or(0));
             theme::tab_row(ui, &["Properties", "Events"], &mut page);
@@ -484,6 +487,10 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
     drop(owner);
     let mut close = None;
     let mut swap = None;
+    // Where windows already are (to put new ones beside them, not on top), and where the
+    // objects are (not to cover them).
+    let mut taken: Vec<egui::Rect> = groups.iter().filter_map(|(key, _)| ctx.memory(|m| m.area_rect(egui::Id::new(("blueprint script", key))))).collect();
+    let marks: Vec<Pos2> = st.view_anchors.values().map(|a| Pos2::new(a[0], a[1])).collect();
     for (gi, (key, members)) in groups.iter().enumerate() {
         let at_id = egui::Id::new(("blueprint script at", key));
         let mut showing: String = ctx.data(|d| d.get_temp(at_id)).filter(|r| members.iter().any(|i| list[*i] == *r)).unwrap_or_else(|| list[members[0]].clone());
@@ -499,14 +506,33 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
         let rows = text.lines().count().max(6) as f32 + 2.0;
         let size = Vec2::new((cols * 8.5 + 110.0).clamp(380.0, (view.width() - 24.0).max(380.0)), (rows * 17.5 + 78.0).clamp(200.0, (view.height() - 24.0).max(200.0)));
         let k = (gi % 6) as f32 * 26.0;
-        let pos = match members.iter().find_map(|i| st.view_anchors.get(&list[*i])) {
-            Some(a) => {
-                let x = if a[0] + 70.0 + size.x <= view.right() { a[0] + 70.0 } else { a[0] - 70.0 - size.x };
-                Pos2::new(x.clamp(view.left(), (view.right() - size.x).max(view.left())), (a[1] - 30.0).clamp(view.top(), (view.bottom() - size.y).max(view.top())))
-            }
-            None => Pos2::new(view.right() - size.x - 20.0 - k, view.top() + 130.0 + k),
-        };
         let win_id = egui::Id::new(("blueprint script", key));
+        let new = ctx.memory(|m| m.area_rect(win_id)).is_none();
+        let fit = |p: Pos2| Pos2::new(p.x.clamp(view.left(), (view.right() - size.x).max(view.left())), p.y.clamp(view.top(), (view.bottom() - size.y).max(view.top())));
+        let pos = match members.iter().find_map(|i| st.view_anchors.get(&list[*i])) {
+            // Beside its object: right, left, below or above, whichever covers the least of the
+            // other windows and objects.
+            Some(a) => {
+                let a = Pos2::new(a[0], a[1]);
+                let tries = [
+                    Pos2::new(a.x + 70.0, a.y - 30.0),
+                    Pos2::new(a.x - 70.0 - size.x, a.y - 30.0),
+                    Pos2::new(a.x - size.x / 2.0, a.y + 60.0),
+                    Pos2::new(a.x - size.x / 2.0, a.y - 60.0 - size.y),
+                ];
+                let cost = |p: Pos2| {
+                    let r = egui::Rect::from_min_size(p, size);
+                    let over: f32 = taken.iter().map(|t| t.intersect(r)).filter(|i| i.is_positive()).map(|i| i.area()).sum();
+                    let covers = marks.iter().filter(|m| r.expand(12.0).contains(**m)).count() as f32;
+                    over + covers * 1e6
+                };
+                tries.into_iter().map(fit).min_by(|p, q| cost(*p).total_cmp(&cost(*q))).unwrap()
+            }
+            None => fit(Pos2::new(view.right() - size.x - 20.0 - k, view.top() + 130.0 + k)),
+        };
+        if new {
+            taken.push(egui::Rect::from_min_size(pos, size));
+        }
         let shown = egui::Window::new(key.as_str())
             .id(win_id)
             .title_bar(false)
@@ -552,9 +578,19 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
         // The wire to the object.
         if let Some(a) = members.iter().find_map(|i| st.view_anchors.get(&list[*i])) {
             let from = Pos2::new(a[0], a[1]);
-            let left = from.x <= r.center().x;
-            let to = Pos2::new(if left { r.left() } else { r.right() }, r.top() + 14.0);
-            let bend = Vec2::new(((to.x - from.x).abs() * 0.5).max(30.0) * if left { 1.0 } else { -1.0 }, 0.0);
+            // Into the side facing the object: left or right when it's beside the window, the
+            // top or bottom edge when it's above or below it.
+            let (to, out) = if from.x < r.left() {
+                (Pos2::new(r.left(), r.top() + 14.0), Vec2::X)
+            } else if from.x > r.right() {
+                (Pos2::new(r.right(), r.top() + 14.0), -Vec2::X)
+            } else if from.y < r.top() {
+                (Pos2::new(from.x.clamp(r.left() + 20.0, r.right() - 20.0), r.top()), Vec2::Y)
+            } else {
+                (Pos2::new(from.x.clamp(r.left() + 20.0, r.right() - 20.0), r.bottom()), -Vec2::Y)
+            };
+            let reach = if out.x != 0.0 { (to.x - from.x).abs() } else { (to.y - from.y).abs() };
+            let bend = out * (reach * 0.5).max(30.0);
             if !r.contains(from) {
                 wires.add(egui::epaint::CubicBezierShape::from_points_stroke([from, from + bend, to - bend, to], false, Color32::TRANSPARENT, Stroke::new(1.5, Color32::from_gray(0x90))));
                 wires.circle_filled(from, 3.0, Color32::from_gray(0x90));

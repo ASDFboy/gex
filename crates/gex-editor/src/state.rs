@@ -1521,7 +1521,7 @@ impl EditorState {
             if let Some(res) = self.project.dir.canonicalize().ok().and_then(|d| std::path::Path::new(&at.file).strip_prefix(&d).ok().map(|r| format!("res://{}", r.to_string_lossy().replace('\\', "/")))) {
                 self.open_script(&res, Some(at.line));
             }
-            self.status = format!("paused at line {}: F8 continue, F10 step, F5 stop", at.line);
+            self.status = format!("paused at line {}: F8 continue, F10 step, F5 or F6 stop", at.line);
             return;
         }
         let Some(p) = &mut self.playing else { return };
