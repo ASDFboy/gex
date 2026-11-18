@@ -161,6 +161,7 @@ impl ObjectKind {
                 ("color", Color([1.0, 1.0, 1.0, 1.0])),
                 ("centered", Bool(true)),
                 ("solid", Bool(false)),
+                ("solid_shape", Text("box".into())),
                 ("layer", Num(0.0)),
                 ("hframes", Num(1.0)),
                 ("vframes", Num(1.0)),

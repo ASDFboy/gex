@@ -1146,7 +1146,7 @@ impl Game {
                     let a = m.transform_point3(jle_vec(start as f32 * tw, r as f32 * th));
                     let b = m.transform_point3(jle_vec(c as f32 * tw, (r + 1) as f32 * th));
                     let (lo, hi) = (a.min(b).truncate(), a.max(b).truncate());
-                    boxes.push(crate::physics::StaticBox2 { owner: id, center: (lo + hi) / 2.0, half: (hi - lo) / 2.0 });
+                    boxes.push(crate::physics::StaticBox2 { owner: id, center: (lo + hi) / 2.0, half: (hi - lo) / 2.0, angle: 0.0, circle: false });
                 }
             }
             st.tile_boxes.insert(id, (key, boxes[first..].to_vec()));
@@ -1158,14 +1158,18 @@ impl Game {
             if n.kind != ObjectKind::Sprite2D || !n.prop("solid").is_some_and(|v| v.as_bool()) || !st.tree.visible_in_tree(id) {
                 continue;
             }
+            // The sprite's own box (or circle), turned and scaled the way it is.
             let m = st.tree.global_matrix(id);
             let (w, h) = (n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
-            let o = if n.prop("centered").is_none_or(|v| v.as_bool()) { glam::Vec2::new(-w / 2.0, -h / 2.0) } else { glam::Vec2::ZERO };
-            let corners = [o, o + glam::Vec2::new(w, 0.0), o + glam::Vec2::new(0.0, h), o + glam::Vec2::new(w, h)].map(|c| m.transform_point3(c.extend(0.0)).truncate());
-            let lo = corners.iter().fold(corners[0], |a, c| a.min(*c));
-            let hi = corners.iter().fold(corners[0], |a, c| a.max(*c));
-            if (hi - lo).min_element() > 0.0 {
-                boxes.push(crate::physics::StaticBox2 { owner: id, center: (lo + hi) / 2.0, half: (hi - lo) / 2.0 });
+            let mid = if n.prop("centered").is_none_or(|v| v.as_bool()) { glam::Vec2::ZERO } else { glam::Vec2::new(w / 2.0, h / 2.0) };
+            let center = m.transform_point3(mid.extend(0.0)).truncate();
+            let (sx, sy) = (m.x_axis.truncate().length(), m.y_axis.truncate().length());
+            let half = glam::Vec2::new(w * sx / 2.0, h * sy / 2.0);
+            let angle = m.x_axis.y.atan2(m.x_axis.x);
+            let circle = n.text("solid_shape") == "circle";
+            let half = if circle { glam::Vec2::splat(half.max_element()) } else { half };
+            if half.min_element() > 0.0 {
+                boxes.push(crate::physics::StaticBox2 { owner: id, center, half, angle, circle });
             }
         }
         st.physics.statics_2d = boxes;

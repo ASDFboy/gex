@@ -65,7 +65,8 @@ pub fn info(kind: ObjectKind, k: &str) -> PropInfo {
     let p = |choices: &'static [&'static str], range: Option<(f64, f64)>, doc: &'static str| PropInfo { group: g, choices, range, doc };
     match (kind, k) {
         // ---- look, shared ----
-        (Sprite2D, "solid") => p(&[], None, "A wall the size of the sprite: bodies and MOVE stop at it, and on_collide events reach it. No Collider2D needed. It stays put (it isn't pushed or knocked about)."),
+        (Sprite2D, "solid_shape") => p(&["box", "circle"], None, "The shape of a solid sprite: its box (turning with it), or a circle as wide as the sprite."),
+        (Sprite2D, "solid") => p(&[], None, "A wall the size of the sprite (turned and scaled with it; solid_shape: box or circle): bodies and MOVE stop at it, and on_collide events reach it. No Collider2D needed. It stays put (it isn't pushed or knocked about)."),
         (_, "opacity") => p(&[], Some((0.0, 1.0)), "How see-through it is: 1 solid, 0 invisible (it still runs and collides)."),
         (_, "blend") => p(BLEND, None, "How it mixes with what's behind: normal covers, add glows (fire, lasers), multiply darkens (shadows, stains)."),
         (_, "filter") => p(FILTER, None, "Texture filtering: pixel keeps texels blocky, smooth blends them, project uses the project's setting."),

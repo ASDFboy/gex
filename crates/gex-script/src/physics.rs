@@ -87,6 +87,10 @@ pub struct StaticBox2 {
     pub owner: ObjectId,
     pub center: Vec2,
     pub half: Vec2,
+    /// Turned this far (radians; tiles: 0).
+    pub angle: f32,
+    /// A circle of radius `half.x` instead of a box.
+    pub circle: bool,
 }
 
 /// A static triangle mesh in world space (Mesh3D objects with collision on): owner, vertices, triangles.
@@ -310,8 +314,10 @@ impl World2 {
             self.world.remove_collider(c);
         }
         for b in boxes {
-            let c = d2::ColliderBuilder::cuboid(b.half.x / PIXELS_PER_METRE, b.half.y / PIXELS_PER_METRE)
+            let shape = if b.circle { d2::ColliderBuilder::ball(b.half.x / PIXELS_PER_METRE) } else { d2::ColliderBuilder::cuboid(b.half.x / PIXELS_PER_METRE, b.half.y / PIXELS_PER_METRE) };
+            let c = shape
                 .translation(d2::Vector::new(b.center.x, b.center.y) / PIXELS_PER_METRE)
+                .rotation(b.angle)
                 .collision_groups(groups2((1, u32::MAX)))
                 .friction(0.5);
             let h = self.world.insert_collider(c, None);

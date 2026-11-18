@@ -189,6 +189,31 @@ fn solid_sprites_key_pair_axis_and_bare_object_names() {
 }
 
 #[test]
+fn solid_sprites_turn_and_can_be_circles() {
+    // A ray going right at a height beside the shape's corner: a turned square (a diamond)
+    // and a circle are hit later than their bounding box would be.
+    let run = |wall: &str, y: f32| -> f64 {
+        let blueprint = format!(r#"(root: (name: "R", kind: Some(Object2D), scripts: ["res://ray.jlb"], children: [{}]))"#, wall);
+        let ray = format!("DEF on_step(dt) {{\n    hit = RAYCAST(400, {}, 1, 0, 500)\n    IF hit !== NULL {{ self.hit_x = hit.x }}\n}}\n", y);
+        let p = project("solid_turn", &[("main.jblueprint", &blueprint), ("ray.jlb", &ray)]);
+        let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+        for _ in 0..3 {
+            g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        }
+        let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+        assert!(errs.is_empty(), "{:#?}", errs);
+        let t = g.tree();
+        t.objects[t.root.unwrap()].props.get("hit_x").and_then(|v| v.as_f64()).unwrap_or(-1.0)
+    };
+    let diamond = r#"(name: "W", kind: Some(Sprite2D), transform: Some((position: (600.0, 400.0, 0.0), rotation: (0.0, 0.0, 45.0))), props: {"solid": Bool(true), "width": Num(40.0), "height": Num(40.0)})"#;
+    let x = run(diamond, 380.0);
+    assert!((x - 591.7).abs() < 1.0, "diamond hit at {}", x);
+    let circle = r#"(name: "W", kind: Some(Sprite2D), transform: Some((position: (600.0, 400.0, 0.0))), props: {"solid": Bool(true), "solid_shape": Text("circle"), "width": Num(40.0), "height": Num(40.0)})"#;
+    let x = run(circle, 386.0);
+    assert!((x - 585.7).abs() < 1.0, "circle hit at {}", x);
+}
+
+#[test]
 fn import_and_load_work_on_every_object() {
     let blueprint = r#"(root: (name: "R", kind: Some(Object2D), children: [
         (name: "A", kind: Some(Sprite2D), scripts: ["res://user.jlb"]),

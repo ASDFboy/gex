@@ -21,7 +21,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | Kind | What it is | Main properties |
 |---|---|---|
 | `Object2D` | an empty 2D object to group others | |
-| `Sprite2D` | a picture or a colored rectangle | `texture`, `width`, `height`, `color` (tint), `layer` (higher draws on top), `flip_h`, `flip_v`, `parallax_x/y`, `repeat_x/y` |
+| `Sprite2D` | a picture or a colored rectangle | `texture`, `width`, `height`, `color` (tint), `layer` (higher draws on top), `flip_h`, `flip_v`, `parallax_x/y`, `repeat_x/y`, `solid` (a wall its own size, turning with it) and `solid_shape` (box or circle) |
 | `Label2D` | text in the world (moves with the camera) | `text`, `size`, `color`, `font` |
 | `Camera2D` | what the game shows; follows its parent | `zoom`, `current`, `smoothing` (0 = locked on, higher = catches up faster), `limits` with `limit_left/top/right/bottom` (the view stays inside), `ambient` (below white darkens the blueprint for Light2Ds) |
 | `Light2D` | a light in a dark 2D blueprint | `color`, `energy`, `radius`, `texture` (a soft glow if empty) |

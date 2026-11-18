@@ -434,6 +434,13 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
         let blend = Blend::from_name(n.text("blend"));
         let pixel = filter_of(n);
         let lit = n.prop("lit").is_none_or(|v| v.as_bool());
+        // A solid sprite's wall, outlined with the colliders.
+        if n.kind == ObjectKind::Sprite2D && n.prop("solid").is_some_and(|v| v.as_bool()) {
+            let (w, h) = (n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
+            let mid = if n.prop("centered").is_none_or(|v| v.as_bool()) { Vec2::ZERO } else { Vec2::new(w / 2.0, h / 2.0) };
+            let size = if n.text("solid_shape") == "circle" { Vec2::splat(w.max(h)) } else { Vec2::new(w, h) };
+            out.colliders.push(Rect2D { object: id, model: model * Mat4::from_translation(mid.extend(0.0)), size });
+        }
         match n.kind {
             ObjectKind::Sprite2D => out.sprites.push(Sprite {
                 object: id,
