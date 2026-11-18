@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::state::EditorState;
 use crate::{code, panels, theme, viewport};
 
+/// The tab of the Command reference (the other tabs are blueprints).
+pub const COMMANDS_TAB: &str = "gex:commands";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Layout {
@@ -227,8 +230,19 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
         // Again: the Assets and Console panels above may have just opened a blueprint.
         follow_blueprint(l, st);
-        // Scripts asked for open in the tab that's showing.
-        let tab = l.tabs.get(l.active).cloned().unwrap_or_default();
+        // The Command reference asked for (View → Commands, F1): its tab.
+        if std::mem::take(&mut st.commands_open) {
+            l.open_blueprint_tab(COMMANDS_TAB);
+        }
+        // Scripts asked for open in the tab that's showing (from the Commands tab: in the
+        // blueprint being edited, which comes back).
+        let mut tab = l.tabs.get(l.active).cloned().unwrap_or_default();
+        if tab == COMMANDS_TAB && !st.open_requests.is_empty() {
+            if let Some(b) = st.blueprint_res.clone() {
+                l.open_blueprint_tab(&b);
+                tab = b;
+            }
+        }
         for r in std::mem::take(&mut st.open_requests) {
             let list = l.scripts.entry(tab.clone()).or_default();
             if !list.contains(&r) {
@@ -237,10 +251,18 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
             l.script_focus = Some(r);
         }
         let view = match l.tabs.get(l.active).cloned() {
+            Some(t) if t == COMMANDS_TAB => {
+                let r = ui.available_rect_before_wrap();
+                ui.painter().rect_filled(r, 0.0, theme::glass_fill());
+                let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink(8.0)).id_salt("commands tab"));
+                crate::tools::command_page(&mut inner, st);
+                ui.allocate_rect(r, Sense::hover());
+                r
+            }
             Some(res) => blueprint_tab(ui, l, st, &res, rs, viewport_tex),
             None => nothing_open(ui, st),
         };
-        if st.playing.is_none() {
+        if st.playing.is_none() && tab != COMMANDS_TAB {
             script_windows(ui, l, st, &tab, view);
         }
         tool_windows(ui, l, st, view);
@@ -256,8 +278,8 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
     ui.add_space(8.0);
     let mut rects = Vec::new();
     for (i, r) in l.tabs.iter().enumerate() {
-        let label = r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jblueprint");
-        let out = theme::tab(ui, label, i == l.active, true, st.is_dirty(r));
+        let label = if r == COMMANDS_TAB { "Commands" } else { r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jblueprint") };
+        let out = theme::tab(ui, label, i == l.active, true, r != COMMANDS_TAB && st.is_dirty(r));
         crate::docs::mark(ui, out.resp.rect, "ui:tabs");
         rects.push(out.resp.rect);
         if out.close || out.resp.middle_clicked() {
@@ -276,7 +298,7 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
     }
     // While playing, the game stays in its own tab (other blueprints open once it stops).
     if let (Some(i), true) = (activate, st.playing.is_some()) {
-        if l.tabs.get(i) != st.blueprint_res.as_ref() {
+        if l.tabs.get(i) != st.blueprint_res.as_ref() && l.tabs[i] != COMMANDS_TAB {
             st.status = "stop the game to switch blueprints".into();
             activate = None;
         }
@@ -284,8 +306,23 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
     if let Some(i) = activate {
         l.active = i;
         let r = l.tabs[i].clone();
-        st.open_blueprint(&r);
-        l.last_blueprint = st.blueprint_res.clone();
+        if r != COMMANDS_TAB {
+            st.open_blueprint(&r);
+            l.last_blueprint = st.blueprint_res.clone();
+        }
+    }
+    // The Commands tab just closes (also while playing).
+    if let Some(i) = close.filter(|i| l.tabs[*i] == COMMANDS_TAB) {
+        l.tabs.remove(i);
+        if l.active > i {
+            l.active -= 1;
+        }
+        l.active = l.active.min(l.tabs.len().saturating_sub(1));
+        if let Some(r) = l.tabs.get(l.active).cloned().filter(|r| r != COMMANDS_TAB && st.playing.is_none()) {
+            st.open_blueprint(&r);
+            l.last_blueprint = st.blueprint_res.clone();
+        }
+        return;
     }
     if let Some(i) = close.filter(|_| st.playing.is_none()) {
         let r = l.tabs.remove(i);
@@ -302,7 +339,9 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
             l.active -= 1;
         }
         l.active = l.active.min(l.tabs.len().saturating_sub(1));
-        if let Some(r) = l.tabs.get(l.active).cloned() {
+        // (Landing on the Commands tab, the blueprint being edited is another open one.)
+        let next = l.tabs.get(l.active).filter(|t| *t != COMMANDS_TAB).or_else(|| l.tabs.iter().find(|t| *t != COMMANDS_TAB)).cloned();
+        if let Some(r) = next {
             st.open_blueprint(&r);
         }
         l.last_blueprint = st.blueprint_res.clone();

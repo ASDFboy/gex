@@ -278,9 +278,12 @@ impl EditorApp {
                 // The blueprint opened at start doesn't take over the tab that was showing.
                 // The tabs (and the one showing) are as they were left; a project opened for
                 // the first time shows its first blueprint.
-                self.ws.tabs.retain(|t| st.project.res_to_path(t).is_some_and(|p| p.is_file()));
+                use crate::workspace::COMMANDS_TAB;
+                self.ws.tabs.retain(|t| t == COMMANDS_TAB || st.project.res_to_path(t).is_some_and(|p| p.is_file()));
                 self.ws.active = self.ws.active.min(self.ws.tabs.len().saturating_sub(1));
-                match self.ws.tabs.get(self.ws.active).cloned() {
+                // The blueprint to edit: the tab showing, or (on the Commands tab) another one.
+                let showing = self.ws.tabs.get(self.ws.active).filter(|t| *t != COMMANDS_TAB).or_else(|| self.ws.tabs.iter().find(|t| *t != COMMANDS_TAB)).cloned();
+                match showing {
                     Some(t) => st.open_blueprint(&t),
                     None => self.ws.tabs.extend(st.blueprint_res.clone()),
                 }
@@ -558,10 +561,13 @@ impl EditorApp {
         }
         // F1 anywhere (outside a script, where F1 on a command opens its page): the Command reference.
         if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
-            st.commands_open = !st.commands_open;
+            // (The classic layout's window toggles; the tabbed layout shows the Commands tab.)
+            st.commands_open = !self.classic || !st.commands_open;
         }
         crate::tools::search_window(ctx, st);
-        crate::tools::command_window(ctx, st);
+        if self.classic {
+            crate::tools::command_window(ctx, st);
+        }
         if std::mem::take(&mut st.open_timeline) {
             if self.classic {
                 show_tab(&mut self.dock, Tab::Timeline);

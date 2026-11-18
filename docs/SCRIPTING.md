@@ -140,7 +140,7 @@ Files are `res://...` (your project) or `hl2://...` (a mounted Source game, see
 [HL2.md](HL2.md)).
 
 The script editor completes these as you type and shows each one's inputs. **View → Commands**
-(or **F1**) opens the Command reference: every command explained, with an example to copy, plus
+(or **F1**) opens the Command reference in a tab of its own: every command explained, with an example to copy, plus
 the events. F1 with the cursor on a command in a script opens that command's page.
 
 ### Objects and the tree

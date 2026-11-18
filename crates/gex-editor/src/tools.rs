@@ -208,20 +208,14 @@ mod tests {
     }
 }
 
-/// The Command reference (View → Commands, F1): every engine command with how to use it and
-/// an example, the events, and the basics. Searchable.
+/// The Command reference (View → Commands, F1) as a window (the classic layout; the tabbed
+/// one shows it in a tab): every engine command with how to use it and an example, the
+/// events, and the basics. Searchable.
 pub fn command_window(ctx: &egui::Context, st: &mut EditorState) {
-    use gex_script::command_guide::{BASICS, EVENTS, GROUPS, GUIDE};
     if !st.commands_open {
         return;
     }
     let mut open = true;
-    let id = egui::Id::new("command reference");
-    let (mut filter, mut pick): (String, String) = ctx.data(|d| d.get_temp(id)).unwrap_or_else(|| (String::new(), "Basics".into()));
-    if let Some(want) = st.commands_show.take() {
-        pick = want;
-        filter.clear();
-    }
     egui::Window::new("Commands")
         .open(&mut open)
         .collapsible(false)
@@ -232,109 +226,122 @@ pub fn command_window(ctx: &egui::Context, st: &mut EditorState) {
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             crate::theme::fade_in(ui);
-            egui::Panel::left("command list").resizable(true).default_size(230.0).min_size(160.0).show_inside(ui, |ui| {
-                let r = ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search commands").desired_width(f32::INFINITY));
-                if r.changed() {
-                    // The first match shows as you type.
-                    let f = filter.to_lowercase();
-                    if let Some(g) = GUIDE.iter().find(|g| !f.is_empty() && g.0.to_lowercase().contains(&f)) {
-                        pick = g.0.to_string();
-                    }
-                }
-                ui.add_space(4.0);
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    let f = filter.to_lowercase();
-                    let hit = |g: &(&str, &str, &str, &str)| {
-                        let summary = gex_script::commands::COMMANDS.iter().find(|c| c.0 == g.0).map_or("", |c| c.2);
-                        f.is_empty() || g.0.to_lowercase().contains(&f) || summary.to_lowercase().contains(&f) || g.2.to_lowercase().contains(&f)
-                    };
-                    if f.is_empty() {
-                        for page in ["Basics", "Events"] {
-                            if ui.selectable_label(pick == page, RichText::new(page).strong()).clicked() {
-                                pick = page.into();
-                            }
-                        }
-                    }
-                    for (group, _) in GROUPS {
-                        let cmds: Vec<_> = GUIDE.iter().filter(|g| g.1 == *group && hit(g)).collect();
-                        if cmds.is_empty() {
-                            continue;
-                        }
-                        ui.add_space(6.0);
-                        ui.label(RichText::new(group.to_uppercase()).small().color(crate::theme::TEXT_DIM));
-                        for g in cmds {
-                            if ui.selectable_label(pick == g.0, RichText::new(g.0).monospace()).clicked() {
-                                pick = g.0.to_string();
-                            }
-                        }
-                    }
-                });
-            });
-            egui::CentralPanel::default().show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt(&pick).show(ui, |ui| {
-                    ui.add_space(4.0);
-                    match pick.as_str() {
-                        "Basics" => {
-                            ui.heading("Using commands");
-                            ui.add_space(6.0);
-                            for para in BASICS.split("\n\n") {
-                                ui.label(para);
-                                ui.add_space(6.0);
-                            }
-                        }
-                        "Events" => {
-                            ui.heading("Events");
-                            ui.label(RichText::new("Functions with these names in a script are called by the engine. Add them with Events → Add event.").color(crate::theme::TEXT_DIM));
-                            ui.add_space(8.0);
-                            egui::Grid::new("events").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
-                                for (name, when) in EVENTS {
-                                    ui.label(RichText::new(*name).monospace().color(crate::theme::ACCENT));
-                                    ui.add(egui::Label::new(*when).wrap());
-                                    ui.end_row();
-                                }
-                            });
-                        }
-                        name => {
-                            let Some(g) = GUIDE.iter().find(|g| g.0 == name) else { return };
-                            let (inputs, summary) = gex_script::commands::COMMANDS.iter().find(|c| c.0 == name).map_or(("", ""), |c| (c.1, c.2));
-                            ui.label(RichText::new(format!("{}{}", g.0, inputs)).monospace().size(18.0).color(crate::theme::ACCENT));
-                            ui.label(RichText::new(summary).color(crate::theme::TEXT_DIM));
-                            ui.add_space(10.0);
-                            for para in g.2.split("\n\n") {
-                                ui.label(para);
-                                ui.add_space(6.0);
-                            }
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("EXAMPLE").small().color(crate::theme::TEXT_DIM));
-                                if ui.small_button("Copy").on_hover_text("Copies the example, to paste into a script").clicked() {
-                                    ui.ctx().copy_text(g.3.to_string());
-                                    st.status = format!("copied the {} example", g.0);
-                                }
-                            });
-                            egui::Frame::new().fill(Color32::from_rgb(0x12, 0x12, 0x12)).inner_margin(10.0).show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                let job = crate::code::highlight(&g.3.replace('\t', "    "), egui::FontId::monospace(14.0));
-                                ui.label(job);
-                            });
-                            // The others in its group, to wander on to.
-                            ui.add_space(12.0);
-                            ui.label(RichText::new(format!("MORE IN {}", g.1.to_uppercase())).small().color(crate::theme::TEXT_DIM));
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 14.0;
-                                for o in GUIDE.iter().filter(|o| o.1 == g.1 && o.0 != g.0) {
-                                    if ui.link(RichText::new(o.0).monospace()).clicked() {
-                                        pick = o.0.to_string();
-                                    }
-                                }
-                            });
-                        }
-                    }
-                });
-            });
+            command_page(ui, st);
         });
-    ctx.data_mut(|d| d.insert_temp(id, (filter, pick)));
     if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         st.commands_open = false;
     }
+}
+
+/// The Command reference's contents: the list of commands (searchable) on the left and the
+/// picked one's page. In a tab of its own, or in a window in the classic layout.
+pub fn command_page(ui: &mut egui::Ui, st: &mut EditorState) {
+    use gex_script::command_guide::{BASICS, EVENTS, GROUPS, GUIDE};
+    let id = egui::Id::new("command reference");
+    let (mut filter, mut pick): (String, String) = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| (String::new(), "Basics".into()));
+    if let Some(want) = st.commands_show.take() {
+        pick = want;
+        filter.clear();
+    }
+    egui::Panel::left("command list").resizable(true).default_size(230.0).min_size(160.0).show(ui, |ui| {
+        let r = ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search commands").desired_width(f32::INFINITY));
+        if r.changed() {
+            // The first match shows as you type.
+            let f = filter.to_lowercase();
+            if let Some(g) = GUIDE.iter().find(|g| !f.is_empty() && g.0.to_lowercase().contains(&f)) {
+                pick = g.0.to_string();
+            }
+        }
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            let f = filter.to_lowercase();
+            let hit = |g: &(&str, &str, &str, &str)| {
+                let summary = gex_script::commands::COMMANDS.iter().find(|c| c.0 == g.0).map_or("", |c| c.2);
+                f.is_empty() || g.0.to_lowercase().contains(&f) || summary.to_lowercase().contains(&f) || g.2.to_lowercase().contains(&f)
+            };
+            if f.is_empty() {
+                for page in ["Basics", "Events"] {
+                    if ui.selectable_label(pick == page, RichText::new(page).strong()).clicked() {
+                        pick = page.into();
+                    }
+                }
+            }
+            for (group, _) in GROUPS {
+                let cmds: Vec<_> = GUIDE.iter().filter(|g| g.1 == *group && hit(g)).collect();
+                if cmds.is_empty() {
+                    continue;
+                }
+                ui.add_space(6.0);
+                ui.label(RichText::new(group.to_uppercase()).small().color(crate::theme::TEXT_DIM));
+                for g in cmds {
+                    if ui.selectable_label(pick == g.0, RichText::new(g.0).monospace()).clicked() {
+                        pick = g.0.to_string();
+                    }
+                }
+            }
+        });
+    });
+    egui::CentralPanel::default().show(ui, |ui| {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt(&pick).show(ui, |ui| {
+            ui.add_space(4.0);
+            match pick.as_str() {
+                "Basics" => {
+                    ui.heading("Using commands");
+                    ui.add_space(6.0);
+                    for para in BASICS.split("\n\n") {
+                        ui.label(para);
+                        ui.add_space(6.0);
+                    }
+                }
+                "Events" => {
+                    ui.heading("Events");
+                    ui.label(RichText::new("Functions with these names in a script are called by the engine. Add them with Events → Add event.").color(crate::theme::TEXT_DIM));
+                    ui.add_space(8.0);
+                    egui::Grid::new("events").num_columns(2).spacing([16.0, 6.0]).striped(true).show(ui, |ui| {
+                        for (name, when) in EVENTS {
+                            ui.label(RichText::new(*name).monospace().color(crate::theme::ACCENT));
+                            ui.add(egui::Label::new(*when).wrap());
+                            ui.end_row();
+                        }
+                    });
+                }
+                name => {
+                    let Some(g) = GUIDE.iter().find(|g| g.0 == name) else { return };
+                    let (inputs, summary) = gex_script::commands::COMMANDS.iter().find(|c| c.0 == name).map_or(("", ""), |c| (c.1, c.2));
+                    ui.label(RichText::new(format!("{}{}", g.0, inputs)).monospace().size(18.0).color(crate::theme::ACCENT));
+                    ui.label(RichText::new(summary).color(crate::theme::TEXT_DIM));
+                    ui.add_space(10.0);
+                    for para in g.2.split("\n\n") {
+                        ui.label(para);
+                        ui.add_space(6.0);
+                    }
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("EXAMPLE").small().color(crate::theme::TEXT_DIM));
+                        if ui.small_button("Copy").on_hover_text("Copies the example, to paste into a script").clicked() {
+                            ui.ctx().copy_text(g.3.to_string());
+                            st.status = format!("copied the {} example", g.0);
+                        }
+                    });
+                    egui::Frame::new().fill(Color32::from_rgb(0x12, 0x12, 0x12)).inner_margin(10.0).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let job = crate::code::highlight(&g.3.replace('\t', "    "), egui::FontId::monospace(14.0));
+                        ui.label(job);
+                    });
+                    // The others in its group, to wander on to.
+                    ui.add_space(12.0);
+                    ui.label(RichText::new(format!("MORE IN {}", g.1.to_uppercase())).small().color(crate::theme::TEXT_DIM));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 14.0;
+                        for o in GUIDE.iter().filter(|o| o.1 == g.1 && o.0 != g.0) {
+                            if ui.link(RichText::new(o.0).monospace()).clicked() {
+                                pick = o.0.to_string();
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    });
+    ui.data_mut(|d| d.insert_temp(id, (filter, pick)));
 }
