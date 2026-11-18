@@ -1,7 +1,7 @@
 // Walks the syntax tree and runs it.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -59,8 +59,12 @@ pub struct Interp {
     pub try_depth: usize,
     /// Variables made with GLOBAL, shared by every file of the program (read as GLOBAL.name).
     pub shared: HashMap<Rc<str>, Slot>,
-    imported: HashSet<PathBuf>,
+    /// Files already IMPORTed, per file's variables (keyed by where they live; the weak link
+    /// tells a reused address from the one it was): each loaded file imports once.
+    imported: HashMap<(usize, PathBuf), std::rc::Weak<RefCell<OrdMap>>>,
     loaded: HashMap<PathBuf, Value>,
+    /// Files already read and parsed, with their size and change time when they were.
+    parsed: HashMap<PathBuf, (Option<SystemTime>, u64, Rc<Vec<Stmt>>, Rc<Source>)>,
     /// Tasks (see tasks.rs): empty until the first START. Task 0 is the program itself.
     pub tasks: Vec<crate::tasks::TaskRec>,
     pub baton: Option<std::sync::Arc<crate::tasks::Baton>>,
@@ -407,8 +411,9 @@ impl Interp {
             debug_input: None,
             try_depth: 0,
             shared: HashMap::new(),
-            imported: HashSet::new(),
+            imported: HashMap::new(),
             loaded: HashMap::new(),
+            parsed: HashMap::new(),
             tasks: Vec::new(),
             baton: None,
             current: 0,
@@ -436,7 +441,7 @@ impl Interp {
     pub fn run_main(&mut self, path: &Path) -> i32 {
         let env: Env = Rc::new(RefCell::new(OrdMap::new()));
         if let Ok(c) = path.canonicalize() {
-            self.imported.insert(c);
+            self.imported.insert((Rc::as_ptr(&env) as usize, c), Rc::downgrade(&env));
         }
         // When the program's own code ends, the tasks it started get to finish.
         let r = self.run_module(path, env).and_then(|_| self.finish_tasks()).and_then(|_| crate::graphics::finish(self));
@@ -519,7 +524,25 @@ impl Interp {
         }
     }
 
-    fn load_program(&mut self, path: &Path) -> R<(Vec<Stmt>, Rc<Source>)> {
+    /// A file's program: parsed once, again only when the file changes (a game loads the same
+    /// script for every object that has it).
+    fn load_program(&mut self, path: &Path) -> R<(Rc<Vec<Stmt>>, Rc<Source>)> {
+        let meta = std::fs::metadata(path).ok();
+        let stamp = (meta.as_ref().and_then(|m| m.modified().ok()), meta.as_ref().map_or(0, |m| m.len()));
+        if let Some((t, len, prog, src)) = self.parsed.get(path) {
+            if meta.is_some() && (*t, *len) == stamp {
+                return Ok((prog.clone(), src.clone()));
+            }
+        }
+        let (prog, src) = self.parse_file(path)?;
+        let prog = Rc::new(prog);
+        if meta.is_some() {
+            self.parsed.insert(path.to_path_buf(), (stamp.0, stamp.1, prog.clone(), src.clone()));
+        }
+        Ok((prog, src))
+    }
+
+    fn parse_file(&mut self, path: &Path) -> R<(Vec<Stmt>, Rc<Source>)> {
         let text = std::fs::read_to_string(path).map_err(|e| fault(format!("couldn't open {}: {}", path.display(), e)))?;
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -564,10 +587,12 @@ impl Interp {
 
     fn do_import(&mut self, p: &str) -> R<()> {
         let path = self.file_path(p)?;
-        if !self.imported.insert(path.clone()) {
+        let env = self.frame().env.clone();
+        let key = (Rc::as_ptr(&env) as usize, path.clone());
+        if self.imported.get(&key).and_then(|w| w.upgrade()).is_some_and(|e| Rc::ptr_eq(&e, &env)) {
             return Ok(());
         }
-        let env = self.frame().env.clone();
+        self.imported.insert(key, Rc::downgrade(&env));
         self.run_module(&path, env)
     }
 

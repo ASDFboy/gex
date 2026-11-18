@@ -189,6 +189,27 @@ fn solid_sprites_key_pair_axis_and_bare_object_names() {
 }
 
 #[test]
+fn import_and_load_work_on_every_object() {
+    let blueprint = r#"(root: (name: "R", kind: Some(Object2D), children: [
+        (name: "A", kind: Some(Sprite2D), scripts: ["res://user.jlb"]),
+        (name: "B", kind: Some(Sprite2D), scripts: ["res://user.jlb"]),
+    ]))"#;
+    let helpers = "DEF double(n) { RETURN n * 2 }\n";
+    let user = "IMPORT \"helpers.jlb\"\nLOAD \"helpers.jlb\"\nDEF on_create() {\n    self.a = double(21)\n    self.b = helpers.double(5)\n}\n";
+    let p = project("import", &[("main.jblueprint", blueprint), ("helpers.jlb", helpers), ("user.jlb", user)]);
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let t = g.tree();
+    for name in ["R/A", "R/B"] {
+        let o = &t.objects[t.find_path(None, name).unwrap()];
+        assert_eq!(o.props.get("a"), Some(&Variant::Num(42.0)), "{}", name);
+        assert_eq!(o.props.get("b"), Some(&Variant::Num(10.0)), "{}", name);
+    }
+}
+
+#[test]
 fn physics_3d_ball_rests_on_ground() {
     let blueprint = r#"(root: (name: "R", kind: Some(Object3D), children: [
         (name: "Ground", kind: Some(Body3D), props: {"body": Text("static"), "width": Num(20.0), "height": Num(1.0), "depth": Num(20.0)}),
@@ -1077,4 +1098,74 @@ fn projects_from_before_the_renaming_still_run() {
     g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
     let logs: Vec<String> = g.take_logs().into_iter().map(|l| l.text).collect();
     assert_eq!(logs, vec!["Root".to_string(), "res://scenes/other.jblueprint".to_string()], "{:?}", logs);
+}
+
+/// Timing, not a check: `cargo test --release -p gex-script bench_many -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn bench_many_objects() {
+    let mut kids = String::new();
+    for i in 0..std::env::var("BENCH_N").ok().and_then(|v| v.parse().ok()).unwrap_or(3000) {
+        kids += &format!("(name: \"S{}\", kind: Some(Sprite2D), transform: Some((position: ({}.0, {}.0, 0.0))), scripts: [\"res://mover.jlb\"]),\n", i, i % 800, i / 4);
+    }
+    let blueprint = format!("(root: (name: \"R\", kind: Some(Object2D), children: [(name: \"G\", kind: Some(Object2D), children: [{}])]))", kids);
+    let mover = "speed = 50\nDEF on_step(dt) {\n    x += speed * dt\n    IF x > 800 { x = 0 }\n}\n";
+    let p = project("bench", &[("main.jblueprint", &blueprint), ("mover.jlb", mover)]);
+    let t0 = std::time::Instant::now();
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    println!("load {:?}", t0.elapsed());
+    let t0 = std::time::Instant::now();
+    let frames: u32 = std::env::var("BENCH_F").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+    for _ in 0..frames {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    println!("60 frames {:?} ({:?}/frame)", t0.elapsed(), t0.elapsed() / 60);
+    let t0 = std::time::Instant::now();
+    for _ in 0..60 {
+        std::hint::black_box(gex_core::render::extract(&g.tree()));
+    }
+    println!("60 extracts {:?}", t0.elapsed());
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:?}", &errs[..errs.len().min(3)]);
+}
+
+/// Runs every blueprint of a project for a few seconds and lists the errors:
+/// `GEX_SWEEP=/path/to/project cargo test --release -p gex-script sweep -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn sweep_project_blueprints() {
+    let Ok(dir) = std::env::var("GEX_SWEEP") else { return };
+    let p = Project::open(std::path::Path::new(&dir)).unwrap();
+    let mut stack = vec![p.dir.clone()];
+    let mut files = Vec::new();
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let path = e.path();
+            if path.is_dir() && !e.file_name().to_string_lossy().starts_with('.') {
+                stack.push(path);
+            } else if path.extension().is_some_and(|x| x == "jblueprint") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let keys: Vec<HashSet<String>> = vec![HashSet::new(), ["right".to_string(), "space".to_string(), "d".to_string()].into(), ["left".to_string(), "up".to_string(), "w".to_string(), "mouse_left".to_string()].into()];
+    for f in files {
+        let res = format!("res://{}", f.strip_prefix(&p.dir).unwrap().to_string_lossy().replace('\\', "/"));
+        let t0 = std::time::Instant::now();
+        let mut g = match Game::from_blueprint(p.clone(), &res, None) {
+            Ok(g) => g,
+            Err(e) => {
+                println!("{}: LOAD {}", res, e);
+                continue;
+            }
+        };
+        let mut errs = Vec::new();
+        for i in 0..240 {
+            g.frame(1.0 / 60.0, keys[(i / 40) % 3].clone(), [400.0, 300.0], if i % 50 < 3 { ["mouse_left".to_string()].into() } else { HashSet::new() });
+            errs.extend(g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.lines().next().unwrap_or("").to_string()));
+        }
+        errs.dedup();
+        println!("{}: {:?} {}", res, t0.elapsed() / 240, if errs.is_empty() { "ok".to_string() } else { format!("{:?}", errs) });
+    }
 }

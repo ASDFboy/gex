@@ -76,6 +76,7 @@ and start it again.
 |---|---|
 | F5 | play the game from its main blueprint (again: stop) |
 | F6 | play the blueprint you're editing (again: stop) |
+| F1 | the Command reference (on a command in a script: its page) |
 | F8 / F10 | continue / step one line (paused at a breakpoint) |
 | Ctrl+S | save everything |
 | Ctrl+Z / Ctrl+Y | undo / redo |

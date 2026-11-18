@@ -123,8 +123,19 @@ pub fn as_f64(v: &Value) -> Option<f64> {
 /// A table with named entries, in order.
 pub fn named_table(entries: Vec<(&str, Value)>) -> Value {
     let mut t = Table::new();
+    t.named.reserve(entries.len());
     for (k, v) in entries {
         t.named.insert(Rc::from(k), new_slot(v));
+    }
+    Value::new_table(t)
+}
+
+/// The same, with names already made (shared between tables).
+pub fn named_table_rc(entries: Vec<(Rc<str>, Value)>) -> Value {
+    let mut t = Table::new();
+    t.named.reserve(entries.len());
+    for (k, v) in entries {
+        t.named.insert(k, new_slot(v));
     }
     Value::new_table(t)
 }

@@ -738,6 +738,10 @@ impl Number {
         match (self, o) {
             (Int(a), Int(b)) => a.cmp(b),
             (Float(a), Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+            // A whole number up to 2^53 is exactly a float, so comparing as floats is exact
+            // (and much quicker than the exact way below; `x > 800` is everywhere in games).
+            (Int(a), Float(b)) if a.unsigned_abs() <= 1 << 53 => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
+            (Float(a), Int(b)) if b.unsigned_abs() <= 1 << 53 => a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal),
             _ => {
                 let (an, a, ad) = self.exact_parts();
                 let (bn, b, bd) = o.exact_parts();

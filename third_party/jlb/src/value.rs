@@ -145,12 +145,54 @@ pub fn copy_val(v: Value) -> Value {
 #[derive(Default)]
 pub struct OrdMap {
     entries: Vec<(Rc<str>, Slot)>,
-    index: HashMap<Rc<str>, usize>,
+    index: HashMap<Rc<str>, usize, FastHash>,
+}
+
+/// A quick hash for names (FxHash): tables are made and looked into all the time, and the
+/// standard hash guards against attacks a script interpreter doesn't face.
+#[derive(Default, Clone, Copy)]
+pub struct FastHash;
+
+impl std::hash::BuildHasher for FastHash {
+    type Hasher = FxHasher;
+    fn build_hasher(&self) -> FxHasher {
+        FxHasher(0)
+    }
+}
+
+pub struct FxHasher(u64);
+
+impl std::hash::Hasher for FxHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+        let mut h = self.0;
+        let mut chunks = bytes.chunks_exact(8);
+        for c in &mut chunks {
+            h = (h.rotate_left(5) ^ u64::from_le_bytes(c.try_into().unwrap())).wrapping_mul(K);
+        }
+        for &b in chunks.remainder() {
+            h = (h.rotate_left(5) ^ b as u64).wrapping_mul(K);
+        }
+        self.0 = h;
+    }
+    fn write_u8(&mut self, b: u8) {
+        self.0 = (self.0.rotate_left(5) ^ b as u64).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.0 = (self.0.rotate_left(5) ^ n as u64).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
 }
 
 impl OrdMap {
     pub fn new() -> Self {
         Self::default()
+    }
+    pub fn reserve(&mut self, n: usize) {
+        self.entries.reserve(n);
+        self.index.reserve(n);
     }
     pub fn get(&self, k: &str) -> Option<&Slot> {
         self.index.get(k).map(|&i| &self.entries[i].1)

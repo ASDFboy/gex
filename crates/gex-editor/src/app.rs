@@ -414,6 +414,10 @@ impl EditorApp {
                 }
                 ui.separator();
                 ui.checkbox(&mut self.rex.open, "REX").tip("The assistant: answers questions about GEX and your project, and can make changes for you. It runs Claude Code with your own sign-in.");
+                if theme::menu_item(ui, "Commands", "F1").tip("Every engine command for scripts, explained, with examples; and the events.").clicked() {
+                    st.commands_open = true;
+                    ui.close();
+                }
                 if theme::menu_item(ui, "Find in files", "Ctrl+F").tip("Searches every script and blueprint in the project.").clicked() {
                     st.search.open = true;
                     st.search.focus = true;
@@ -552,7 +556,12 @@ impl EditorApp {
             st.search.open = true;
             st.search.focus = true;
         }
+        // F1 anywhere (outside a script, where F1 on a command opens its page): the Command reference.
+        if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
+            st.commands_open = !st.commands_open;
+        }
         crate::tools::search_window(ctx, st);
+        crate::tools::command_window(ctx, st);
         if std::mem::take(&mut st.open_timeline) {
             if self.classic {
                 show_tab(&mut self.dock, Tab::Timeline);

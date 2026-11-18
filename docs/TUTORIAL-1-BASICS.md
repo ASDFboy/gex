@@ -197,6 +197,7 @@ open it, right-click it → Open.
 |---|---|
 | F5 | play the game from its main blueprint (again: stop) |
 | F6 | play the blueprint you're editing (again: stop) |
+| F1 | the Command reference (on a command in a script: its page) |
 | Ctrl+S | save everything |
 | Ctrl+Z / Ctrl+Y | undo / redo |
 | Ctrl+C, Ctrl+V, Ctrl+D, Delete | copy, paste, duplicate, delete objects |

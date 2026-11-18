@@ -13,7 +13,7 @@ use std::sync::Arc;
 use gex_core::input::Input;
 use gex_core::project::Project;
 use gex_core::{blueprint, ObjectId, ObjectKind, BlueprintTree, Variant};
-use jlb::embed::{fault_location, fault_report, named_table, num};
+use jlb::embed::{fault_location, fault_report, num};
 use jlb::{Env, Fault, Interp, Value};
 
 use crate::commands::{self, EngineHost};
@@ -235,7 +235,11 @@ pub struct Game {
     scripts: HashMap<ObjectId, Vec<ScriptInst>>,
     physics_acc: f64,
     started: bool,
+    /// Per script file: its change stamp, its events and its $variables.
+    script_info: HashMap<PathBuf, ScriptInfoEntry>,
 }
+
+type ScriptInfoEntry = ((Option<std::time::SystemTime>, u64), Rc<(HashSet<String>, Vec<String>)>);
 
 impl Drop for Game {
     fn drop(&mut self) {
@@ -309,7 +313,8 @@ impl Game {
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
         it.host = Some(Box::new(EngineHost { st: st.clone() }));
         it.cancel = cancel;
-        Game { stats: FrameStats::default(), it, st, scripts: HashMap::new(), physics_acc: 0.0, started: false }
+        Game { stats: FrameStats::default(), it, st, scripts: HashMap::new(), physics_acc: 0.0,
+            script_info: HashMap::new(), started: false }
     }
 
     /// Loads a blueprint file as a fresh game.
@@ -487,13 +492,26 @@ impl Game {
             self.st.borrow_mut().log(LogKind::Error, format!("{} isn't a project path (scripts live in res://)", res));
             return;
         };
-        let handlers = scan_handlers(&path);
+        // What the file has (events, $variables): read once per file, not per object (SPAWN
+        // of a bullet happens often).
+        let meta = std::fs::metadata(&path).ok();
+        let stamp = (meta.as_ref().and_then(|m| m.modified().ok()), meta.as_ref().map_or(0, |m| m.len()));
+        let info = match self.script_info.get(&path) {
+            Some((s, info)) if meta.is_some() && *s == stamp => info.clone(),
+            _ => {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                let info = Rc::new((scan_handlers_text(&text), gex_core::object::script_vars(&text)));
+                self.script_info.insert(path.clone(), (stamp, info.clone()));
+                info
+            }
+        };
+        let handlers = info.0.clone();
         // $variables nobody gave this object a value for start at 0.
-        if let Ok(text) = std::fs::read_to_string(&path) {
+        {
             let mut st = self.st.borrow_mut();
             if let Some(n) = st.tree.objects.get_mut(id) {
-                for v in gex_core::object::script_vars(&text) {
-                    n.props.entry(v).or_insert(Variant::Num(0.0));
+                for v in &info.1 {
+                    n.props.entry(v.clone()).or_insert(Variant::Num(0.0));
                 }
             }
         }
@@ -611,49 +629,104 @@ impl Game {
     }
 
     /// The `self` table a script sees, and what it held (to tell what the script changed).
-    fn self_table(&self, id: ObjectId) -> (Value, HashMap<String, Variant>) {
+    fn self_table(&self, id: ObjectId) -> (Value, SelfSnap) {
+        self.self_table_reusing(id, None)
+    }
+
+    /// `self` for an object's script. `reuse`: the table the script had last time; when it
+    /// still has the same entries, they're refreshed in place instead of making a new table
+    /// (this runs for every event of every object, every frame).
+    fn self_table_reusing(&self, id: ObjectId, reuse: Option<Value>) -> (Value, SelfSnap) {
         let st = self.st.borrow();
-        let Some(n) = st.tree.get(id) else { return (Value::Null, HashMap::new()) };
+        let Some(n) = st.tree.get(id) else { return (Value::Null, Vec::new()) };
         let t = &n.transform;
-        let mut snap: Vec<(String, Variant)> = vec![
-            ("name".into(), Variant::Text(n.name.clone())),
-            ("x".into(), Variant::Num(t.position.x as f64)),
-            ("y".into(), Variant::Num(t.position.y as f64)),
-            ("z".into(), Variant::Num(t.position.z as f64)),
-            ("rotation".into(), Variant::Num(t.rotation.z as f64)),
-            ("rotation_x".into(), Variant::Num(t.rotation.x as f64)),
-            ("rotation_y".into(), Variant::Num(t.rotation.y as f64)),
-            ("scale_x".into(), Variant::Num(t.scale.x as f64)),
-            ("scale_y".into(), Variant::Num(t.scale.y as f64)),
-            ("scale_z".into(), Variant::Num(t.scale.z as f64)),
-            ("visible".into(), Variant::Bool(n.visible)),
+        let base: [(&str, Variant); 11] = [
+            ("name", Variant::Text(String::new())),
+            ("x", Variant::Num(t.position.x as f64)),
+            ("y", Variant::Num(t.position.y as f64)),
+            ("z", Variant::Num(t.position.z as f64)),
+            ("rotation", Variant::Num(t.rotation.z as f64)),
+            ("rotation_x", Variant::Num(t.rotation.x as f64)),
+            ("rotation_y", Variant::Num(t.rotation.y as f64)),
+            ("scale_x", Variant::Num(t.scale.x as f64)),
+            ("scale_y", Variant::Num(t.scale.y as f64)),
+            ("scale_z", Variant::Num(t.scale.z as f64)),
+            ("visible", Variant::Bool(n.visible)),
         ];
-        for (k, v) in &n.props {
-            snap.push((k.clone(), v.clone()));
+        let count = base.len() + n.props.len();
+        // The table from last time, if its entries are still these, in this order.
+        let old = match &reuse {
+            Some(Value::Table(rc, _)) if rc.named.len() == count + 2 => {
+                let e = rc.named.iter().as_slice();
+                let same = e[0].0.as_ref() == "id"
+                    && e[1].0.as_ref() == "kind"
+                    && base.iter().map(|b| b.0).chain(n.props.keys().map(|k| k.as_str())).zip(&e[2..]).all(|(k, (ek, _))| &**ek == k);
+                same.then_some(e)
+            }
+            _ => None,
+        };
+        // A value for a property: the one already in the table when it's the same text, so
+        // nothing new is made for text that didn't change.
+        let value = |i: usize, v: &Variant| -> Value {
+            if let (Some(e), Variant::Text(s) | Variant::Res(s)) = (old, v) {
+                if let Value::Text(t) = &*e[i + 2].1.borrow() {
+                    if **t == **s {
+                        return Value::Text(t.clone());
+                    }
+                }
+            }
+            to_value(v)
+        };
+        let mut snap: SelfSnap = Vec::with_capacity(count);
+        for (i, (k, v)) in base.iter().enumerate() {
+            let val = if i == 0 { value(0, &Variant::Text(n.name.clone())) } else { value(i, v) };
+            snap.push((key(k), val, None));
         }
-        let mut entries: Vec<(&str, Value)> = vec![("id", id_value(id)), ("kind", Value::text(n.kind.name()))];
-        for (k, v) in &snap {
-            entries.push((k.as_str(), to_value(v)));
+        for (j, (k, v)) in n.props.iter().enumerate() {
+            let val = value(base.len() + j, v);
+            let keep = matches!(val, Value::Table(..)).then(|| v.clone());
+            snap.push((key(k), val, keep));
         }
-        let table = named_table(entries);
-        (table, snap.into_iter().collect())
+        if let (Some(e), Some(table)) = (old, reuse.clone()) {
+            for (i, (_, v, _)) in snap.iter().enumerate() {
+                *e[i + 2].1.borrow_mut() = v.clone();
+            }
+            return (table, snap);
+        }
+        let mut entries: Vec<(Rc<str>, Value)> = Vec::with_capacity(count + 2);
+        entries.push((key("id"), id_value(id)));
+        entries.push((key("kind"), Value::text(n.kind.name())));
+        entries.extend(snap.iter().map(|(k, v, _)| (k.clone(), v.clone())));
+        (jlb::embed::named_table_rc(entries), snap)
     }
 
     /// Applies what a script changed in `self` back to the object.
-    fn read_self_back(&mut self, id: ObjectId, env: &Env, before: &HashMap<String, Variant>) {
+    fn read_self_back(&mut self, id: ObjectId, env: &Env, before: &SelfSnap) {
         let Some(Value::Table(t, _)) = Interp::env_get(env, "self") else { return };
         let mut st = self.st.borrow_mut();
         let Some(n) = st.tree.get_mut(id) else { return };
-        for (k, slot) in t.named.iter() {
+        for (i, (k, slot)) in t.named.iter().enumerate() {
             let k: &str = k;
             if k == "id" || k == "kind" {
                 continue;
             }
-            let like = before.get(k).or_else(|| n.props.get(k));
-            let Some(v) = to_variant(&slot.borrow(), like) else { continue };
-            if before.get(k) == Some(&v) {
-                continue;
-            }
+            // The table keeps the order it was made in, so the entry is usually at the same place.
+            let was = before.get(i.wrapping_sub(2)).filter(|b| &*b.0 == k).or_else(|| before.iter().find(|b| &*b.0 == k));
+            let now = slot.borrow();
+            let v = match was {
+                // Untouched: the same number, switch or piece of text that went in.
+                Some((_, put, None)) if same_value(&now, put) => continue,
+                Some((_, _, Some(keep))) => match to_variant(&now, Some(keep)) {
+                    Some(v) if v == *keep => continue,
+                    Some(v) => v,
+                    None => continue,
+                },
+                _ => match to_variant(&now, n.props.get(k)) {
+                    Some(v) => v,
+                    None => continue,
+                },
+            };
+            drop(now);
             let f = v.as_f64().unwrap_or(0.0) as f32;
             let tr = &mut n.transform;
             match k {
@@ -698,7 +771,8 @@ impl Game {
         if !f.is_func() {
             return None;
         }
-        let (me, before) = self.self_table(id);
+        let last = Interp::env_get(&env, "self");
+        let (me, before) = self.self_table_reusing(id, last);
         Interp::env_set(&env, "self", me);
         self.st.borrow_mut().current = Some(id);
         // Tasks this event STARTs belong to this object.
@@ -1571,4 +1645,35 @@ pub fn scan_handlers_text(text: &str) -> HashSet<String> {
 /// Where project files live, for tests and tools.
 pub fn project_at(dir: PathBuf) -> Result<Project, String> {
     Project::open(&dir)
+}
+
+/// What went into an object's `self` table: each name, the value put in, and for tables
+/// (which a script can change in place) the property they came from.
+type SelfSnap = Vec<(Rc<str>, Value, Option<Variant>)>;
+
+/// The same value as went in (a number equal, a switch equal, the very same text).
+fn same_value(now: &Value, put: &Value) -> bool {
+    match (now, put) {
+        (Value::Num(a), Value::Num(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Null, Value::Null) => true,
+        (Value::Text(a), Value::Text(b)) => Rc::ptr_eq(a, b) || a == b,
+        _ => false,
+    }
+}
+
+thread_local! {
+    static KEYS: RefCell<HashMap<String, Rc<str>>> = RefCell::new(HashMap::new());
+}
+
+/// A property name as a shared piece of text (made once per name).
+fn key(k: &str) -> Rc<str> {
+    KEYS.with(|m| {
+        if let Some(r) = m.borrow().get(k) {
+            return r.clone();
+        }
+        let r: Rc<str> = Rc::from(k);
+        m.borrow_mut().insert(k.to_string(), r.clone());
+        r
+    })
 }

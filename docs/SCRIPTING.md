@@ -139,7 +139,9 @@ Colors are tables `[r: 1, g: 0.5, b: 0, a: 1]` (0 to 1) or a hex text like `"#ff
 Files are `res://...` (your project) or `hl2://...` (a mounted Source game, see
 [HL2.md](HL2.md)).
 
-The script editor completes these as you type and shows each one's inputs.
+The script editor completes these as you type and shows each one's inputs. **View → Commands**
+(or **F1**) opens the Command reference: every command explained, with an example to copy, plus
+the events. F1 with the cursor on a command in a script opens that command's page.
 
 ### Objects and the tree
 

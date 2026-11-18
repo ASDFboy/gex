@@ -21,6 +21,7 @@
 //! | `when_<name>()` → `on_<name>()`  | a condition: on_<name> runs when when_<name> turns TRUE |
 
 pub mod audio;
+pub mod command_guide;
 pub mod commands;
 pub mod convert;
 pub mod extras;

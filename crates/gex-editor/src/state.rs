@@ -166,6 +166,9 @@ pub struct EditorState {
     pub preview_particles_3d: HashMap<ObjectId, gex_script::particles::Emitter3>,
     pub particle_clock: Instant,
     pub search: crate::tools::Search,
+    /// The Command reference window is open (View → Commands, F1), and a command to show in it.
+    pub commands_open: bool,
+    pub commands_show: Option<String>,
     /// Script tabs whose file was renamed: (old, new), for the dock to follow.
     pub renamed_scripts: Vec<(String, String)>,
     pub timeline: crate::timeline::TimelineState,
@@ -240,6 +243,8 @@ impl EditorState {
             file_undo: Vec::new(),
             open_timeline: false,
             search: Default::default(),
+            commands_open: false,
+            commands_show: None,
             particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
             open_command: false,
@@ -1398,7 +1403,7 @@ impl EditorState {
     pub fn add_event(&mut self, res: &str, signature: &str) {
         self.open_script(res, None);
         let name: String = signature.chars().take_while(|c| *c != '(').collect();
-        let s = self.scripts.get_mut(res).unwrap();
+        let Some(s) = self.scripts.get_mut(res) else { return };
         let line = s.text.lines().position(|l| {
             let l = l.trim_start();
             l.strip_prefix("DEF ").is_some_and(|r| r.trim_start().starts_with(&format!("{}(", name)))

@@ -1,0 +1,357 @@
+//! The full guide to the engine commands, for the editor's Command reference (View →
+//! Commands, or F1): which group each one is in, how to use it, and an example. The short
+//! form (inputs and a one-line summary) is in `commands::COMMANDS`; a test keeps the two in step
+//! and checks that every example is valid .jlb.
+
+/// (group, intro): the order groups appear in.
+pub const GROUPS: &[(&str, &str)] = &[
+    ("Objects", "Finding objects, reading and changing their properties, making and removing them."),
+    ("Events and timers", "Calling events on other objects, doing things later, sliding values over time."),
+    ("Physics", "Moving bodies, pushing them, and asking what's where."),
+    ("Input", "Keys, mouse, gamepad."),
+    ("Time and game flow", "Time, switching blueprints, pausing, the window, the camera."),
+    ("Sound", "Sound effects, Sound objects and music."),
+    ("Animation", "Sprite and model animations, Timeline clips, ragdolls, particles."),
+    ("Tiles", "Reading and changing TileMap2D tiles, and finding paths through them."),
+    ("Drawing", "Shapes, text and pictures drawn for one frame (call them from on_draw)."),
+    ("Saving and remembering", "Keeping values between blueprints, and on disk between runs."),
+    ("Settings", "Changing project graphics and physics settings while the game runs."),
+    ("Maps", "Half-Life 2 maps (.bsp) shown by a Mesh3D: their entities and doors."),
+];
+
+/// (name, group, how to use it, example).
+pub const GUIDE: &[(&str, &str, &str, &str)] = &[
+    // ---------------------------------------------------------------- objects
+    ("OBJECT", "Objects",
+     "Finds an object and gives its id (a number other commands take), or NULL when there's none.\n\n\
+      The path is relative to the object running the script: \"Gun\" is a child, \"../Enemy\" a sibling, \"/Level/Door\" starts at the top of the blueprint. A bare name that isn't a child (\"Player\") is looked for in the whole blueprint, so you don't need the full path.\n\n\
+      Most commands take a path text directly, so OBJECT is mainly for checking whether something exists or keeping its id.",
+     "player = OBJECT(\"Player\")\nIF player !== NULL {\n\tPRINT(\"found it: \" + NAME_OF(player))\n}"),
+    ("GET", "Objects",
+     "Reads one property of another object: GET(object, \"property\").\n\n\
+      object is an id, a path or a bare name (see OBJECT); NULL means this object. The property is any name you see in Properties (x, y, rotation, width, color, visible, opacity...) or one of your custom properties. Gives NULL when the object doesn't have it.\n\n\
+      For this object, just use the name (speed) or self.speed.",
+     "hp = GET(\"Player\", \"hp\")\npx = GET(\"Player\", \"x\")"),
+    ("SET", "Objects",
+     "Changes one property of another object: SET(object, \"property\", value).\n\n\
+      The value takes the property's shape: a number for x, a color for color (a table [r:, g:, b:, a:] or a text like \"#ff8800\"), TRUE/FALSE for switches. Setting a name the object doesn't have makes a new custom property.\n\n\
+      The change happens at once; physics bodies moved this way are teleported.",
+     "SET(\"Door\", \"visible\", FALSE)\nSET(\"Hud/Score\", \"text\", \"Score: \" + GLOBAL.score)\nSET(\"Lamp\", \"color\", \"#ffd080\")"),
+    ("OBJECTS", "Objects",
+     "Every object in a group, as a table of ids (empty when none are).\n\n\
+      Give objects groups in Properties → Groups (\"enemies\", \"coins\"). Loop over the table with FOR.",
+     "FOR e IN OBJECTS(\"enemies\") {\n\tSET(e, \"speed\", 0)\n}\nleft = LEN(OBJECTS(\"coins\"))"),
+    ("CHILDREN", "Objects",
+     "An object's children, in order, as a table of ids. CHILDREN() or CHILDREN(NULL) gives this object's own.",
+     "FOR c IN CHILDREN() {\n\tSET(c, \"visible\", TRUE)\n}"),
+    ("PARENT", "Objects",
+     "The id of the object's parent, or NULL for the top of the blueprint. PARENT() gives this object's parent.",
+     "SEND(PARENT(), \"child_hit\", self.id)"),
+    ("NAME_OF", "Objects",
+     "An object's name as text. Handy in collision events, where you're given an id.",
+     "DEF on_collide_start(other) {\n\tIF NAME_OF(other) == \"Spikes\" { DESTROY() }\n}"),
+    ("PATH_OF", "Objects",
+     "An object's full path from the top of the blueprint, like \"/Level/Enemies/Bat\". Mostly for PRINT when finding problems.",
+     "PRINT(\"hit \" + PATH_OF(other))"),
+    ("SPAWN", "Objects",
+     "Makes a new instance of a blueprint file while the game runs and gives its id: SPAWN(\"res://bullet.jblueprint\", x, y, z, parent).\n\n\
+      x, y, z place it (missing ones keep the blueprint's own position). parent is where it goes in the tree; leave it out (or NULL) to put it at the top of the blueprint, where its position is a world position.\n\n\
+      Its scripts are loaded and its on_create() runs before the next event.",
+     "DEF on_press_space() {\n\tb = SPAWN(\"res://bullet.jblueprint\", x, y)\n\tSET(b, \"vx\", 600)\n}"),
+    ("DESTROY", "Objects",
+     "Removes an object and everything inside it: DESTROY(object), or DESTROY() for this object.\n\n\
+      It happens at the end of the frame, after on_destroy() runs on it, so code after DESTROY in the same event still runs.",
+     "DEF on_collide_start(other) {\n\tIF NAME_OF(other) == \"Player\" {\n\t\tGLOBAL.score += 1\n\t\tDESTROY()\n\t}\n}"),
+
+    // ---------------------------------------------------------------- events and timers
+    ("SEND", "Events and timers",
+     "Runs an event on one object: SEND(object, \"hurt\", 10) runs on_hurt(10) in that object's scripts.\n\n\
+      The event name is without on_. Any inputs after it are passed along. Nothing happens if the object has no such event. It runs right away, before SEND returns.",
+     "SEND(\"Player\", \"hurt\", 10)\n\n>> in the player's script:\nDEF on_hurt(amount) {\n\thp -= amount\n}"),
+    ("EMIT", "Events and timers",
+     "Runs an event on every object that has it: EMIT(\"level_won\") runs on_level_won() everywhere.\n\n\
+      Inputs after the name are passed along. Use it for things many objects care about (the game ending, an alarm, the music changing).",
+     "EMIT(\"alarm\", x, y)\n\n>> in each guard's script:\nDEF on_alarm(ax, ay) {\n\ttarget_x = ax\n}"),
+    ("BROADCAST", "Events and timers",
+     "Another name for EMIT: runs on_<event> on every object that has it.",
+     "BROADCAST(\"game_over\")"),
+    ("TIMER", "Events and timers",
+     "Does something later: TIMER(\"spawn\", 2) runs on_timer(\"spawn\") and on_timer_spawn() on this object after 2 seconds.\n\n\
+      seconds defaults to 1. With repeat TRUE it keeps going every that many seconds until TIMER_STOP. Starting a timer with a name that's already running starts it over.\n\n\
+      Timers follow game time, so they wait while the game is paused and run faster or slower with TIME_SCALE.",
+     "DEF on_create() {\n\tTIMER(\"spawn\", 1.5, TRUE)\n}\nDEF on_timer_spawn() {\n\tSPAWN(\"res://enemy.jblueprint\", RANDOM(0, 800), -40)\n}"),
+    ("TIMER_STOP", "Events and timers",
+     "Cancels one of this object's timers by name, so its event doesn't run.",
+     "DEF on_press_escape() {\n\tTIMER_STOP(\"spawn\")\n}"),
+    ("TWEEN", "Events and timers",
+     "Slides a property smoothly to a new value: TWEEN(object, \"y\", 100, 0.5, \"bounce\").\n\n\
+      Works on numbers (x, opacity, rotation, scale_x...), and on colors and vectors. seconds defaults to 0.5. ease is how it moves: \"linear\", \"in\" (starts slow), \"out\" (ends slow, the default), \"in_out\", \"back\" (goes a little past and comes back), \"bounce\", \"elastic\".\n\n\
+      A new tween on the same property replaces the old one. When it finishes, on_tween_end(property) runs on that object.",
+     "TWEEN(NULL, \"opacity\", 0, 1)\nTWEEN(\"Title\", \"y\", 60, 0.8, \"bounce\")\nTWEEN(\"Sky\", \"color\", \"#203050\", 3, \"in_out\")"),
+    ("TWEEN_STOP", "Events and timers",
+     "Stops an object's tweens where they are: TWEEN_STOP(object) stops all of them, TWEEN_STOP(object, \"x\") just that property's. on_tween_end doesn't run for a stopped tween.",
+     "TWEEN_STOP(NULL, \"x\")"),
+
+    // ---------------------------------------------------------------- physics
+    ("MOVE", "Physics",
+     "Moves a body by an amount, stopping at walls and sliding along them: MOVE(object, dx, dy, dz). Gives TRUE when the body is standing on something afterwards.\n\n\
+      Use it for players and enemies (a kinematic Body2D/Body3D) in on_physics(dt) or on_step(dt), multiplying speeds by dt. A moving body also pushes dynamic bodies it walks into. In 2D, dz is left out. Plain objects without a body are just moved.",
+     ">> fall: this script's own variable (outside the function, so it's kept)\nfall = 0\nDEF on_physics(dt) {\n\tfall += 900 * dt\n\tgrounded = MOVE(NULL, AXIS(\"left\", \"right\") * 250 * dt, fall * dt)\n\tIF grounded { fall = 0 }\n\tIF grounded AND KEY_PRESSED(\"space\") { fall = -450 }\n}"),
+    ("IMPULSE", "Physics",
+     "Kicks a dynamic body: adds (x, y, z) to its velocity at once, the same for heavy and light bodies. For jumps, explosions, knockback. 2D velocities are pixels per second; 3D metres per second. Kinematic and static bodies ignore it.",
+     "DEF on_collide_start(other) {\n\tIMPULSE(other, 0, -400)\n}"),
+    ("COLLIDING", "Physics",
+     "The objects touching this one right now, as a table of ids. For things you check every frame (standing in water, on a button); for the moment of touching use on_collide_start(other).",
+     "FOR o IN COLLIDING() {\n\tIF NAME_OF(o) == \"Lava\" { hp -= 50 * DELTA_TIME() }\n}"),
+    ("RAYCAST", "Physics",
+     "Looks along a line from (x, y) in direction (dx, dy) and gives the first 2D body or collider it hits, or NULL: RAYCAST(x, y, dx, dy, length, ignore, layers).\n\n\
+      The result is a table: object (its id), x and y (where it hit), nx and ny (the surface's direction), distance. length defaults to very far. ignore is an object to look through (usually self.id, so it doesn't hit itself). layers limits what it can hit, like \"world, enemies\".",
+     "hit = RAYCAST(x, y, 0, 1, 40, self.id)\nIF hit !== NULL {\n\tPRINT(\"ground \" + hit.distance + \" below\")\n}"),
+    ("RAYCAST_3D", "Physics",
+     "The same as RAYCAST, in 3D: RAYCAST_3D(x, y, z, dx, dy, dz, length, ignore, layers). length defaults to 1000 metres. The result also has z and nz.",
+     "hit = RAYCAST_3D(x, y, z, 0, -1, 0, 2, self.id)\ngrounded = hit !== NULL"),
+    ("DISTANCE", "Physics",
+     "How far apart two objects are (pixels in 2D, metres in 3D), measured between their positions in the world. DISTANCE(\"Player\") measures from this object.",
+     "IF DISTANCE(NULL, \"Player\") < 200 {\n\tchasing = TRUE\n}"),
+
+    // ---------------------------------------------------------------- input
+    ("KEY_DOWN", "Input",
+     "TRUE while a key is held. Key names: \"a\"–\"z\", \"0\"–\"9\", \"space\", \"enter\", \"escape\", \"left\", \"right\", \"up\", \"down\", \"shift\", \"ctrl\", \"alt\", \"tab\", \"f1\"...; mouse buttons \"mouse_left\", \"mouse_right\", \"mouse_middle\"; gamepad buttons \"pad_a\", \"pad_b\", \"pad_start\"...\n\n\
+      Input actions from Project settings work too: KEY_DOWN(\"jump\") is TRUE while any of jump's keys is held.",
+     "IF KEY_DOWN(\"shift\") { speed = 400 } ELSE { speed = 200 }"),
+    ("KEY_PRESSED", "Input",
+     "TRUE only on the frame a key went down: one shot, for jumping, firing, opening a menu. Same names as KEY_DOWN. (Events like on_press_space() do the same without checking every frame.)",
+     "IF KEY_PRESSED(\"e\") { SEND(\"Door\", \"use\") }"),
+    ("KEY_RELEASED", "Input",
+     "TRUE only on the frame a key was let go.",
+     "IF KEY_RELEASED(\"space\") AND vy < 0 { vy = vy / 2 }"),
+    ("AXIS", "Input",
+     "Two ways:\n\n\
+      AXIS(\"a\", \"d\"): a pair of keys as a number: -1 while the first is held, 1 while the second is, 0 for neither or both. The quickest way to write movement.\n\n\
+      AXIS(\"left_x\"): a gamepad stick or trigger from -1 to 1: left_x, left_y, right_x, right_y, lt, rt.",
+     "DEF on_step(dt) {\n\tx += AXIS(\"left\", \"right\") * 300 * dt\n\ty += AXIS(\"up\", \"down\") * 300 * dt\n}"),
+    ("MOUSE_X", "Input",
+     "The mouse's x in the game world (2D), following the camera. Use with MOUSE_Y to aim at the mouse.",
+     ">> (JLB's angles are in degrees)\nrotation = ATAN(MOUSE_Y() - y, MOUSE_X() - x)"),
+    ("MOUSE_Y", "Input",
+     "The mouse's y in the game world (2D); y goes down.",
+     "DRAW_CIRCLE(MOUSE_X(), MOUSE_Y(), 6, \"#ffffff\")"),
+    ("MOUSE_WHEEL", "Input",
+     "How far the mouse wheel turned this frame: positive away from you, 0 when it didn't.",
+     "zoom += MOUSE_WHEEL() * 0.1"),
+    ("MOUSE_LOCK", "Input",
+     "MOUSE_LOCK(TRUE) hides the pointer and keeps it in the window, for mouse-look in first-person games; read movement with MOUSE_DX and MOUSE_DY. MOUSE_LOCK(FALSE) frees it. In the editor, Escape frees it too.",
+     "DEF on_create() {\n\tMOUSE_LOCK(TRUE)\n}"),
+    ("MOUSE_DX", "Input",
+     "How far the mouse moved sideways this frame, in screen pixels. Works while the mouse is locked.",
+     "rotation_y -= MOUSE_DX() * 0.15"),
+    ("MOUSE_DY", "Input",
+     "How far the mouse moved up or down this frame (down is positive). Works while locked.",
+     "rotation_x = MAX(-89, MIN(89, rotation_x - MOUSE_DY() * 0.15))"),
+
+    // ---------------------------------------------------------------- time and flow
+    ("DELTA_TIME", "Time and game flow",
+     "Seconds since the last frame (also given to on_step as dt). Multiply speeds by it so movement is the same at any frame rate.",
+     "x += 100 * DELTA_TIME()"),
+    ("GAME_TIME", "Time and game flow",
+     "Seconds since the game started (game time: it stops while paused). Good for things that wave or pulse.",
+     ">> SIN takes degrees: 180 a second is one wave every 2 seconds\ny = 200 + SIN(GAME_TIME() * 180) * 20"),
+    ("CHANGE_BLUEPRINT", "Time and game flow",
+     "Switches the game to another blueprint file: CHANGE_BLUEPRINT(\"res://level2.jblueprint\").\n\n\
+      With fade (seconds), the screen fades to a color (black unless you give one) and back. Everything in the current blueprint is removed; GLOBAL variables and REMEMBER values carry over.",
+     "DEF on_collide_start(other) {\n\tIF NAME_OF(other) == \"Player\" {\n\t\tCHANGE_BLUEPRINT(\"res://level2.jblueprint\", 0.5)\n\t}\n}"),
+    ("PAUSE", "Time and game flow",
+     "PAUSE(TRUE) stops the game: events, physics, timers and tweens wait. Objects in the group while_paused keep running, so put your pause menu in that group. PAUSE(FALSE) carries on.",
+     "DEF on_press_escape() {\n\tPAUSE(!PAUSED())\n\tSET(\"PauseMenu\", \"visible\", PAUSED())\n}"),
+    ("PAUSED", "Time and game flow",
+     "TRUE while the game is paused with PAUSE.",
+     "DEF on_step(dt) {\n\tIF PAUSED() { RETURN }\n\tx += 100 * dt\n}"),
+    ("TIME_SCALE", "Time and game flow",
+     "How fast game time runs: 1 normal, 0.3 slow motion, 2 double speed. dt, timers, tweens and physics all follow it. TIME_SCALE() with no input gives the current scale.",
+     "TIME_SCALE(0.3)\nTIMER(\"normal_speed\", 0.5)"),
+    ("SHAKE", "Time and game flow",
+     "Shakes the camera: SHAKE(strength, seconds). strength is in pixels (2D; defaults to 8) and dies away over seconds (defaults to 0.4).",
+     "SHAKE(12, 0.3)"),
+    ("FULLSCREEN", "Time and game flow",
+     "FULLSCREEN(TRUE) makes the game window full screen, FALSE puts it back. FULLSCREEN() with no input gives whether it is. (Alt+Enter and F11 switch too.)",
+     "FULLSCREEN(!FULLSCREEN())"),
+    ("WINDOW_TITLE", "Time and game flow",
+     "Changes the text in the game window's title bar.",
+     "WINDOW_TITLE(\"My Game - Level \" + level)"),
+    ("QUIT", "Time and game flow",
+     "Stops the game (in the editor, like pressing Stop; in an exported game, closes it).",
+     "DEF on_pressed_quit() {\n\tQUIT()\n}"),
+
+    // ---------------------------------------------------------------- sound
+    ("PLAY_SOUND", "Sound",
+     "Plays a sound file once and gives its id: PLAY_SOUND(file, volume, pitch, pan, echo).\n\n\
+      file is res://... (.wav, .ogg, .mp3, .flac) or hl2://.... volume 1 is normal; pitch 1 is normal (2 an octave up); pan -1 is left, 1 right; echo 0 to 1 adds an echo. Keep the id to stop it with STOP_SOUND.",
+     "PLAY_SOUND(\"res://sounds/jump.wav\")\nPLAY_SOUND(\"res://sounds/hit.wav\", 0.6, RANDOM(0.9, 1.1))"),
+    ("STOP_SOUND", "Sound",
+     "Stops a sound PLAY_SOUND started, by its id. STOP_SOUND(NULL) stops every sound.",
+     "engine = PLAY_SOUND(\"res://engine.ogg\")\nSTOP_SOUND(engine)"),
+    ("PLAY", "Sound",
+     "Starts a Sound object (one you placed in the blueprint, with its own file, volume, loop and 3D settings).",
+     "PLAY(\"Alarm\")"),
+    ("STOP", "Sound",
+     "Stops a Sound object.",
+     "STOP(\"Alarm\")"),
+    ("MUSIC", "Sound",
+     "Plays a music file on a loop, replacing whatever music was playing: MUSIC(file, volume). MUSIC(\"\") stops the music. Music carries on across CHANGE_BLUEPRINT.",
+     "MUSIC(\"res://music/level1.ogg\", 0.7)"),
+    ("VOLUME", "Sound",
+     "The master volume for every sound and the music: 0 silent, 1 normal (up to 4).",
+     "VOLUME(0.5)"),
+
+    // ---------------------------------------------------------------- animation
+    ("ANIMATE", "Animation",
+     "Plays an animation: ANIMATE(object, \"run\").\n\n\
+      For a Sprite2D, the animation comes from its animations property (frames on a sheet set up in Properties). For a Mesh3D, it's one of the model's own animations (see ANIMATIONS). If that animation is already playing it carries on, unless restart is TRUE. A non-looping one runs on_animation_end(name) when it finishes.",
+     "IF AXIS(\"left\", \"right\") !== 0 {\n\tANIMATE(NULL, \"run\")\n} ELSE {\n\tANIMATE(NULL, \"idle\")\n}"),
+    ("ANIMATIONS", "Animation",
+     "The names of a Mesh3D model's animations, as a table of text.",
+     "FOR a IN ANIMATIONS(\"Soldier\") { PRINT(a) }"),
+    ("PLAY_CLIP", "Animation",
+     "Makes an Animator play one of its clips (made in the Timeline) from the start: PLAY_CLIP(animator, \"open\"). When it ends, on_clip_end(clip) runs on the Animator's parent and on the Animator.",
+     "PLAY_CLIP(\"Door/Animator\", \"open\")"),
+    ("STOP_CLIP", "Animation",
+     "Stops an Animator's clip where it is.",
+     "STOP_CLIP(\"Door/Animator\")"),
+    ("CLIP_PLAYING", "Animation",
+     "The name of the clip an Animator is playing, or NULL when none is.",
+     "IF CLIP_PLAYING(\"Door/Animator\") == NULL { PLAY_CLIP(\"Door/Animator\", \"close\") }"),
+    ("BURST", "Animation",
+     "Makes a Particles2D or Particles3D throw out a number of particles at once (default 20): explosions, puffs of dust, sparks. Works whether or not the particles are emitting on their own.",
+     "BURST(\"Explosion\", 60)"),
+    ("RAGDOLL", "Animation",
+     "Makes a Mesh3D with a skinned model (a character) go limp and fall as a ragdoll from the pose it's in, starting at velocity (vx, vy, vz). IMPULSE shoves it afterwards.",
+     "DEF on_died() {\n\tRAGDOLL(NULL, 0, 2, -3)\n}"),
+
+    // ---------------------------------------------------------------- tiles
+    ("TILE", "Tiles",
+     "The tile id at a cell of a TileMap2D: TILE(tilemap, col, row). -1 means empty. Columns and rows count from 0 at the tilemap's top-left.",
+     "IF TILE(\"Ground\", 3, 7) == -1 { PRINT(\"hole\") }"),
+    ("SET_TILE", "Tiles",
+     "Changes a tile: SET_TILE(tilemap, col, row, id). -1 (or leaving id out) clears it. Solid tiles' collisions follow the change.",
+     "cell = TILE_AT(\"Ground\", x, y + 20)\nSET_TILE(\"Ground\", cell.col, cell.row, -1)"),
+    ("TILE_AT", "Tiles",
+     "The cell under a position in the world, as a table [col:, row:]: TILE_AT(tilemap, x, y). Use it with TILE and SET_TILE.",
+     "c = TILE_AT(\"Ground\", MOUSE_X(), MOUSE_Y())\nSET_TILE(\"Ground\", c.col, c.row, 5)"),
+    ("FIND_PATH", "Tiles",
+     "A path through a TileMap2D's empty cells from one world position to another, going around solid tiles: FIND_PATH(tilemap, x1, y1, x2, y2). Gives a table of [x:, y:] points (cell centres) to walk through in order, or NULL when there's no way.",
+     "path = FIND_PATH(\"Level\", x, y, GET(\"Player\", \"x\"), GET(\"Player\", \"y\"))\nIF path !== NULL AND LEN(path) > 1 {\n\tnext = path[2]\n}"),
+
+    // ---------------------------------------------------------------- drawing
+    ("DRAW_RECT", "Drawing",
+     "Draws a rectangle for this frame: DRAW_RECT(x, y, w, h, color, filled). x, y is its top-left corner in the 2D world. filled defaults to TRUE; FALSE draws an outline. Call it from on_draw() every frame you want it shown.",
+     "DEF on_draw() {\n\tDRAW_RECT(x - 20, y - 30, 40 * hp / 100, 4, \"#a6e22e\")\n}"),
+    ("DRAW_LINE", "Drawing",
+     "Draws a line for this frame from (x1, y1) to (x2, y2).",
+     "DEF on_draw() {\n\tDRAW_LINE(x, y, MOUSE_X(), MOUSE_Y(), \"#f92672\")\n}"),
+    ("DRAW_CIRCLE", "Drawing",
+     "Draws a circle for this frame around (x, y). filled defaults to TRUE.",
+     "DEF on_draw() {\n\tDRAW_CIRCLE(x, y, 64, \"#66d9ef\", FALSE)\n}"),
+    ("DRAW_TEXT", "Drawing",
+     "Draws text for this frame at (x, y): DRAW_TEXT(x, y, text, size, color). size defaults to 16. Anything given as text is shown as it would PRINT.",
+     "DEF on_draw() {\n\tDRAW_TEXT(10, 10, \"Score: \" + GLOBAL.score, 24, \"#ffffff\")\n}"),
+    ("DRAW_IMAGE", "Drawing",
+     "Draws a picture for this frame: DRAW_IMAGE(file, x, y, w, h). w and h default to 64.",
+     "DEF on_draw() {\n\tDRAW_IMAGE(\"res://ui/heart.png\", 10, 40, 24, 24)\n}"),
+
+    // ---------------------------------------------------------------- saving
+    ("SAVE_DATA", "Saving and remembering",
+     "Keeps a value on disk under a name, so it's still there the next time the game runs (high scores, settings, a save game). The value can be a number, text, TRUE/FALSE or a table of those. Each game keeps its own.",
+     "SAVE_DATA(\"best\", GLOBAL.score)\nSAVE_DATA(\"save1\", [level: 3, hp: hp, coins: coins])"),
+    ("LOAD_DATA", "Saving and remembering",
+     "A value kept with SAVE_DATA, or NULL when nothing was saved under that name.",
+     "best = LOAD_DATA(\"best\")\nIF best == NULL { best = 0 }"),
+    ("DELETE_DATA", "Saving and remembering",
+     "Forgets a value kept with SAVE_DATA.",
+     "DELETE_DATA(\"save1\")"),
+    ("REMEMBER", "Saving and remembering",
+     "Keeps a value while the game runs, across CHANGE_BLUEPRINT (lives, the inventory, which door you came in by). It's gone when the game stops; use SAVE_DATA to keep it longer. (GLOBAL variables also carry over.)",
+     "REMEMBER(\"lives\", lives)\nCHANGE_BLUEPRINT(\"res://level2.jblueprint\")"),
+    ("RECALL", "Saving and remembering",
+     "A value kept with REMEMBER, or NULL.",
+     "lives = RECALL(\"lives\")\nIF lives == NULL { lives = 3 }"),
+
+    // ---------------------------------------------------------------- settings
+    ("SET_GRAPHICS", "Settings",
+     "Changes one of the project's graphics settings while the game runs (the names in Project settings → Graphics and docs/SETTINGS.md): render_scale, shadows, bloom, tonemap, exposure, saturation, vignette, tint... For an options menu or a low-detail mode. It lasts until the game stops.",
+     "SET_GRAPHICS(\"shadows\", FALSE)\nSET_GRAPHICS(\"render_scale\", 0.75)"),
+    ("GRAPHICS", "Settings",
+     "A graphics setting's current value; GRAPHICS() with no input gives a table of all of them.",
+     "IF GRAPHICS(\"bloom\") { PRINT(\"bloom is on\") }"),
+    ("SET_PHYSICS", "Settings",
+     "Changes a physics setting while the game runs: gravity_2d ([x, y], pixels per second²), gravity_3d, tick_rate, solver_iterations, max_slope... Moon gravity, underwater sections.",
+     "SET_PHYSICS(\"gravity_2d\", [0, 300])"),
+    ("PHYSICS", "Settings",
+     "A physics setting's current value; PHYSICS() with no input gives a table of all of them.",
+     "g = PHYSICS(\"gravity_2d\")"),
+
+    // ---------------------------------------------------------------- maps
+    ("MAP_ENTITIES", "Maps",
+     "The entities in a Half-Life 2 map shown by a Mesh3D (a .bsp): MAP_ENTITIES(map, classname).\n\n\
+      Gives a table of entries, each [classname:, name:, x:, y:, z:, rotation_y:, keys:, bounds:]: keys holds every setting as the map wrote it, bounds is a brush entity's box (a ladder, a trigger). classname picks one kind (\"info_player_start\"); ending it with * matches any that start that way (\"info_player*\").",
+     "FOR e IN MAP_ENTITIES(\"Map\", \"info_player*\") {\n\tx = e.x\n\ty = e.y\n\tz = e.z\n}"),
+    ("USE_DOOR", "Maps",
+     "Opens (TRUE) or closes (FALSE) one of a map's doors; with no second input it toggles. A map's doors are in the group map_doors.",
+     "FOR d IN OBJECTS(\"map_doors\") {\n\tIF DISTANCE(NULL, d) < 2 { USE_DOOR(d) }\n}"),
+];
+
+/// The basics every command relies on, shown first.
+pub const BASICS: &str = "Commands are the ALL-CAPS words a script calls to work with the game: COMMAND(inputs). Inputs in the list that you leave out at the end take their defaults.\n\n\
+Objects: where a command takes an object, give its id (a number: self.id, or what OBJECT, SPAWN, OBJECTS, collision events give you), its path from this object (\"Gun\", \"../Enemy\", \"/Level/Door\"), its bare name (\"Player\", found anywhere in the blueprint), or NULL for this object itself.\n\n\
+This object: inside its scripts, its properties are plain names (x, y, speed) or self.x, self.speed. Change them by assigning: x += 10.\n\n\
+Colors: a table [r: 1, g: 0.5, b: 0, a: 1] (0 to 1) or a text like \"#ff8800\".\n\n\
+Files: res://... is your project, hl2://... a mounted Half-Life 2.\n\n\
+Keys: \"a\"-\"z\", \"0\"-\"9\", \"space\", \"enter\", \"escape\", \"left\", \"right\", \"up\", \"down\", \"shift\", \"ctrl\", \"alt\", \"tab\", \"f1\"..., mouse buttons \"mouse_left\", \"mouse_right\", \"mouse_middle\", gamepad \"pad_a\", \"pad_b\", \"pad_x\", \"pad_y\", \"pad_lb\", \"pad_rb\", \"pad_start\", \"pad_select\", \"pad_up\"... and input actions named in Project settings.\n\n\
+Variables for the whole game: GLOBAL score = 0 makes one; every script reads and changes it as GLOBAL.score.";
+
+/// (event, when it runs): the functions the engine calls in your scripts.
+pub const EVENTS: &[(&str, &str)] = &[
+    ("(code outside functions)", "when the script is attached, before on_create"),
+    ("on_create()", "once the whole blueprint is loaded, or right after SPAWN"),
+    ("on_step(dt)", "every frame; dt is the seconds since the last one"),
+    ("on_physics(dt)", "60 times a second, before physics moves bodies: the place for MOVE"),
+    ("on_draw()", "every frame after on_step: the place for DRAW_ commands"),
+    ("on_destroy()", "just before the object is removed"),
+    ("on_key_pressed(key) / on_key_released(key)", "any key went down / up"),
+    ("on_press_<key>() / on_release_<key>()", "one key or input action: on_press_space(), on_press_a(), on_press_jump()"),
+    ("on_mouse_pressed(button, x, y)", "a click: button is \"left\", \"right\" or \"middle\""),
+    ("on_mouse_moved(x, y) / on_mouse_wheel(amount)", "the mouse moved / the wheel turned"),
+    ("on_collide_start(other)", "started touching another body or collider (other is its id)"),
+    ("on_collide(other)", "every frame while touching"),
+    ("on_collide_end(other)", "stopped touching"),
+    ("on_timer(name) / on_timer_<name>()", "a TIMER finished"),
+    ("on_tween_end(property)", "a TWEEN on this object finished"),
+    ("on_animation_end(name)", "a non-looping sprite or model animation finished"),
+    ("on_clip_end(clip)", "an Animator's clip finished (on the Animator and its parent)"),
+    ("on_pressed()", "on a Button's own scripts: it was clicked"),
+    ("on_pressed_<button name>()", "on every script: a Button with that name was clicked (Start Game -> on_pressed_start_game)"),
+    ("on_text_changed(text) / on_text_submitted(text)", "on a TextInput's scripts: typed in / Enter pressed"),
+    ("on_<event>(...)", "your own: SEND(object, \"<event>\", ...) or EMIT(\"<event>\", ...)"),
+    ("when_<name>() -> on_<name>()", "a condition: on_<name> runs once each time when_<name> turns TRUE"),
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_command_has_a_guide_with_a_valid_example() {
+        for (name, ..) in crate::commands::COMMANDS {
+            assert!(GUIDE.iter().any(|g| g.0 == *name), "{} has no guide entry", name);
+        }
+        crate::commands::register();
+        for (name, group, details, example) in GUIDE {
+            assert!(crate::commands::COMMANDS.iter().any(|c| c.0 == *name), "{} isn't a command", name);
+            assert!(GROUPS.iter().any(|g| g.0 == *group), "{}: no group {}", name, group);
+            assert!(!details.is_empty() && !example.is_empty(), "{}", name);
+            let toks = jlb::lexer::lex(example).unwrap_or_else(|e| panic!("{}: {}", name, e.msg));
+            if let Err(e) = jlb::parser::Parser::new(toks).program() {
+                panic!("{}'s example doesn't parse: line {}: {}\n{}", name, e.line, e.msg, example);
+            }
+        }
+    }
+}

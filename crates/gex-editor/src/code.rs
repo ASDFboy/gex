@@ -216,6 +216,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     }
     let mut save = false;
     let mut toggle_vim = false;
+    let mut f1_command: Option<String> = None;
     ui.horizontal(|ui| {
         if ui.add_enabled(s.dirty(), egui::Button::new("Save")).tip("Saves this script (Ctrl+S).").clicked() {
             save = true;
@@ -225,6 +226,9 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
         }
         if ui.selectable_label(vim_on, "Vim").tip("Vim keys: Esc for normal mode, i to type").clicked() {
             toggle_vim = true;
+        }
+        if ui.button("Commands").tip("Every engine command, explained with examples (F1; F1 on a command opens its page)").clicked() {
+            f1_command = Some(String::new());
         }
         if vim_on {
             let m = if s.vim.mode == Mode::Insert { "INSERT" } else { "NORMAL" };
@@ -333,6 +337,13 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
             } else if esc {
                 popup = None;
             }
+        }
+        // F1 on a command: its page in the Command reference.
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
+            let c: Vec<char> = s.text.chars().collect();
+            let (a, b) = word_at(&c, cursor);
+            let w: String = c[a..b].iter().collect();
+            f1_command = Some(if gex_script::commands::COMMANDS.iter().any(|x| x.0 == w) { w } else { String::new() });
         }
         if ui.input(|i| i.key_pressed(egui::Key::F12)) {
             let c: Vec<char> = s.text.chars().collect();
@@ -597,6 +608,10 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
             Some((file, line)) => st.open_script(&file, Some(line)),
             None => st.status = format!("no DEF {}( found in the project", w),
         }
+    }
+    if let Some(w) = f1_command {
+        st.commands_open = true;
+        st.commands_show = (!w.is_empty()).then_some(w);
     }
 }
 
