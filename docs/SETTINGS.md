@@ -1,6 +1,6 @@
 # Project settings
 
-Project settings (**File → Project settings**) has a **Graphics** page and a **Physics** page.
+Project settings (**File → Project settings**) has **Display**, **Graphics** and **Physics** pages.
 Each setting shows its help when you hover its name. Graphics changes show in the view at once;
 **Save** keeps them in `project.jproj`.
 
@@ -10,6 +10,9 @@ Scripts change any of them while the game runs, and read them back:
 SET_GRAPHICS("bloom", FALSE)          >> a low-detail mode
 SET_GRAPHICS("render_scale", 0.75)
 SET_PHYSICS("gravity_2d", [0, 400])    >> moon gravity
+SET_DISPLAY("scale_mode", "pixel")     >> crisp whole-number scaling
+SET_DISPLAY("width", 1920)             >> a resolution option
+SAVE_DISPLAY()                         >> keep display choices for next time
 IF GRAPHICS("shadows") { ... }
 all = PHYSICS()                        >> every physics setting, as a table
 ```
@@ -17,6 +20,39 @@ all = PHYSICS()                        >> every physics setting, as a table
 These are the project-wide settings. Each object also has its own (see [OBJECTS.md](OBJECTS.md)):
 a sprite's `blend` and `filter`, a mesh's `rim` and `fog`, a light's `softness`, a body's
 `linear_damping`... and the Environment object's own color settings multiply the project's.
+
+## Display
+
+The game is drawn at its resolution (`width` × `height`) and then scaled to fill the window or
+the screen, the way `scale_mode` says. Full screen always covers the whole screen; F11 or Alt+Enter switch.
+
+Settings scripts change with SET_GRAPHICS, SET_PHYSICS, SET_DISPLAY and SET_ACTION last until the game
+stops, across CHANGE_BLUEPRINT. SAVE_DISPLAY() keeps the display settings on the player's computer: the
+exported game starts with them next time (playing in the editor always uses the project's).
+
+### Resolution
+
+| Setting | Default | What it does |
+|---|---|---|
+| `width` | `1280` | How many pixels across the game is drawn at (its resolution). Positions in a 2D game with no Camera2D go from 0 to this. (64 to 16384) |
+| `height` | `720` | How many pixels down the game is drawn at. (64 to 16384) |
+
+### Window
+
+| Setting | Default | What it does |
+|---|---|---|
+| `window_scale` | `1.0` | How big the window opens compared to the resolution: 3 opens a 320×180 game in a 960×540 window (kept inside the screen). (0.25 to 8.0) |
+| `fullscreen` | `false` | Fills the whole screen (borderless). F11 or Alt+Enter switches while playing. |
+| `resizable` | `true` | The player can resize the window (the picture scales to fit, see scale_mode). |
+| `vsync` | `true` | Waits for the screen to refresh before showing each frame: no tearing, frames capped to the screen's rate. Takes effect when the game starts (SAVE_DISPLAY keeps a change for next time). |
+
+### Scaling
+
+| Setting | Default | What it does |
+|---|---|---|
+| `scale_mode` | `"fit"` | How the picture fills a window or screen that isn't the resolution's size. fit: scaled up as far as it goes keeping its shape, with bars filling the rest. stretch: fills everything, squashed if the shapes differ. pixel: scaled by whole numbers only (2×, 3×…) so pixel art stays even. expand: drawn at the window's own size, showing more of the world instead of scaling. (fit, stretch, pixel, expand) |
+| `scale_filter` | `"smooth"` | When the picture is scaled: smooth blends neighbouring pixels; pixel keeps them sharp squares (pixel art). (smooth, pixel) |
+| `bar_color` | `[0.0, 0.0, 0.0, 1.0]` | The color of the bars around the picture (fit and pixel). |
 
 ## Graphics
 

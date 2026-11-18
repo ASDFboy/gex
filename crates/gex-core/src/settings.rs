@@ -1,4 +1,4 @@
-//! Project-wide graphics and physics settings. They live in the project file, show up in
+//! Project-wide display, graphics and physics settings. They live in the project file, show up in
 //! Project settings, and scripts change them while the game runs with SET_GRAPHICS /
 //! SET_PHYSICS (and read them with GRAPHICS / PHYSICS).
 //!
@@ -251,6 +251,28 @@ settings! {
     }
 }
 
+settings! {
+    /// The game window and how the game's picture fits in it, project-wide. Scripts change
+    /// them while playing with SET_DISPLAY.
+    Display {
+        ("Resolution", width, u32, 1280, 64, 16384, [], "How many pixels across the game is drawn at (its resolution). Positions in a 2D game with no Camera2D go from 0 to this."),
+        ("Resolution", height, u32, 720, 64, 16384, [], "How many pixels down the game is drawn at."),
+        ("Window", window_scale, f32, 1.0, 0.25, 8.0, [], "How big the window opens compared to the resolution: 3 opens a 320×180 game in a 960×540 window (kept inside the screen)."),
+        ("Window", fullscreen, bool, false, 0, 0, [], "Fills the whole screen (borderless). F11 or Alt+Enter switches while playing."),
+        ("Window", resizable, bool, true, 0, 0, [], "The player can resize the window (the picture scales to fit, see scale_mode)."),
+        ("Window", vsync, bool, true, 0, 0, [], "Waits for the screen to refresh before showing each frame: no tearing, frames capped to the screen's rate. Takes effect when the game starts (SAVE_DISPLAY keeps a change for next time)."),
+        ("Scaling", scale_mode, String, "fit".into(), 0, 0, ["fit", "stretch", "pixel", "expand"], "How the picture fills a window or screen that isn't the resolution's size. fit: scaled up as far as it goes keeping its shape, with bars filling the rest. stretch: fills everything, squashed if the shapes differ. pixel: scaled by whole numbers only (2×, 3×…) so pixel art stays even. expand: drawn at the window's own size, showing more of the world instead of scaling."),
+        ("Scaling", scale_filter, String, "smooth".into(), 0, 0, ["smooth", "pixel"], "When the picture is scaled: smooth blends neighbouring pixels; pixel keeps them sharp squares (pixel art)."),
+        ("Scaling", bar_color, [f32; 4], [0.0, 0.0, 0.0, 1.0], 0, 0, [], "The color of the bars around the picture (fit and pixel)."),
+    }
+}
+
+impl Display {
+    pub fn size(&self) -> [u32; 2] {
+        [self.width, self.height]
+    }
+}
+
 impl Graphics {
     /// Shadow samples per pixel for the chosen quality.
     pub fn shadow_taps(&self) -> u32 {
@@ -296,11 +318,11 @@ mod tests {
         assert_eq!(PhysicsSettings::info("gravity_3d").unwrap().kind, "vec3");
         // docs/SETTINGS.md lists them all.
         let doc = include_str!("../../../docs/SETTINGS.md");
-        for f in Graphics::FIELDS.iter().chain(PhysicsSettings::FIELDS) {
+        for f in Graphics::FIELDS.iter().chain(PhysicsSettings::FIELDS).chain(Display::FIELDS) {
             assert!(doc.contains(&format!("| `{}` |", f.name)), "add {} to docs/SETTINGS.md", f.name);
         }
         // Every field has help and a section.
-        for f in Graphics::FIELDS.iter().chain(PhysicsSettings::FIELDS) {
+        for f in Graphics::FIELDS.iter().chain(PhysicsSettings::FIELDS).chain(Display::FIELDS) {
             assert!(!f.doc.is_empty() && !f.section.is_empty(), "{}", f.name);
         }
     }

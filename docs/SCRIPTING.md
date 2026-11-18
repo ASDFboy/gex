@@ -262,8 +262,9 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 
 ### Settings while playing
 
-Every project graphics and physics setting (listed in [SETTINGS.md](SETTINGS.md)) can change
-while the game runs: an options menu, a low-detail mode, moon gravity.
+Every project display, graphics and physics setting (listed in [SETTINGS.md](SETTINGS.md)) and
+every input action can change while the game runs: an options menu, key rebinding, a low-detail
+mode, moon gravity.
 
 | Command | What it does |
 |---|---|
@@ -271,6 +272,11 @@ while the game runs: an options menu, a low-detail mode, moon gravity.
 | `GRAPHICS(setting)` | a graphics setting's value; `GRAPHICS()` gives a table of all of them |
 | `SET_PHYSICS(setting, value)` | changes a physics setting: `SET_PHYSICS("gravity_2d", [0, 400])`, `SET_PHYSICS("tick_rate", 120)` |
 | `PHYSICS(setting)` | a physics setting's value; `PHYSICS()` gives a table of all of them |
+| `SET_DISPLAY(setting, value)` | changes a display setting: `SET_DISPLAY("width", 640)`, `SET_DISPLAY("scale_mode", "stretch")`, `SET_DISPLAY("fullscreen", TRUE)` |
+| `DISPLAY(setting)` | a display setting's value; `DISPLAY()` gives a table of all of them |
+| `SAVE_DISPLAY(keep)` | keeps the current display settings for the next time the exported game starts; `SAVE_DISPLAY(FALSE)` forgets them |
+| `SET_ACTION(action, keys)` | rebinds an input action: `SET_ACTION("jump", ["space", "w"])`; no keys removes it |
+| `ACTION(action)` | an action's keys as a list; `ACTION()` gives a table of every action |
 
 Each object's own look and physics properties change like any other: `self.opacity = 0.4`,
 `SET("Crate", "linear_damping", 3)`.

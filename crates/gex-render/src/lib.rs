@@ -22,7 +22,7 @@ use gex_core::settings::Graphics;
 use gex_core::ObjectId;
 use wgpu::util::DeviceExt;
 
-pub use camera::{Cameras, EditorCamera2D, EditorCamera3D};
+pub use camera::{Cameras, EditorCamera2D, EditorCamera3D, GameView};
 
 /// The viewport target holds sRGB-encoded values (the shaders encode), which is what
 /// egui expects of the textures it shows.

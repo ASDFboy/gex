@@ -386,9 +386,10 @@ pub struct RenderList {
     /// 2D lighting: the dark (from the Camera2D's ambient; white = none) and the lights in it.
     pub ambient_2d: [f32; 4],
     pub lights_2d: Vec<Light2DDraw>,
-    /// What the game wants the window to be (FULLSCREEN, WINDOW_TITLE); None = as it is.
-    pub fullscreen: Option<bool>,
+    /// The game's window title (WINDOW_TITLE); None = as it is.
     pub window_title: Option<String>,
+    /// The project's display settings: resolution, full screen, scaling (scripts can change them).
+    pub display: crate::settings::Display,
     /// The project's graphics settings (scripts can change them while playing).
     pub graphics: crate::settings::Graphics,
 }

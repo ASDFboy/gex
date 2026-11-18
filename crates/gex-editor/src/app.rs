@@ -61,14 +61,10 @@ struct SettingsForm {
     hl2_games: String,
     hl2_on: bool,
     message: String,
-    window: [u32; 2],
     /// Which page: General, Graphics, Physics, Input, Half-Life 2.
     tab: usize,
     /// (action name, keys as "space, w, pad_a").
     actions: Vec<(String, String)>,
-    fullscreen: bool,
-    resizable: bool,
-    vsync: bool,
     icon: String,
 }
 
@@ -460,11 +456,7 @@ impl EditorApp {
             f.name = st.project.config.name.clone();
             f.main_blueprint = st.project.config.main_blueprint.clone();
             f.message.clear();
-            f.window = st.project.config.window_size;
             f.actions = st.project.config.actions.iter().map(|(k, v)| (k.clone(), v.join(", "))).collect();
-            f.fullscreen = st.project.config.fullscreen;
-            f.resizable = st.project.config.resizable;
-            f.vsync = st.project.config.vsync;
             f.icon = st.project.config.icon.clone();
             f.hl2_on = false;
             f.hl2_games = "ep2, episodic, hl2".into();
@@ -482,11 +474,13 @@ impl EditorApp {
         let mut open = true;
         egui::Window::new("Project settings").collapsible(false).open(&mut open).default_width(560.0).default_height(560.0).show(ctx, |ui| {
             theme::fade_in(ui);
-            theme::tab_row(ui, &["General", "Graphics", "Physics", "Input", "Half-Life 2"], &mut f.tab);
-            if f.tab == 1 || f.tab == 2 {
-                let graphics = f.tab == 1;
+            theme::tab_row(ui, &["General", "Display", "Graphics", "Physics", "Input", "Half-Life 2"], &mut f.tab);
+            if (1..=3).contains(&f.tab) {
+                let (display, graphics) = (f.tab == 1, f.tab == 2);
                 ui.label(
-                    RichText::new(if graphics {
+                    RichText::new(if display {
+                        "The game window: its resolution and how the picture fills the window or screen. Save keeps changes. Scripts change them while playing with SET_DISPLAY(\"name\", value)."
+                    } else if graphics {
                         "How the game looks. Changes show in the view at once; Save keeps them. Scripts change them while playing with SET_GRAPHICS(\"name\", value)."
                     } else {
                         "How physics works. Save keeps changes. Scripts change them while playing with SET_PHYSICS(\"name\", value)."
@@ -494,8 +488,26 @@ impl EditorApp {
                     .small()
                     .color(theme::TEXT_DIM),
                 );
+                if display {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Resolution").small().color(theme::TEXT_DIM));
+                        let d = &mut st.project.config.display;
+                        for (w, h) in [(1920, 1080), (1280, 720), (640, 360), (320, 180), (1024, 768)] {
+                            if ui.selectable_label(d.width == w && d.height == h, format!("{}×{}", w, h)).clicked() {
+                                d.width = w;
+                                d.height = h;
+                            }
+                        }
+                    });
+                }
                 egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
-                    if graphics {
+                    if display {
+                        let cfg = &mut st.project.config.display;
+                        let changes = settings_rows(ui, gex_core::settings::Display::FIELDS, &|k| cfg.get(k));
+                        for (k, v) in changes {
+                            let _ = cfg.set(&k, &v);
+                        }
+                    } else if graphics {
                         let cfg = &mut st.project.config.graphics;
                         let changes = settings_rows(ui, gex_core::settings::Graphics::FIELDS, &|k| cfg.get(k));
                         for (k, v) in changes {
@@ -518,7 +530,9 @@ impl EditorApp {
                         };
                     }
                     if ui.button("Reset to defaults").tip("Every setting on this page").clicked() {
-                        if graphics {
+                        if display {
+                            st.project.config.display = Default::default();
+                        } else if graphics {
                             st.project.config.graphics = Default::default();
                         } else {
                             st.project.config.physics = Default::default();
@@ -543,25 +557,6 @@ impl EditorApp {
                     }
                 });
                 ui.end_row();
-                ui.label("Window size");
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut f.window[0]).range(160..=7680).suffix(" px"));
-                    ui.label("×");
-                    ui.add(egui::DragValue::new(&mut f.window[1]).range(120..=4320).suffix(" px"));
-                    for (w, h) in [(1280, 720), (1920, 1080), (640, 360), (320, 180)] {
-                        if ui.small_button(format!("{}×{}", w, h)).clicked() {
-                            f.window = [w, h];
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label("Window");
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut f.fullscreen, "Full screen").tip("start the exported game full screen (Alt+Enter or F11 switches)");
-                    ui.checkbox(&mut f.resizable, "Resizable");
-                    ui.checkbox(&mut f.vsync, "Vsync").tip("no tearing; frames capped to the screen's refresh rate");
-                });
-                ui.end_row();
                 ui.label("Icon");
                 let r = ui.add(egui::TextEdit::singleline(&mut f.icon).hint_text("drop a .png here").desired_width(300.0));
                 if let Some(p) = r.dnd_release_payload::<panels::AssetPath>() {
@@ -570,10 +565,10 @@ impl EditorApp {
                 ui.end_row();
             });
             }
-            if f.tab == 3 {
+            if f.tab == 4 {
             theme::title(ui, "Input actions");
             ui.label(
-                RichText::new("Name an action once and give it any keys: then KEY_DOWN(\"jump\") and on_press_jump() work with all of them. Keys: a–z, 0–9, space, enter, escape, shift, left, right, up, down, mouse_left, mouse_right, pad_a, pad_b, pad_x, pad_y, pad_left, pad_start…")
+                RichText::new("Name an action once and give it any keys: then KEY_DOWN(\"jump\") and on_press_jump() work with all of them. Keys: a–z, 0–9, space, enter, escape, shift, left, right, up, down, mouse_left, mouse_right, pad_a, pad_b, pad_x, pad_y, pad_left, pad_start… Scripts rebind keys while playing with SET_ACTION(\"jump\", [\"space\", \"w\"]).")
                     .small()
                     .color(theme::TEXT_DIM),
             );
@@ -594,7 +589,7 @@ impl EditorApp {
                 f.actions.push((String::new(), String::new()));
             }
             }
-            if f.tab == 4 {
+            if f.tab == 5 {
             theme::title(ui, "Half-Life 2 assets");
             ui.label(
                 RichText::new("Reads textures, materials and other files straight from your own Steam install (hl2://…). Nothing is copied into the project, and exported games never include these files.")
@@ -629,10 +624,6 @@ impl EditorApp {
             if ui.button("Save").clicked() {
                 st.project.config.name = f.name.clone();
                 st.project.config.main_blueprint = f.main_blueprint.clone();
-                st.project.config.window_size = f.window;
-                st.project.config.fullscreen = f.fullscreen;
-                st.project.config.resizable = f.resizable;
-                st.project.config.vsync = f.vsync;
                 st.project.config.icon = f.icon.trim().to_string();
                 st.project.config.actions = f
                     .actions
@@ -657,7 +648,7 @@ impl EditorApp {
                                 _ => 0,
                             })
                             .sum();
-                        f.message = if f.hl2_on && f.tab == 4 { format!("Mounted: {} files in archives. Browse them in Assets → hl2://", files) } else { "Saved.".into() };
+                        f.message = if f.hl2_on && f.tab == 5 { format!("Mounted: {} files in archives. Browse them in Assets → hl2://", files) } else { "Saved.".into() };
                     }
                     Err(e) => f.message = e,
                 }
@@ -941,7 +932,6 @@ impl eframe::App for EditorApp {
 
 /// Just the game, full-window (`gex --play <project>`).
 pub struct PlayerApp {
-    design: [u32; 2],
     handle: gex_script::thread::GameHandle,
     vfs: gex_assets::Vfs,
     list: gex_core::render::RenderList,
@@ -958,8 +948,8 @@ pub struct PlayerApp {
     tap_buttons: std::collections::HashSet<String>,
     mouse_delta: [f32; 2],
     cursor_locked: bool,
-    /// The window state last asked of the OS (fullscreen, title).
-    applied_full: Option<bool>,
+    /// The window settings last asked of the OS (None until the first frame).
+    applied: Option<gex_core::settings::Display>,
     applied_title: Option<String>,
 }
 
@@ -971,7 +961,45 @@ impl PlayerApp {
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let mut list = gex_core::render::extract(&tree);
         list.graphics = project.config.graphics.clone();
-        Ok(PlayerApp { design: project.config.window_size, handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied_full: None, applied_title: None })
+        list.display = project.config.display.clone();
+        Ok(PlayerApp { handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied: None, applied_title: None })
+    }
+}
+
+impl PlayerApp {
+    /// Asks the OS for the window the display settings describe: on the first frame, and
+    /// whenever the game changes them.
+    fn apply_display(&mut self, ctx: &egui::Context) {
+        use egui::ViewportCommand as V;
+        let d = self.list.display.clone();
+        let old = self.applied.clone();
+        if old.as_ref() == Some(&d) {
+            return;
+        }
+        let first = old.is_none();
+        let was_full = old.as_ref().map(|o| o.fullscreen);
+        if first || was_full != Some(d.fullscreen) {
+            ctx.send_viewport_cmd(V::Fullscreen(d.fullscreen));
+        }
+        if first || old.as_ref().is_some_and(|o| o.resizable != d.resizable) {
+            ctx.send_viewport_cmd(V::Resizable(d.resizable));
+        }
+        // The window's size (when not full screen): the resolution times window_scale in
+        // real pixels, kept inside the screen.
+        let resized = old.as_ref().is_some_and(|o| o.width != d.width || o.height != d.height || o.window_scale != d.window_scale || (o.fullscreen && !d.fullscreen));
+        if !d.fullscreen && (first || resized) {
+            let ppp = ctx.pixels_per_point();
+            let mut size = egui::vec2(d.width as f32, d.height as f32) * d.window_scale / ppp;
+            if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
+                let k = (m.x * 0.92 / size.x).min(m.y * 0.88 / size.y).min(1.0);
+                size *= k;
+                ctx.send_viewport_cmd(V::InnerSize(size));
+                ctx.send_viewport_cmd(V::OuterPosition(((m - size) / 2.0).to_pos2().max(egui::Pos2::ZERO)));
+            } else {
+                ctx.send_viewport_cmd(V::InnerSize(size));
+            }
+        }
+        self.applied = Some(d);
     }
 }
 
@@ -1023,15 +1051,12 @@ impl eframe::App for PlayerApp {
         let d = ctx.input(mouse_motion);
         self.mouse_delta[0] += d[0];
         self.mouse_delta[1] += d[1];
-        // FULLSCREEN / WINDOW_TITLE from the game; Alt+Enter or F11 toggles full screen too.
+        // Display settings from the game (SET_DISPLAY, FULLSCREEN) and WINDOW_TITLE; Alt+Enter or F11 toggles full screen too.
         if ctx.input(|i| (i.modifiers.alt && i.key_pressed(egui::Key::Enter)) || i.key_pressed(egui::Key::F11)) {
             let now = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!now));
         }
-        if self.list.fullscreen.is_some() && self.list.fullscreen != self.applied_full {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.list.fullscreen.unwrap()));
-            self.applied_full = self.list.fullscreen;
-        }
+        self.apply_display(&ctx);
         if self.list.window_title.is_some() && self.list.window_title != self.applied_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.list.window_title.clone().unwrap()));
             self.applied_title = self.list.window_title.clone();
@@ -1049,8 +1074,13 @@ impl eframe::App for PlayerApp {
             let rect = ui.max_rect();
             let ppp = ctx.pixels_per_point();
             let px = [(rect.width() * ppp) as u32, (rect.height() * ppp) as u32];
-            let cams = gex_render::Cameras::for_game(&self.list, px, self.design);
-            let m = ctx.input(|i| i.pointer.hover_pos()).map(|p| cams.screen_to_2d(gex_core::glam::Vec2::new(p.x * ppp, p.y * ppp))).unwrap_or_default();
+            // The game is drawn at its resolution and scaled into the window (scale_mode).
+            let d = &self.list.display;
+            let design = d.size();
+            let gv = gex_render::GameView::new(&d.scale_mode, px, design);
+            let view = egui::Rect::from_min_size(rect.min + egui::vec2(gv.rect[0], gv.rect[1]) / ppp, egui::vec2(gv.rect[2], gv.rect[3]) / ppp);
+            let cams = gex_render::Cameras::for_game(&self.list, gv.render, design);
+            let m = ctx.input(|i| i.pointer.hover_pos()).map(|p| cams.screen_to_2d(gv.to_render(gex_core::glam::Vec2::new((p.x - rect.min.x) * ppp, (p.y - rect.min.y) * ppp)))).unwrap_or_default();
             if !self.handle.waiting {
                 keys.extend(self.taps.drain());
                 buttons.extend(self.tap_buttons.drain());
@@ -1066,17 +1096,19 @@ impl eframe::App for PlayerApp {
                 });
                 self.last = now;
             }
-            let probs = viewport::paint_list(ui, rs, &mut self.renderer, &mut self.tex, &self.vfs, rect, &self.list, &cams, &gex_render::Overlay::default());
+            if view != rect {
+                ui.painter().rect_filled(rect, 0.0, viewport::bar_color(d));
+            }
+            let nearest = d.scale_filter == "pixel" && d.scale_mode != "expand";
+            let probs = viewport::paint_list(ui, rs, &mut self.renderer, &mut self.tex, &self.vfs, view, &self.list, &cams, &gex_render::Overlay::default(), nearest);
             for p in probs {
                 eprintln!("{}", p);
             }
-            let design = gex_core::glam::Vec2::new(self.design[0] as f32, self.design[1] as f32);
-            let fit = (px[0] as f32 / design.x).min(px[1] as f32 / design.y);
-            let map = |p: gex_core::glam::Vec2| {
-                let s = (p - design / 2.0) * fit + gex_core::glam::Vec2::new(px[0] as f32, px[1] as f32) / 2.0;
-                rect.min + egui::vec2(s.x / ppp, s.y / ppp)
-            };
-            let ev = crate::ui_layer::paint_ui(ui, &self.list.ui, design, &map, fit / ppp, true, &mut self.ui_images, &self.vfs);
+            let design = gex_core::glam::Vec2::new(design[0] as f32, design[1] as f32);
+            let (map, scale) = viewport::ui_mapping(&self.list.display, design, view);
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            child.set_clip_rect(view);
+            let ev = crate::ui_layer::paint_ui(&mut child, &self.list.ui, design, &map, scale, true, &mut self.ui_images, &self.vfs);
             self.ui_events.extend(ev);
             viewport::paint_fade(ui, rect, self.list.fade);
         });

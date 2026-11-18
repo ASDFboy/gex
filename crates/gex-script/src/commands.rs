@@ -93,6 +93,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("GRAPHICS", "(setting)", "a graphics setting's value; with no input, a table of all of them"),
     ("SET_PHYSICS", "(setting, value)", "changes a project physics setting while the game runs (gravity_2d, gravity_3d, tick_rate, solver_iterations, max_slope...)"),
     ("PHYSICS", "(setting)", "a physics setting's value; with no input, a table of all of them"),
+    ("SET_DISPLAY", "(setting, value)", "changes a display setting while the game runs: width, height (the resolution), window_scale, fullscreen, resizable, scale_mode, scale_filter, bar_color"),
+    ("DISPLAY", "(setting)", "a display setting's value; with no input, a table of all of them"),
+    ("SAVE_DISPLAY", "(keep)", "keeps the current display settings for the next time the game starts (an options menu's Apply); FALSE forgets them"),
+    ("SET_ACTION", "(action, keys)", "gives an input action new keys (a list or a text like \"space, w\"), for key rebinding; no keys removes it"),
+    ("ACTION", "(action)", "an input action's keys as a list; with no input, a table of every action"),
 ];
 
 /// Names from before nodes were called objects and scenes blueprints: scripts using them
@@ -827,25 +832,33 @@ impl Host for EngineHost {
                 Ok(Value::Null)
             }
             "PAUSED" => Ok(Value::Bool(st.paused)),
-            "SET_GRAPHICS" | "SET_PHYSICS" => {
+            "SET_GRAPHICS" | "SET_PHYSICS" | "SET_DISPLAY" => {
                 let key = text_arg(name, &a, 0)?;
                 let v = a.get(1).cloned().unwrap_or(Value::Null);
-                let graphics = name == "SET_GRAPHICS";
-                let like = if graphics { st.project.config.graphics.get(&key) } else { st.physics.settings.get(&key) };
-                let like = match like {
-                    Some(l) => l,
-                    None => return err(format!("there's no {} setting called {}", if graphics { "graphics" } else { "physics" }, key)),
+                let what = &name[4..];
+                let c = &mut st.project.config;
+                let like = match what {
+                    "GRAPHICS" => c.graphics.get(&key),
+                    "DISPLAY" => c.display.get(&key),
+                    _ => st.physics.settings.get(&key),
                 };
+                let Some(like) = like else { return err(format!("there's no {} setting called {}", what.to_lowercase(), key)) };
                 let Some(var) = to_variant(&v, Some(&like)) else { return err(format!("{} can't take a {}", key, v.type_name())) };
-                let r = if graphics { st.project.config.graphics.set(&key, &var) } else { st.physics.settings.set(&key, &var) };
+                let r = match what {
+                    "GRAPHICS" => c.graphics.set(&key, &var),
+                    "DISPLAY" => c.display.set(&key, &var),
+                    _ => st.physics.settings.set(&key, &var),
+                };
                 r.or_else(err)?;
                 Ok(Value::Null)
             }
-            "GRAPHICS" | "PHYSICS" => {
-                let all: Vec<(&str, gex_core::Variant)> = if name == "GRAPHICS" {
-                    gex_core::settings::Graphics::FIELDS.iter().filter_map(|f| st.project.config.graphics.get(f.name).map(|v| (f.name, v))).collect()
-                } else {
-                    gex_core::settings::PhysicsSettings::FIELDS.iter().filter_map(|f| st.physics.settings.get(f.name).map(|v| (f.name, v))).collect()
+            "GRAPHICS" | "PHYSICS" | "DISPLAY" => {
+                use gex_core::settings::{Display, Graphics, PhysicsSettings};
+                let c = &st.project.config;
+                let all: Vec<(&str, gex_core::Variant)> = match name {
+                    "GRAPHICS" => Graphics::FIELDS.iter().filter_map(|f| c.graphics.get(f.name).map(|v| (f.name, v))).collect(),
+                    "DISPLAY" => Display::FIELDS.iter().filter_map(|f| c.display.get(f.name).map(|v| (f.name, v))).collect(),
+                    _ => PhysicsSettings::FIELDS.iter().filter_map(|f| st.physics.settings.get(f.name).map(|v| (f.name, v))).collect(),
                 };
                 match a.first() {
                     None | Some(Value::Null) => Ok(jlb::embed::named_table(all.iter().map(|(k, v)| (*k, to_value(v))).collect())),
@@ -858,6 +871,40 @@ impl Host for EngineHost {
                     }
                 }
             }
+            "SAVE_DISPLAY" => {
+                let keep = a.first().is_none_or(|v| !matches!(v, Value::Bool(false) | Value::Null));
+                let c = &st.project.config;
+                crate::extras::save_display(&c.name, keep.then_some(&c.display)).or_else(err)?;
+                Ok(Value::Null)
+            }
+            "SET_ACTION" => {
+                let action = text_arg(name, &a, 0)?.trim().to_lowercase().replace(' ', "_");
+                let keys: Vec<String> = match a.get(1) {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Text(t)) => t.split([',', ' ']).map(|k| k.trim().to_lowercase()).filter(|k| !k.is_empty()).collect(),
+                    Some(Value::Table(rc, _)) => rc.items.iter().filter_map(|k| match &*k.borrow() {
+                        Value::Text(t) => Some(t.trim().to_lowercase()),
+                        _ => None,
+                    }).filter(|k| !k.is_empty()).collect(),
+                    Some(o) => return err(format!("SET_ACTION needs keys as a list or a text, not a {}", o.type_name())),
+                };
+                if keys.is_empty() {
+                    st.input.actions.remove(&action);
+                } else {
+                    st.input.actions.insert(action, keys);
+                }
+                Ok(Value::Null)
+            }
+            "ACTION" => {
+                let keys = |ks: &Vec<String>| jlb::embed::list_table(ks.iter().map(|k| Value::Text(k.as_str().into())).collect());
+                match a.first() {
+                    None | Some(Value::Null) => Ok(jlb::embed::named_table(st.input.actions.iter().map(|(k, v)| (k.as_str(), keys(v))).collect())),
+                    Some(_) => {
+                        let action = text_arg(name, &a, 0)?.to_lowercase();
+                        Ok(st.input.actions.get(&action).map(keys).unwrap_or(Value::Null))
+                    }
+                }
+            }
             "TIME_SCALE" => {
                 if let Some(v) = a.first().and_then(as_f64) {
                     st.time_scale = v.clamp(0.0, 100.0);
@@ -866,9 +913,9 @@ impl Host for EngineHost {
             }
             "FULLSCREEN" => {
                 if let Some(v) = a.first() {
-                    st.fullscreen = Some(!matches!(v, Value::Bool(false) | Value::Null));
+                    st.project.config.display.fullscreen = !matches!(v, Value::Bool(false) | Value::Null);
                 }
-                Ok(Value::Bool(st.fullscreen.unwrap_or(st.project.config.fullscreen)))
+                Ok(Value::Bool(st.project.config.display.fullscreen))
             }
             "WINDOW_TITLE" => {
                 st.window_title = Some(text_arg(name, &a, 0)?);

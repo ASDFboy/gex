@@ -88,6 +88,43 @@ pub fn ortho_2d(center: Vec2, zoom: f32, rotation: f32, size: [u32; 2]) -> Mat4 
     proj * Mat4::from_rotation_z(-rotation) * Mat4::from_translation(-center.extend(0.0))
 }
 
+/// Where a game's picture goes in a window, and the size it's drawn at, for a display
+/// scale mode (see gex_core::settings::Display).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GameView {
+    /// Pixels the game is drawn at.
+    pub render: [u32; 2],
+    /// Where it's shown in the window, in window pixels: x, y, width, height.
+    pub rect: [f32; 4],
+}
+
+impl GameView {
+    pub fn new(mode: &str, window: [u32; 2], design: [u32; 2]) -> GameView {
+        let (w, h) = (window[0].max(1) as f32, window[1].max(1) as f32);
+        let design = [design[0].max(1), design[1].max(1)];
+        let (dw, dh) = (design[0] as f32, design[1] as f32);
+        let full = [0.0, 0.0, w, h];
+        let centered = |s: f32| {
+            let (rw, rh) = (dw * s, dh * s);
+            [((w - rw) / 2.0).round(), ((h - rh) / 2.0).round(), rw, rh]
+        };
+        match mode {
+            "expand" => GameView { render: [w as u32, h as u32], rect: full },
+            "stretch" => GameView { render: design, rect: full },
+            "pixel" => {
+                let s = (w / dw).min(h / dh);
+                GameView { render: design, rect: centered(if s >= 1.0 { s.floor() } else { s }) }
+            }
+            _ => GameView { render: design, rect: centered((w / dw).min(h / dh)) },
+        }
+    }
+
+    /// A point in window pixels as a point in the game's drawn pixels.
+    pub fn to_render(&self, p: Vec2) -> Vec2 {
+        Vec2::new((p.x - self.rect[0]) / self.rect[2].max(1.0) * self.render[0] as f32, (p.y - self.rect[1]) / self.rect[3].max(1.0) * self.render[1] as f32)
+    }
+}
+
 impl Cameras {
     /// What the game itself sees: its current Camera2D/Camera3D. `design` is the game's
     /// window size from the project: the 2D view is scaled to fit it whatever the real
@@ -194,5 +231,28 @@ pub fn ray_box(origin: Vec3, dir: Vec3, model: Mat4) -> Option<f32> {
         Some(hit.distance(origin))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod game_view_tests {
+    use super::*;
+
+    #[test]
+    fn scale_modes() {
+        // A 320×180 game on a 1920×1200 screen.
+        let fit = GameView::new("fit", [1920, 1200], [320, 180]);
+        assert_eq!(fit.render, [320, 180]);
+        assert_eq!(fit.rect, [0.0, 60.0, 1920.0, 1080.0]);
+        let px = GameView::new("pixel", [1920, 1200], [320, 180]);
+        assert_eq!(px.rect, [0.0, 60.0, 1920.0, 1080.0], "6× fits exactly");
+        let px = GameView::new("pixel", [1900, 1200], [320, 180]);
+        assert_eq!(px.rect[2], 1600.0, "5×, whole numbers only");
+        let st = GameView::new("stretch", [1920, 1200], [320, 180]);
+        assert_eq!(st.rect, [0.0, 0.0, 1920.0, 1200.0]);
+        let ex = GameView::new("expand", [1920, 1200], [320, 180]);
+        assert_eq!(ex.render, [1920, 1200]);
+        // The middle of the screen is the middle of the game.
+        assert_eq!(fit.to_render(Vec2::new(960.0, 600.0)), Vec2::new(160.0, 90.0));
     }
 }

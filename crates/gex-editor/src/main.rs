@@ -68,21 +68,31 @@ fn main() -> std::process::ExitCode {
     }
     if args.first().map(|a| a.as_str()) == Some("--play") {
         let dir = PathBuf::from(args.get(1).cloned().unwrap_or_else(|| ".".into()));
-        let project = match gex_core::project::Project::open(&dir) {
+        let mut project = match gex_core::project::Project::open(&dir) {
             Ok(p) => p,
             Err(e) => {
                 log::error!(target: "gex", "{}", e);
                 return std::process::ExitCode::FAILURE;
             }
         };
-        let [w, h] = project.config.window_size;
+        // Display settings the game kept with SAVE_DISPLAY win over the project's.
+        if let Some(d) = gex_script::extras::saved_display(&project.config.name) {
+            project.config.display = d;
+        }
         let title = project.config.name.clone();
-        let c = &project.config;
-        let mut opts = options(&title, [w as f32, h as f32]);
-        if !c.vsync {
+        let d = &project.config.display;
+        let mut opts = options(&title, [d.width as f32, d.height as f32]);
+        if !d.vsync {
             opts.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::AutoNoVsync;
         }
-        opts.viewport = opts.viewport.with_min_inner_size([160.0, 90.0]).with_resizable(c.resizable).with_fullscreen(c.fullscreen);
+        // The real size (in screen pixels, inside the screen) is set on the first frame:
+        // the screen's scaling isn't known yet. A full-screen window gets no size at all, or
+        // the OS shrinks it back to that size.
+        let mut vp = egui::ViewportBuilder::default().with_title(&title).with_min_inner_size([160.0, 90.0]).with_resizable(d.resizable).with_fullscreen(d.fullscreen);
+        if !d.fullscreen {
+            vp = vp.with_inner_size([d.width as f32 * d.window_scale, d.height as f32 * d.window_scale]).with_clamp_size_to_monitor_size(true);
+        }
+        opts.viewport = vp;
         if let Some(icon) = window_icon(&project) {
             opts.viewport = opts.viewport.with_icon(icon);
         }

@@ -15,7 +15,7 @@ pub const GROUPS: &[(&str, &str)] = &[
     ("Tiles", "Reading and changing TileMap2D tiles, and finding paths through them."),
     ("Drawing", "Shapes, text and pictures drawn for one frame (call them from on_draw)."),
     ("Saving and remembering", "Keeping values between blueprints, and on disk between runs."),
-    ("Settings", "Changing project graphics and physics settings while the game runs."),
+    ("Settings", "Changing project display, graphics, physics and input settings while the game runs."),
     ("Maps", "Half-Life 2 maps (.bsp) shown by a Mesh3D: their entities and doors."),
 ];
 
@@ -173,7 +173,7 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
      "Shakes the camera: SHAKE(strength, seconds). strength is in pixels (2D; defaults to 8) and dies away over seconds (defaults to 0.4).",
      "SHAKE(12, 0.3)"),
     ("FULLSCREEN", "Time and game flow",
-     "FULLSCREEN(TRUE) makes the game window full screen, FALSE puts it back. FULLSCREEN() with no input gives whether it is. (Alt+Enter and F11 switch too.)",
+     "FULLSCREEN(TRUE) makes the game window full screen, FALSE puts it back. FULLSCREEN() with no input gives whether it is. (Alt+Enter and F11 switch too; SET_DISPLAY changes the resolution and how the picture is scaled.)",
      "FULLSCREEN(!FULLSCREEN())"),
     ("WINDOW_TITLE", "Time and game flow",
      "Changes the text in the game window's title bar.",
@@ -288,6 +288,29 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
     ("PHYSICS", "Settings",
      "A physics setting's current value; PHYSICS() with no input gives a table of all of them.",
      "g = PHYSICS(\"gravity_2d\")"),
+    ("SET_DISPLAY", "Settings",
+     "Changes one of the project's display settings while the game runs (Project settings → Display):\n\n\
+      width, height: the resolution the game is drawn at (in a window, the window resizes to match).\n\
+      window_scale: how big the window is compared to the resolution.\n\
+      fullscreen: TRUE fills the screen (same as FULLSCREEN).\n\
+      resizable: whether the player can resize the window.\n\
+      scale_mode: \"fit\" (keeps the shape, bars around it), \"stretch\" (fills, may squash), \"pixel\" (whole-number scaling for pixel art) or \"expand\" (draws at the window's size and shows more).\n\
+      scale_filter: \"smooth\" or \"pixel\" (sharp squares when scaled).\n\
+      bar_color: the color of the bars.\n\n\
+      vsync is read when the game starts: change it, then SAVE_DISPLAY() keeps it for next time. Changes last until the game stops unless kept with SAVE_DISPLAY.",
+     "SET_DISPLAY(\"width\", 1280)\nSET_DISPLAY(\"height\", 720)\nSET_DISPLAY(\"scale_mode\", \"pixel\")"),
+    ("DISPLAY", "Settings",
+     "A display setting's current value; DISPLAY() with no input gives a table of all of them.",
+     "res = DISPLAY(\"width\") + \"x\" + DISPLAY(\"height\")"),
+    ("SAVE_DISPLAY", "Settings",
+     "Keeps the current display settings on this computer, so the exported game starts with them next time instead of the project's: the Apply button of an options menu. SAVE_DISPLAY(FALSE) forgets them and the project's settings are used again. (Playing in the editor always uses the project's settings.)",
+     "DEF on_pressed_apply() {\n\tSET_DISPLAY(\"fullscreen\", GLOBAL.want_full)\n\tSET_DISPLAY(\"vsync\", GLOBAL.want_vsync)\n\tSAVE_DISPLAY()\n}"),
+    ("SET_ACTION", "Settings",
+     "Gives an input action (Project settings → Input) new keys while the game runs, for key rebinding: SET_ACTION(action, keys). keys is a list ([\"space\", \"w\"]) or a text (\"space, w\"); none removes the action. KEY_DOWN(\"jump\") and on_press_jump() use the new keys at once. It lasts until the game stops (keep choices with SAVE and set them again at the start).",
+     "SET_ACTION(\"jump\", [\"space\", \"up\", \"pad_a\"])"),
+    ("ACTION", "Settings",
+     "An input action's keys as a list (NULL if there's no such action); ACTION() with no input gives a table of every action and its keys.",
+     "FOR k IN ACTION(\"jump\") {\n\tPRINT(k)\n}"),
 
     // ---------------------------------------------------------------- maps
     ("MAP_ENTITIES", "Maps",

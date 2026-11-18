@@ -195,9 +195,10 @@ fn run(project: Project, tree: BlueprintTree, cancel: Arc<AtomicBool>, rx: Recei
                 let next = game.st.borrow_mut().change_blueprint.take();
                 if let Some(res) = next {
                     let mut logs = game.take_logs();
-                    let (shared, fade, full, title) = {
+                    // Settings scripts changed last for the whole run, across blueprints.
+                    let (shared, fade, title, graphics, display, physics, actions) = {
                         let st = game.st.borrow();
-                        (st.shared.clone(), st.fade.clone(), st.fullscreen, st.window_title.clone())
+                        (st.shared.clone(), st.fade.clone(), st.window_title.clone(), st.project.config.graphics.clone(), st.project.config.display.clone(), st.physics.settings.clone(), st.input.actions.clone())
                     };
                     match project.read_text(&res).map_err(|e| e).and_then(|t| blueprint::load(&t, &|p: &str| project.read_text(p)).map_err(|e| e.0)) {
                         Ok(t) => {
@@ -205,8 +206,11 @@ fn run(project: Project, tree: BlueprintTree, cancel: Arc<AtomicBool>, rx: Recei
                             game.set_pause_hook(pause_hook(bp.clone(), tx.clone(), debug.clone(), cancel.clone()));
                             let mut st = game.st.borrow_mut();
                             st.shared = shared;
-                            st.fullscreen = full;
                             st.window_title = title;
+                            st.project.config.graphics = graphics;
+                            st.project.config.display = display;
+                            st.physics.settings = physics;
+                            st.input.actions = actions;
                             // The fade comes back in from its color.
                             st.fade = fade.map(|f| crate::world::Fade { to_blueprint: None, time: 0.0, ..f });
                         }

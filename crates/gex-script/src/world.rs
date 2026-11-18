@@ -158,7 +158,6 @@ pub struct WorldState {
     pub mouse_delta: [f32; 2],
     /// A script asked for the mouse to be hidden and held (first-person look).
     pub mouse_locked: bool,
-    pub fullscreen: Option<bool>,
     pub window_title: Option<String>,
     /// DRAW_* commands from this frame.
     pub draws: Vec<crate::commands::Draw>,
@@ -292,7 +291,6 @@ impl Game {
             wheel: 0.0,
             mouse_delta: [0.0; 2],
             mouse_locked: false,
-            fullscreen: None,
             window_title: None,
             draws: Vec::new(),
             anims: HashMap::new(),
@@ -1024,7 +1022,7 @@ impl Game {
                     (Some((m.w_axis.truncate(), true)), m.x_axis.truncate().normalize_or(glam::Vec3::X))
                 }
                 None => {
-                    let [w, h] = st.project.config.window_size;
+                    let [w, h] = st.project.config.display.size();
                     let c = st.cam2_center.unwrap_or(glam::Vec2::new(w as f32 / 2.0, h as f32 / 2.0));
                     (Some((c.extend(0.0), false)), glam::Vec3::X)
                 }
@@ -1402,7 +1400,7 @@ impl Game {
         };
         if n.prop("limits").is_some_and(|v| v.as_bool()) {
             let zoom = n.num("zoom", 1.0).max(0.01) as f32;
-            let [w, h] = st.project.config.window_size;
+            let [w, h] = st.project.config.display.size();
             let half = glam::Vec2::new(w as f32, h as f32) / (2.0 * zoom);
             let (l, t, r, b) = (n.num("limit_left", 0.0) as f32, n.num("limit_top", 0.0) as f32, n.num("limit_right", w as f64) as f32, n.num("limit_bottom", h as f64) as f32);
             c.x = if r - l < half.x * 2.0 { (l + r) / 2.0 } else { c.x.clamp(l + half.x, r - half.x) };
@@ -1443,7 +1441,7 @@ impl Game {
             }
         }
         list.mouse_locked = st.mouse_locked;
-        list.fullscreen = st.fullscreen;
+        list.display = st.project.config.display.clone();
         list.window_title = st.window_title.clone();
         let jolt = Self::shake_offset(&st);
         if let Some(cam) = &mut list.camera2d {

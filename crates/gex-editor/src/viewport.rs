@@ -80,35 +80,66 @@ pub fn mouse_buttons(i: &egui::InputState) -> HashSet<String> {
 }
 
 /// Renders a list into the viewport texture and paints it (plus labels) into `rect`.
-pub fn paint_list(ui: &egui::Ui, rs: &egui_wgpu::RenderState, renderer: &mut Option<Renderer>, tex_id: &mut Option<egui::TextureId>, vfs: &gex_assets::Vfs, rect: Rect, list: &RenderList, cams: &Cameras, overlay: &Overlay) -> Vec<String> {
+/// The color of the bars around a scaled game picture.
+pub fn bar_color(d: &gex_core::settings::Display) -> Color32 {
+    let c = d.bar_color;
+    Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8)
+}
+
+/// Where UI objects (laid out in the game's resolution) go on screen: a point mapping and
+/// points per game pixel. `view` is where the game's picture is shown.
+pub fn ui_mapping(d: &gex_core::settings::Display, design: Vec2, view: Rect) -> (impl Fn(Vec2) -> Pos2, f32) {
+    let size = Vec2::new(view.width(), view.height());
+    let (k, fit) = if d.scale_mode == "expand" {
+        // The picture is the window's size: UI keeps its shape, centred and scaled to fit.
+        let f = (size.x / design.x).min(size.y / design.y);
+        (Vec2::splat(f), f)
+    } else {
+        let k = size / design;
+        (k, k.x.min(k.y))
+    };
+    let center = Vec2::new(view.center().x, view.center().y);
+    (move |p: Vec2| { let s = (p - design / 2.0) * k + center; Pos2::new(s.x, s.y) }, fit)
+}
+
+/// Draws a render list into `rect` (the picture is drawn at `cams.size` pixels and scaled
+/// to fill the rect; `nearest` keeps scaled pixels sharp).
+pub fn paint_list(ui: &egui::Ui, rs: &egui_wgpu::RenderState, renderer: &mut Option<Renderer>, tex_id: &mut Option<egui::TextureId>, vfs: &gex_assets::Vfs, rect: Rect, list: &RenderList, cams: &Cameras, overlay: &Overlay, nearest: bool) -> Vec<String> {
     let r = renderer.get_or_insert_with(|| Renderer::new(&rs.device, &rs.queue));
     let new_target = r.render(&rs.device, &rs.queue, vfs, cams.size, list, cams, overlay);
     let view = r.target_view().unwrap();
+    let filter = if nearest { wgpu::FilterMode::Nearest } else { wgpu::FilterMode::Linear };
     {
         let mut egui_r = rs.renderer.write();
         match tex_id {
-            None => *tex_id = Some(egui_r.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear)),
-            Some(id) if new_target => egui_r.update_egui_texture_from_wgpu_texture(&rs.device, view, wgpu::FilterMode::Linear, *id),
-            _ => {}
+            None => *tex_id = Some(egui_r.register_native_texture(&rs.device, view, filter)),
+            Some(id) => {
+                let key = egui::Id::new(("gex texture filter", *id));
+                let was = ui.ctx().data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
+                if new_target || was != nearest {
+                    egui_r.update_egui_texture_from_wgpu_texture(&rs.device, view, filter, *id);
+                }
+            }
         }
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("gex texture filter", tex_id.unwrap())), nearest));
     }
     let painter = ui.painter_at(rect);
     painter.image(tex_id.unwrap(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+    // Drawn pixels → points on screen.
+    let (kx, ky) = (rect.width() / cams.size[0].max(1) as f32, rect.height() / cams.size[1].max(1) as f32);
     // Text: drawn by egui on top, at the label's 2D position.
     if cams.draw_2d {
-        let ppp = ui.ctx().pixels_per_point();
         for l in &list.labels {
-            let s = cams.world_2d_to_screen(l.pos) / ppp;
+            let s = cams.world_2d_to_screen(l.pos);
             let zoom = (cams.view_proj_2d.x_axis.x * cams.size[0] as f32 / 2.0).abs();
             let c = l.color;
             let color = Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8);
             let fam = crate::text::family(ui.ctx(), vfs, &l.font);
-            crate::text::paint(&painter, rect.min + egui::vec2(s.x, s.y), egui::Align2::LEFT_TOP, &l.text, egui::FontId::new((l.size * zoom / ppp).max(4.0), fam), color, zoom / ppp);
+            crate::text::paint(&painter, rect.min + egui::vec2(s.x * kx, s.y * ky), egui::Align2::LEFT_TOP, &l.text, egui::FontId::new((l.size * zoom * ky).max(4.0), fam), color, zoom * ky);
         }
     }
     // Label3D: text at a 3D point, facing the screen.
     if cams.draw_3d {
-        let ppp = ui.ctx().pixels_per_point();
         for l in &list.labels_3d {
             let c = cams.view_proj_3d * l.pos.extend(1.0);
             if c.w <= 0.01 {
@@ -122,7 +153,7 @@ pub fn paint_list(ui: &egui::Ui, rs: &egui_wgpu::RenderState, renderer: &mut Opt
             let cl = l.color;
             let color = Color32::from_rgba_unmultiplied((cl[0] * 255.0) as u8, (cl[1] * 255.0) as u8, (cl[2] * 255.0) as u8, (cl[3] * 255.0) as u8);
             let fam = crate::text::family(ui.ctx(), vfs, &l.font);
-            crate::text::paint(&painter, at, egui::Align2::CENTER_BOTTOM, &l.text, egui::FontId::new((l.size / ppp).max(4.0), fam), color, 1.0 / ppp);
+            crate::text::paint(&painter, at, egui::Align2::CENTER_BOTTOM, &l.text, egui::FontId::new((l.size * ky).max(4.0), fam), color, ky);
         }
     }
     std::mem::take(&mut r.problems)
@@ -230,7 +261,7 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
         }
         // The game window, when there's no Camera2D: (0,0) to the window size.
         if list.camera2d.is_none() {
-            let [w, h] = st.project.config.window_size;
+            let [w, h] = list.display.size();
             o.quad2([[0.0, 0.0], [w as f32, 0.0], [w as f32, h as f32], [0.0, h as f32]], [0.6, 0.6, 0.9, 0.5]);
         }
         for c in list.colliders.iter().filter(|_| st.show_colliders) {
@@ -275,7 +306,7 @@ fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Op
     let w = cams.screen_to_2d(screen);
     let zoom = (cams.view_proj_2d.x_axis.x * cams.size[0] as f32 / 2.0).abs().max(0.01);
     // UI objects sit on top (in the editor, game-window pixels are world pixels).
-    let [dw, dh] = st.project.config.window_size;
+    let [dw, dh] = list.display.size();
     for u in list.ui.iter().rev() {
         let tl = u.top_left(Vec2::new(dw as f32, dh as f32));
         if w.x >= tl.x && w.y >= tl.y && w.x <= tl.x + u.size.x && w.y <= tl.y + u.size.y {
@@ -370,7 +401,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     let px = [(rect.width() * ppp) as u32, (rect.height() * ppp) as u32];
     if !st.cam_fitted && px[0] > 64 && px[1] > 64 {
         // Start with the whole game window in view.
-        let [w, h] = st.project.config.window_size;
+        let [w, h] = st.project.config.display.size();
         st.cam2.center = Vec2::new(w as f32 / 2.0, h as f32 / 2.0);
         st.cam2.zoom = (px[0] as f32 / w as f32).min(px[1] as f32 / h as f32) * 0.9;
         st.cam_fitted = true;
@@ -382,11 +413,16 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         None => {
             let mut l = extract(&st.tree);
             l.graphics = st.project.config.graphics.clone();
+            l.display = st.project.config.display.clone();
             preview_particles(ui.ctx(), st, &mut l);
             l
         }
     };
-    let cams = if game_cam { Cameras::for_game(&list, px, st.project.config.window_size) } else { Cameras::for_editor(st.mode_3d, &st.cam2, &st.cam3, px) };
+    // The game's resolution, and (with the game camera) where its picture goes in the view.
+    let design = list.display.size();
+    let gv = if game_cam { gex_render::GameView::new(&list.display.scale_mode, px, design) } else { gex_render::GameView { render: px, rect: [0.0, 0.0, px[0] as f32, px[1] as f32] } };
+    let view_rect = Rect::from_min_size(rect.min + egui::vec2(gv.rect[0], gv.rect[1]) / ppp, egui::vec2(gv.rect[2], gv.rect[3]) / ppp);
+    let cams = if game_cam { Cameras::for_game(&list, gv.render, design) } else { Cameras::for_editor(st.mode_3d, &st.cam2, &st.cam3, px) };
 
     // ---- input ----
     let (scroll, pointer, delta, secondary, middle, shift, keys) = ui.input(|i| {
@@ -427,7 +463,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
                 p.wheel += scroll / 50.0;
             }
             if let Some(pp) = pointer {
-                let m = cams.screen_to_2d(to_px(pp));
+                let m = cams.screen_to_2d(gv.to_render(to_px(pp)));
                 p.mouse = [m.x, m.y];
             }
         } else {
@@ -689,8 +725,10 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         list.clear = [0.0; 4];
         let painter = ui.painter_at(rect);
         painter.add(theme::vgradient(rect, Color32::from_rgb(0x36, 0x36, 0x36), Color32::from_rgb(0x1c, 0x1c, 0x1c)));
+    } else if view_rect != rect {
+        ui.painter_at(rect).rect_filled(rect, 0.0, bar_color(&list.display));
     }
-    let problems = paint_list(ui, rs, &mut st.renderer, textures, &st.vfs, rect, &list, &cams, &overlay);
+    let problems = paint_list(ui, rs, &mut st.renderer, textures, &st.vfs, view_rect, &list, &cams, &overlay, game_cam && list.display.scale_filter == "pixel" && list.display.scale_mode != "expand");
     if !playing {
         compass(ui, rect, st.mode_3d, &cams);
     }
@@ -698,18 +736,21 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         st.log(gex_script::LogKind::Error, p);
     }
     // UI objects, in game-window pixels.
-    let [dw, dh] = st.project.config.window_size;
-    let design = Vec2::new(dw as f32, dh as f32);
+    let design = Vec2::new(design[0] as f32, design[1] as f32);
     let events = {
         let world_ui = !game_cam && !st.mode_3d;
-        let fit = (px[0] as f32 / design.x).min(px[1] as f32 / design.y);
+        let map_ui = ui_mapping(&list.display, design, view_rect);
         let map = |p: Vec2| -> Pos2 {
-            let s = if world_ui { cams.world_2d_to_screen(p) } else { (p - design / 2.0) * fit + Vec2::new(px[0] as f32, px[1] as f32) / 2.0 };
-            rect.min + egui::vec2(s.x / ppp, s.y / ppp)
+            if world_ui {
+                let s = cams.world_2d_to_screen(p);
+                rect.min + egui::vec2(s.x / ppp, s.y / ppp)
+            } else {
+                map_ui.0(p)
+            }
         };
-        let scale = if world_ui { st.cam2.zoom / ppp } else { fit / ppp };
+        let scale = if world_ui { st.cam2.zoom / ppp } else { map_ui.1 };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-        child.set_clip_rect(rect);
+        child.set_clip_rect(if game_cam { view_rect } else { rect });
         crate::ui_layer::paint_ui(&mut child, &list.ui, design, &map, scale, playing && game_cam, &mut st.ui_images, &st.vfs)
     };
     if game_cam {

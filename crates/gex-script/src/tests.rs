@@ -1226,3 +1226,43 @@ fn sweep_project_blueprints() {
     }
 }
 
+
+#[test]
+fn display_settings_and_actions_from_scripts() {
+    let blueprint = r#"(root: (name: "R", kind: Some(Object2D), scripts: ["res://main.jlb"]))"#;
+    let main = r#"
+DEF on_create() {
+    SET_DISPLAY("width", 320)
+    SET_DISPLAY("height", 180)
+    SET_DISPLAY("scale_mode", "pixel")
+    FULLSCREEN(TRUE)
+    self.res = DISPLAY("width") + "x" + DISPLAY().height
+    self.full = DISPLAY("fullscreen")
+    SET_ACTION("jump", ["space", "W"])
+    SET_ACTION("fire", "x, mouse_left")
+    SET_ACTION("old", NULL)
+    self.keys = ACTION("jump")[2]
+    self.fire = ACTION().fire[1]
+}
+DEF on_step(dt) {
+    IF KEY_DOWN("jump") { self.jumped = TRUE }
+}
+"#;
+    let p = project("display", &[("main.jblueprint", blueprint), ("main.jlb", main)]);
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    g.frame(1.0 / 60.0, ["w".to_string()].into_iter().collect(), [0.0; 2], HashSet::new());
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let list = g.render_list();
+    assert_eq!(list.display.size(), [320, 180]);
+    assert_eq!(list.display.scale_mode, "pixel");
+    assert!(list.display.fullscreen);
+    let t = g.tree();
+    let r = &t.objects[t.find_path(None, "R").unwrap()].props;
+    assert_eq!(r.get("res"), Some(&Variant::Text("320x180".into())));
+    assert_eq!(r.get("full"), Some(&Variant::Bool(true)));
+    assert_eq!(r.get("keys"), Some(&Variant::Text("w".into())));
+    assert_eq!(r.get("fire"), Some(&Variant::Text("x".into())));
+    assert_eq!(r.get("jumped"), Some(&Variant::Bool(true)), "the new key works at once");
+}

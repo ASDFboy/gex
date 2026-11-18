@@ -13,13 +13,14 @@ pub struct ProjectConfig {
     /// The blueprint the game starts in (res:// path).
     #[serde(alias = "main_scene")]
     pub main_blueprint: String,
-    pub window_size: [u32; 2],
+    /// The game window: resolution, full screen, scaling (see settings.rs).
+    pub display: crate::settings::Display,
     /// Extra asset sources (see gex-assets): e.g. a Source-engine game install.
     pub mounts: Vec<MountConfig>,
     /// Older project files kept gravity here; it moves into `physics` when they're opened.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "bare_some")]
     pub gravity_2d: Option<[f32; 2]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "bare_some")]
     pub gravity_3d: Option<[f32; 3]>,
     /// How the game looks (see settings.rs).
     pub graphics: crate::settings::Graphics,
@@ -28,18 +29,28 @@ pub struct ProjectConfig {
     /// Input actions: a name scripts use ("jump") → the keys and buttons that trigger it
     /// (["space", "w", "pad_a"]). `KEY_DOWN("jump")` and `on_press_jump()` then work with any.
     pub actions: std::collections::BTreeMap<String, Vec<String>>,
-    /// The exported game's window: full screen, resizable, vsync (no tearing, capped to the screen's rate).
-    pub fullscreen: bool,
-    pub resizable: bool,
-    pub vsync: bool,
+    /// Older project files kept the window settings here; they move into `display` when opened.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "bare_some")]
+    pub window_size: Option<[u32; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "bare_some")]
+    pub fullscreen: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "bare_some")]
+    pub resizable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "bare_some")]
+    pub vsync: Option<bool>,
     /// A .png for the window and the exported program's icon.
     pub icon: String,
 }
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        ProjectConfig { name: "New Game".into(), main_blueprint: "res://blueprints/main.jblueprint".into(), window_size: [1280, 720], mounts: Vec::new(), gravity_2d: None, gravity_3d: None, graphics: Default::default(), physics: Default::default(), actions: Default::default(), fullscreen: false, resizable: true, vsync: true, icon: String::new() }
+        ProjectConfig { name: "New Game".into(), main_blueprint: "res://blueprints/main.jblueprint".into(), display: Default::default(), mounts: Vec::new(), gravity_2d: None, gravity_3d: None, graphics: Default::default(), physics: Default::default(), actions: Default::default(), window_size: None, fullscreen: None, resizable: None, vsync: None, icon: String::new() }
     }
+}
+
+/// Older settings were written as plain values (`window_size: (960, 540)`), not `Some(...)`.
+fn bare_some<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
 }
 
 impl ProjectConfig {
@@ -50,6 +61,19 @@ impl ProjectConfig {
         }
         if let Some(g) = self.gravity_3d.take() {
             self.physics.gravity_3d = g;
+        }
+        if let Some([w, h]) = self.window_size.take() {
+            self.display.width = w;
+            self.display.height = h;
+        }
+        if let Some(v) = self.fullscreen.take() {
+            self.display.fullscreen = v;
+        }
+        if let Some(v) = self.resizable.take() {
+            self.display.resizable = v;
+        }
+        if let Some(v) = self.vsync.take() {
+            self.display.vsync = v;
         }
     }
 }
@@ -153,5 +177,24 @@ fn rename_old_files(dir: &Path) {
         if ext == "jscene" {
             let _ = std::fs::rename(f, f.with_extension("jblueprint"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_window_settings_move_into_display() {
+        let old = r#"(name: "Old", main_blueprint: "res://main.jblueprint", window_size: (1920, 1080), fullscreen: true, resizable: false, vsync: false, gravity_2d: (0, 500))"#;
+        let mut c: ProjectConfig = ron::from_str(old).unwrap();
+        c.migrate();
+        assert_eq!(c.display.size(), [1920, 1080]);
+        assert!(c.display.fullscreen && !c.display.resizable && !c.display.vsync);
+        assert_eq!(c.physics.gravity_2d, [0.0, 500.0]);
+        let saved = ron::ser::to_string(&c).unwrap();
+        assert!(!saved.contains("window_size") && saved.contains("display"), "{}", saved);
+        let again: ProjectConfig = ron::from_str(&saved).unwrap();
+        assert_eq!(again.display, c.display);
     }
 }

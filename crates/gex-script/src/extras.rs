@@ -172,3 +172,28 @@ pub fn delete(game: &str, name: &str) -> Result<(), String> {
     let _ = std::fs::remove_file(p);
     Ok(())
 }
+
+/// The display settings a game kept with SAVE_DISPLAY (a name no save slot can have).
+fn display_path(game: &str) -> PathBuf {
+    save_dir(game).join("display.settings.json")
+}
+
+/// Keeps display settings for the next time the game starts (None forgets them).
+pub fn save_display(game: &str, d: Option<&gex_core::settings::Display>) -> Result<(), String> {
+    let p = display_path(game);
+    match d {
+        None => {
+            let _ = std::fs::remove_file(p);
+            Ok(())
+        }
+        Some(d) => {
+            std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+            std::fs::write(&p, serde_json::to_string_pretty(d).unwrap()).map_err(|e| format!("couldn't keep the display settings: {}", e))
+        }
+    }
+}
+
+/// The display settings kept with SAVE_DISPLAY, if any.
+pub fn saved_display(game: &str) -> Option<gex_core::settings::Display> {
+    serde_json::from_str(&std::fs::read_to_string(display_path(game)).ok()?).ok()
+}
