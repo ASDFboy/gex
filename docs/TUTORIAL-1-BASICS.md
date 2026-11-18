@@ -15,12 +15,12 @@ menu that ties them together). Every script in it is commented.
 3. The project starts with nothing in it. Press **New 2D blueprint**: it makes `main.jblueprint`
    (the first blueprint is where the game starts) and opens it. It holds one object, `Main`.
 
-The editor works like GameMaker's. Along the top are tabs:
+The editor works like GameMaker's. Along the top is a tab for each open blueprint (drag one sideways to
+move it):
 
 | Tab | What it's for |
 |---|---|
-| A blueprint (`main`) | the blueprint itself, like a room. On the left: **Blueprint** (the object tree; drag to re-parent, right-click for more) and under it the selected one's **Properties** and **Events**. In the middle: the view |
-| Workspace | a canvas of windows for editing blueprints and scripts. Double-click a blueprint in Assets and its window opens here with its events beside it; click an event and its script opens beside that. Drag the background to look around; **+** adds another workspace |
+| A blueprint (`main`) | the blueprint itself, like a room. On the left: **Blueprint** (the object tree; drag to re-parent, right-click for more) and under it the selected one's **Properties** and **Events**. In the middle: the view. Scripts open as small windows over the view, each wired to its object; an object's scripts share one window as tabs |
 
 **Assets** on the right lists what the project has, grouped by kind (blueprints, scripts, sprites,
 sounds...). **+Blueprint**, **+Script** and **+Folder** make one, double-click opens one, right-click has
@@ -48,8 +48,8 @@ object itself to move it freely as you look at it. Hold Ctrl to snap.
 ## 3. Scripts: make it move
 
 1. With `Player` selected, switch **Properties** to **Events** and press **Add event → Step**.
-   That makes `player_step.jlb` (object + event) next to the blueprint, attaches it, and opens it in the workspace with the cursor
-   inside the new event.
+   That makes `player_step.jlb` (object + event) next to the blueprint, attaches it, and opens it in a small window beside the object with the
+   cursor inside the new event.
 2. Make the script read:
 
 ```
@@ -57,14 +57,12 @@ object itself to move it freely as you look at it. Hold Ctrl to snap.
 speed = 300
 
 DEF on_step(dt) {
-	IF KEY_DOWN("left") OR KEY_DOWN("a") { self.x -= speed * dt }
-	IF KEY_DOWN("right") OR KEY_DOWN("d") { self.x += speed * dt }
-	IF KEY_DOWN("up") OR KEY_DOWN("w") { self.y -= speed * dt }
-	IF KEY_DOWN("down") OR KEY_DOWN("s") { self.y += speed * dt }
+	x += AXIS("left", "right") * speed * dt
+	y += AXIS("up", "down") * speed * dt
 }
 ```
 
-3. Press **F5** (or ▶ Play). The editor shows the game; use the arrow keys. **F5** again stops
+3. Press **F6** (or ▶ Play). The editor shows the game; use the arrow keys. **F6** again stops
    and brings you back to the script.
 
 What's going on:
@@ -197,7 +195,8 @@ open it, right-click it → Open.
 
 | | |
 |---|---|
-| F5 / Shift+F5 | play / stop |
+| F5 | play the game from its main blueprint (again: stop) |
+| F6 | play the blueprint you're editing (again: stop) |
 | Ctrl+S | save everything |
 | Ctrl+Z / Ctrl+Y | undo / redo |
 | Ctrl+C, Ctrl+V, Ctrl+D, Delete | copy, paste, duplicate, delete objects |

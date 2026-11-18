@@ -160,6 +160,7 @@ impl ObjectKind {
                 ("height", Num(32.0)),
                 ("color", Color([1.0, 1.0, 1.0, 1.0])),
                 ("centered", Bool(true)),
+                ("solid", Bool(false)),
                 ("layer", Num(0.0)),
                 ("hframes", Num(1.0)),
                 ("vframes", Num(1.0)),

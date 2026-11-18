@@ -126,6 +126,8 @@ pub struct EditorState {
     pub playing: Option<Playing>,
     /// The game built and running in a window of its own (the Build button).
     pub build: Option<Build>,
+    /// The blueprint to go back to when the game stops (F5 ran it from the main blueprint).
+    pub return_to: Option<String>,
     /// Where the object each script belongs to is in the blueprint view (script → screen
     /// point), for the wires of the script windows.
     pub view_anchors: std::collections::HashMap<String, [f32; 2]>,
@@ -207,6 +209,7 @@ impl EditorState {
             open_requests: Vec::new(),
             playing: None,
             build: None,
+            return_to: None,
             view_anchors: Default::default(),
             renderer: None,
             mode_3d: false,
@@ -330,8 +333,8 @@ impl EditorState {
         self.put_doc(d);
     }
 
-    /// Runs `f` with another open blueprint as the one being edited, then puts things back (the
-    /// workspace's windows edit blueprints this way). Loads the blueprint if it isn't open. Not while
+    /// Runs `f` with another open blueprint as the one being edited, then puts things back
+    /// (deleting and renaming files fix other blueprints this way). Loads the blueprint if it isn't open. Not while
     /// playing.
     pub fn with_blueprint<R>(&mut self, res: &str, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
         if self.blueprint_res.as_deref() == Some(res) {
@@ -492,11 +495,28 @@ impl EditorState {
         }
     }
 
+    /// Saves every changed script and every open blueprint (the other tabs' too).
     pub fn save_all(&mut self) {
         self.save_blueprint();
         let dirty: Vec<String> = self.scripts.values().filter(|s| s.dirty()).map(|s| s.res.clone()).collect();
         for r in dirty {
             self.save_script(&r);
+        }
+        let unsaved: Vec<(usize, String, String)> = {
+            let read = self.reader();
+            self.docs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, d)| Some((i, d.blueprint_res.clone()?, blueprint::save(&d.tree, &read).ok()?)))
+                .filter(|(i, _, t)| *t != self.docs[*i].blueprint_saved)
+                .collect()
+        };
+        for (i, res, text) in unsaved {
+            if let Some(p) = self.project.res_to_path(&res) {
+                if std::fs::write(&p, &text).is_ok() {
+                    self.docs[i].blueprint_saved = text;
+                }
+            }
         }
     }
 
@@ -1399,6 +1419,20 @@ impl EditorState {
 
     // ---------- playing ----------
 
+    /// Before Play (F5): the main blueprint is opened, to run the game from its start; the
+    /// one being edited opens again when the game stops.
+    pub fn play_from_start(&mut self) {
+        let main = self.project.config.main_blueprint.clone();
+        if self.blueprint_res.as_deref() == Some(main.as_str()) || !self.project.res_to_path(&main).is_some_and(|p| p.is_file()) {
+            return;
+        }
+        let back = self.blueprint_res.clone();
+        self.open_blueprint(&main);
+        if self.blueprint_res.as_deref() == Some(main.as_str()) {
+            self.return_to = back;
+        }
+    }
+
     pub fn play(&mut self) {
         if self.playing.is_some() {
             return;
@@ -1407,11 +1441,8 @@ impl EditorState {
             self.status = "nothing to play yet: make a blueprint first (+ in Assets)".into();
             return;
         }
-        // Scripts run from disk, so unsaved edits are saved first.
-        let dirty: Vec<String> = self.scripts.values().filter(|s| s.dirty()).map(|s| s.res.clone()).collect();
-        for r in dirty {
-            self.save_script(&r);
-        }
+        // Scripts and the blueprints a game switches to run from disk: everything is saved first.
+        self.save_all();
         self.logs.retain(|l| l.kind == LogKind::Error && l.file.is_none());
         self.sync_breakpoints();
         let handle = GameHandle::start_with(self.project.clone(), self.tree.clone(), self.game_breakpoints.clone());
@@ -1435,7 +1466,7 @@ impl EditorState {
             locked: false,
             lock_suspended: false,
         });
-        self.status = "F5 stops the game".into();
+        self.status = "F5 or F6 stops the game".into();
     }
 
     pub fn stop(&mut self) {
@@ -1538,23 +1569,6 @@ impl EditorState {
     pub fn build_and_run(&mut self) {
         self.build = None; // closes a build that's still running
         self.save_all();
-        // The other open blueprints too: the build reads everything from the files.
-        let unsaved: Vec<(usize, String, String)> = {
-            let read = self.reader();
-            self.docs
-                .iter()
-                .enumerate()
-                .filter_map(|(i, d)| Some((i, d.blueprint_res.clone()?, blueprint::save(&d.tree, &read).ok()?)))
-                .filter(|(i, _, t)| *t != self.docs[*i].blueprint_saved)
-                .collect()
-        };
-        for (i, res, text) in unsaved {
-            if let Some(p) = self.project.res_to_path(&res) {
-                if std::fs::write(&p, &text).is_ok() {
-                    self.docs[i].blueprint_saved = text;
-                }
-            }
-        }
         // Like Play, it starts in the blueprint being edited.
         let start = self.blueprint_res.clone();
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

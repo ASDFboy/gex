@@ -156,6 +156,39 @@ fn physics_bodies_fall_collide_and_move() {
 }
 
 #[test]
+fn solid_sprites_key_pair_axis_and_bare_object_names() {
+    let blueprint = r#"(root: (name: "R", kind: Some(Object2D), children: [
+        (name: "Floor", kind: Some(Sprite2D), transform: Some((position: (400.0, 500.0, 0.0))),
+            props: {"solid": Bool(true), "width": Num(800.0), "height": Num(40.0)}),
+        (name: "Deco", kind: Some(Sprite2D), transform: Some((position: (520.0, 464.0, 0.0)))),
+        (name: "Box", kind: Some(Object2D), children: [
+            (name: "Wall", kind: Some(Sprite2D), transform: Some((position: (600.0, 400.0, 0.0))),
+                props: {"solid": Bool(true), "width": Num(40.0), "height": Num(160.0)}),
+        ]),
+        (name: "Hero", kind: Some(Body2D), transform: Some((position: (500.0, 464.0, 0.0))),
+            props: {"body": Text("kinematic")}, scripts: ["res://hero.jlb"]),
+    ]))"#;
+    let hero = "DEF on_step(dt) {\n    self.floor = MOVE(NULL, AXIS(\"a\", \"d\") * 300 * dt, 50 * dt)\n    self.wall_x = GET(\"Wall\", \"x\")\n    self.found = OBJECT(\"Wall\") !== NULL\n    self.both = AXIS(\"a\", \"a\")\n}\n";
+    let p = project("solid", &[("main.jblueprint", blueprint), ("hero.jlb", hero)]);
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    let d: HashSet<String> = ["d".to_string()].into();
+    for _ in 0..120 {
+        g.frame(1.0 / 60.0, d.clone(), [0.0; 2], HashSet::new());
+    }
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let t = g.tree();
+    let h = t.find_path(None, "R/Hero").unwrap();
+    let hx = t.objects[h].transform.position.x;
+    // Walked right through the plain sprite, stopped by the solid one (left side 580, half width 16).
+    assert!(hx < 566.0 && hx > 540.0, "hero x {}", hx);
+    assert_eq!(t.objects[h].props.get("floor"), Some(&Variant::Bool(true)), "stands on the solid floor sprite");
+    assert_eq!(t.objects[h].props.get("wall_x"), Some(&Variant::Num(600.0)), "GET finds Wall by its bare name");
+    assert_eq!(t.objects[h].props.get("found"), Some(&Variant::Bool(true)));
+    assert_eq!(t.objects[h].props.get("both"), Some(&Variant::Num(0.0)));
+}
+
+#[test]
 fn physics_3d_ball_rests_on_ground() {
     let blueprint = r#"(root: (name: "R", kind: Some(Object3D), children: [
         (name: "Ground", kind: Some(Body3D), props: {"body": Text("static"), "width": Num(20.0), "height": Num(1.0), "depth": Num(20.0)}),

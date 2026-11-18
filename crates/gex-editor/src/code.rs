@@ -230,14 +230,10 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
             let m = if s.vim.mode == Mode::Insert { "INSERT" } else { "NORMAL" };
             ui.label(RichText::new(m).small().strong().color(if s.vim.mode == Mode::Insert { theme::GOOD } else { theme::ACCENT }));
         }
-        ui.separator();
-        match s.problems.first() {
-            Some((l, m)) => {
-                ui.add(egui::Label::new(RichText::new(format!("Line {}: {}", l, m)).color(theme::BAD)).truncate());
-            }
-            None => {
-                ui.add(egui::Label::new(RichText::new(res.trim_start_matches("res://")).small().color(theme::TEXT_DIM)).truncate());
-            }
+        // The first problem, if there is one (the file's name is on its tab).
+        if let Some((l, m)) = s.problems.first() {
+            ui.separator();
+            ui.add(egui::Label::new(RichText::new(format!("Line {}: {}", l, m)).color(theme::BAD)).truncate());
         }
     });
     let id = egui::Id::new(("script", res));

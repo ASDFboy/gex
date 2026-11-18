@@ -17,7 +17,7 @@ use crate::world::{Pending, Timer, WorldState};
 
 /// (name, inputs, what it does) — the editor shows these as help and completions.
 pub const COMMANDS: &[(&str, &str, &str)] = &[
-    ("OBJECT", "(path)", "the object at a path (relative to this one), or NULL"),
+    ("OBJECT", "(path)", "the object at a path (relative to this one), or by bare name anywhere in the blueprint, or NULL"),
     ("GET", "(object, property)", "a property of another object"),
     ("SET", "(object, property, value)", "changes a property of another object"),
     ("OBJECTS", "(group)", "every object in a group, as a table of ids"),
@@ -76,7 +76,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("MOUSE_LOCK", "(on)", "hides the mouse and keeps it in the window, for mouse-look (Escape frees it in the editor)"),
     ("MOUSE_DX", "()", "how far the mouse moved sideways this frame, in screen pixels (works while locked)"),
     ("MOUSE_DY", "()", "how far the mouse moved up or down this frame (down is positive)"),
-    ("AXIS", "(name)", "a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt"),
+    ("AXIS", "(name) or (key_minus, key_plus)", "a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt. With two keys: -1 while the first is held, 1 for the second, 0 for both or neither (x += AXIS(\"a\", \"d\") * speed * dt)"),
     ("DELTA_TIME", "()", "seconds since the last frame"),
     ("GAME_TIME", "()", "seconds since the game started"),
     ("CHANGE_BLUEPRINT", "(blueprint, fade, color)", "switches to another blueprint file; with fade (seconds) the screen fades to color (default black) and back"),
@@ -112,7 +112,7 @@ fn target(st: &WorldState, v: Option<&Value>) -> R<ObjectId> {
     let cur = st.current;
     let id = match v {
         None | Some(Value::Null) => cur,
-        Some(Value::Text(p)) => st.tree.find_path(cur, p),
+        Some(Value::Text(p)) => find(st, p),
         Some(v @ Value::Num(_)) => value_id(v),
         Some(o) => return err(format!("an object is given as an id, a path or NULL, not a {}", o.type_name())),
     };
@@ -123,6 +123,12 @@ fn target(st: &WorldState, v: Option<&Value>) -> R<ObjectId> {
             _ => "that object doesn't exist (was it destroyed?)".into(),
         }),
     }
+}
+
+/// An object by path from the current one; a bare name not found there is looked for in
+/// the whole blueprint ("Player" finds the Player wherever it is).
+fn find(st: &WorldState, p: &str) -> Option<ObjectId> {
+    st.tree.find_path(st.current, p).or_else(|| (!p.contains('/') && !p.is_empty() && p != "..").then(|| st.tree.find_named(p)).flatten())
 }
 
 fn text_arg(name: &str, a: &[Value], i: usize) -> R<String> {
@@ -332,7 +338,7 @@ impl Host for EngineHost {
         let r: R<Value> = (|| match name {
             "OBJECT" => {
                 let p = text_arg(name, &a, 0)?;
-                Ok(st.tree.find_path(st.current, &p).map(id_value).unwrap_or(Value::Null))
+                Ok(find(st, &p).map(id_value).unwrap_or(Value::Null))
             }
             "GET" => {
                 let id = target(st, a.first())?;
@@ -771,6 +777,11 @@ impl Host for EngineHost {
             "MOUSE_DY" => Ok(num(st.mouse_delta[1] as f64)),
             "AXIS" => {
                 let k = text_arg(name, &a, 0)?.to_ascii_lowercase();
+                // Two keys: -1 while the first is held, 1 for the second, 0 for both or neither.
+                if a.len() >= 2 {
+                    let k2 = text_arg(name, &a, 1)?.to_ascii_lowercase();
+                    return Ok(num(st.input.key_down(&k2) as i32 as f64 - st.input.key_down(&k) as i32 as f64));
+                }
                 Ok(num(st.axes.get(&k).copied().unwrap_or(0.0) as f64))
             }
             "KEY_DOWN" => Ok(Value::Bool(st.input.key_down(&text_arg(name, &a, 0)?.to_lowercase()))),

@@ -1,6 +1,6 @@
 # GEX
 
-A 2D and 3D game engine with a GameMaker-style editor (workspaces and blueprint tabs), Godot-style blueprints, and game logic written in
+A 2D and 3D game engine with a GameMaker-style editor (a tab per blueprint), Godot-style blueprints, and game logic written in
 [.jlb](https://github.com/ASDFboy/jlb-rust), using GameMaker-style events.
 
 By ASDFboy and Claude.
@@ -51,8 +51,8 @@ and start it again.
   `on_pressed_<button>`, custom `on_<event>` via `SEND`/`EMIT`, and condition events:
   `when_x()` turning TRUE runs `on_x()`). Save data between runs with `SAVE_DATA`.
   See [docs/SCRIPTING.md](docs/SCRIPTING.md).
-- **The editor:** GameMaker-style workspaces (a blueprint's window linked to its events, linked to its
-  scripts, on a canvas you drag around) and a tab per blueprint for placing and editing instances, or
+- **The editor:** a GameMaker-style tab per blueprint for placing and editing instances, with its
+  scripts in small windows wired to their objects, or
   the classic docked panels (View → Classic docked layout); a Monokai Black look,
   2D/3D view with move / rotate / scale tools, undo/redo, copy/paste, a Neovim-style
   `:` command line, optional Vim keys in the script editor, completion, go to definition,
@@ -74,7 +74,8 @@ and start it again.
 
 | Key | |
 |---|---|
-| F5 / Shift+F5 | play / stop |
+| F5 | play the game from its main blueprint (again: stop) |
+| F6 | play the blueprint you're editing (again: stop) |
 | F8 / F10 | continue / step one line (paused at a breakpoint) |
 | Ctrl+S | save everything |
 | Ctrl+Z / Ctrl+Y | undo / redo |
@@ -115,4 +116,4 @@ How the pieces fit: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Credits
 
-Icons: [Silk](http://www.famfamfam.com/lab/icons/silk/) by Mark James, Creative Commons Attribution 2.5.
+Icons: [Silk](http://www.famfamfam.com/lab/icons/silk/) by Mark James and [Silk Companion](https://damieng.com/creative/icons/silk-companion-1-icons) by Damien Guard, Creative Commons Attribution 2.5.

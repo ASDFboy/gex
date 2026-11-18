@@ -36,7 +36,7 @@ mounts: [(scheme: "hl2", kind: SourceGame(install: "C:\\...\\Half-Life 2", games
 2. Source maps are measured in inches; GEX converts them to metres, so the first-person player
    from the demo (`blueprints/fps.jblueprint`, `scripts/fps.jlb`) fits. Copy its Player object (Ctrl+C,
    Ctrl+V into your blueprint) and put it somewhere above the floor.
-3. Add a Light3D (directional) and an Environment, then press F5.
+3. Add a Light3D (directional) and an Environment, then press F6.
 
 4. Put the player where the map's own spawn point is:
 

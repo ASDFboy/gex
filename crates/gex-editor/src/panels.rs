@@ -347,6 +347,16 @@ fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: ObjectId) {
     };
     egui::Grid::new("xform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
         let flat = kind.is_2d();
+        // Menus and buttons are placed by x and y only (their size is their width and height).
+        if kind.is_ui() {
+            ui.label("Position");
+            ui.horizontal(|ui| {
+                drag(ui, &mut t.position.x, 1.0, "x ");
+                drag(ui, &mut t.position.y, 1.0, "y ");
+            });
+            ui.end_row();
+            return;
+        }
         let speed = if flat { 1.0 } else { 0.05 };
         ui.label("Position");
         ui.horizontal(|ui| {

@@ -439,10 +439,10 @@ impl EditorApp {
             ui.add_space(24.0);
             let playing = st.playing.is_some();
             if !playing {
-                if theme::primary_button(ui, "▶  Play", egui::Color32::from_rgb(0x86, 0xb8, 0x22)).tip("Run this blueprint (F5)").clicked() {
+                if theme::primary_button(ui, "▶  Play", egui::Color32::from_rgb(0x86, 0xb8, 0x22)).tip("Run this blueprint (F6). F5 runs the game from its main blueprint.").clicked() {
                     st.play();
                 }
-            } else if theme::primary_button(ui, "■  Stop", egui::Color32::from_rgb(0xc8, 0x1e, 0x5c)).tip("Stop the game (F5)").clicked() {
+            } else if theme::primary_button(ui, "■  Stop", egui::Color32::from_rgb(0xc8, 0x1e, 0x5c)).tip("Stop the game (F5 or F6)").clicked() {
                 st.stop();
             }
             crate::docs::mark(ui, egui::Rect::from_min_max(egui::pos2(ui.min_rect().right() - 80.0, ui.min_rect().top()), ui.min_rect().max), "ui:play");
@@ -488,9 +488,10 @@ impl EditorApp {
         let view: Option<egui::Id> = ctx.data(|d| d.get_temp(egui::Id::new("gex viewport id")));
         let focused = ctx.memory(|m| m.focused());
         let typing = ctx.egui_wants_keyboard_input() && (focused.is_none() || focused != view);
-        let (f5, shift, save, undo, redo, dup, del, colon) = ctx.input_mut(|i| {
+        let (f5, f6, shift, save, undo, redo, dup, del, colon) = ctx.input_mut(|i| {
             (
                 i.key_pressed(egui::Key::F5),
+                i.key_pressed(egui::Key::F6),
                 i.modifiers.shift,
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z),
@@ -532,10 +533,15 @@ impl EditorApp {
                 p.handle.step();
             }
         }
-        if f5 {
+        // F5: the game from its start (the main blueprint); F6: the blueprint being edited.
+        // Either stops a game that's running.
+        if f5 || f6 {
             if shift || st.playing.is_some() {
                 st.stop();
             } else {
+                if f5 {
+                    st.play_from_start();
+                }
                 st.play();
             }
         }

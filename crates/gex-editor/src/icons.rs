@@ -1,4 +1,5 @@
-//! Icons: the Silk set by Mark James (famfamfam.com, CC BY 2.5), one for every kind of object
+//! Icons: the Silk set by Mark James (famfamfam.com, CC BY 2.5) and Damien Guard's Silk
+//! Companion (CC BY 2.5), one for every kind of object
 //! and file. An object or blueprint can pick any other, or show what it looks like.
 
 use crate::docs::Tip as _;
@@ -56,14 +57,14 @@ pub fn kind(k: ObjectKind) -> &'static str {
         Sprite2D => "picture",
         Label2D => "font",
         Camera2D => "camera",
-        Collider2D => "shape_square",
+        Collider2D => "shape_shade_a",
         Body2D => "brick",
-        TileMap2D => "map",
+        TileMap2D => "border_all",
         Particles2D => "asterisk_yellow",
         Light2D => "lightbulb",
         Panel => "application",
-        Button => "tab",
-        Label => "style",
+        Button => "button",
+        Label => "text_ab",
         TextInput => "textfield",
         ProgressBar => "chart_bar",
         Image => "photo",
@@ -72,11 +73,11 @@ pub fn kind(k: ObjectKind) -> &'static str {
         Camera3D => "webcam",
         Light3D => "weather_sun",
         Body3D => "bricks",
-        Collider3D => "shading",
+        Collider3D => "shape_3d",
         Sprite3D => "image",
         Label3D => "text_uppercase",
         Particles3D => "asterisk_orange",
-        Environment => "world",
+        Environment => "world_dawn",
     }
 }
 

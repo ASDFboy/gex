@@ -174,7 +174,11 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
             l.tab_before_play = (l.active != before).then_some(before);
         }
     } else if !playing && l.was_playing {
-        if let Some(i) = l.tab_before_play.take().filter(|i| *i < l.tabs.len()) {
+        if let Some(r) = st.return_to.take() {
+            st.open_blueprint(&r);
+            l.tab_before_play = None;
+            follow_blueprint(l, st);
+        } else if let Some(i) = l.tab_before_play.take().filter(|i| *i < l.tabs.len()) {
             l.active = i;
         }
     }
@@ -477,6 +481,7 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
                             let res = &list[*i];
                             let dirty = st.scripts.get(res).is_some_and(|s| s.dirty());
                             let out = theme::tab(ui, short(res).trim_end_matches(".jlb"), *res == showing, true, dirty);
+                            let out = crate::theme::TabOut { resp: out.resp.on_hover_text(res.trim_start_matches("res://")), close: out.close };
                             rects.push(out.resp.rect);
                             if out.close || out.resp.middle_clicked() {
                                 close = Some(*i);

@@ -81,8 +81,8 @@ fn groups3(g: (u32, u32)) -> rapier3d::prelude::InteractionGroups {
     InteractionGroups::new(Group::from_bits_retain(g.0), Group::from_bits_retain(g.1), InteractionTestMode::And)
 }
 
-/// A static shape that isn't an object of its own (tilemap tiles): world-space 2D box.
-#[derive(Clone, Copy, Debug)]
+/// A static shape that isn't a body of its own (tilemap tiles, solid sprites): world-space 2D box.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StaticBox2 {
     pub owner: ObjectId,
     pub center: Vec2,
@@ -200,7 +200,7 @@ pub struct World2 {
     bodies: HashMap<ObjectId, Entry2>,
     owners: HashMap<d2::ColliderHandle, ObjectId>,
     statics: Vec<d2::ColliderHandle>,
-    statics_key: String,
+    statics_key: Vec<StaticBox2>,
     controller: d2::KinematicCharacterController,
 }
 
@@ -216,7 +216,7 @@ impl World2 {
         let mut controller = d2::KinematicCharacterController::default();
         controller.up = d2::Vector::new(0.0, -1.0);
         controller.offset = d2::CharacterLength::Absolute(0.01);
-        let mut w = World2 { world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller };
+        let mut w = World2 { world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: Vec::new(), controller };
         w.configure(settings);
         w
     }
@@ -300,11 +300,11 @@ impl World2 {
     }
 
     fn set_statics(&mut self, boxes: &[StaticBox2]) {
-        let key = format!("{:?}", boxes);
-        if key == self.statics_key {
+        // (Compared as they are: these come every step, and can be thousands of tiles.)
+        if boxes == self.statics_key.as_slice() {
             return;
         }
-        self.statics_key = key;
+        self.statics_key = boxes.to_vec();
         for c in self.statics.drain(..) {
             self.owners.remove(&c);
             self.world.remove_collider(c);
@@ -605,7 +605,7 @@ pub struct World3 {
     bodies: HashMap<ObjectId, Entry3>,
     owners: HashMap<d3::ColliderHandle, ObjectId>,
     statics: Vec<d3::ColliderHandle>,
-    statics_key: String,
+    statics_key: Vec<StaticBox3>,
     controller: d3::KinematicCharacterController,
 }
 
@@ -615,7 +615,7 @@ fn pose3(tree: &BlueprintTree, id: ObjectId) -> (Vec3, Quat, Vec3) {
 }
 
 /// A static mesh-less box for 3D (map brushes and the like).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StaticBox3 {
     pub owner: ObjectId,
     pub center: Vec3,
@@ -627,7 +627,7 @@ impl World3 {
         let world = d3::PhysicsWorld::new();
         let mut controller = d3::KinematicCharacterController::default();
         controller.offset = d3::CharacterLength::Absolute(0.01);
-        let mut w = World3 { ragdolls: HashMap::new(), static_meshes: HashMap::new(), world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: String::new(), controller };
+        let mut w = World3 { ragdolls: HashMap::new(), static_meshes: HashMap::new(), world, bodies: HashMap::new(), owners: HashMap::new(), statics: Vec::new(), statics_key: Vec::new(), controller };
         w.configure(settings);
         w
     }
@@ -710,9 +710,8 @@ impl World3 {
     }
 
     fn set_statics(&mut self, boxes: &[StaticBox3], meshes: &[StaticMesh]) {
-        let key = format!("{:?}", boxes);
-        if key != self.statics_key {
-            self.statics_key = key;
+        if boxes != self.statics_key.as_slice() {
+            self.statics_key = boxes.to_vec();
             for c in self.statics.drain(..) {
                 self.owners.remove(&c);
                 self.world.remove_collider(c);
