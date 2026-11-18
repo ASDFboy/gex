@@ -404,6 +404,10 @@ fn tool_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, view: e
     let frame = egui::Frame::new().fill(Color32::from_rgb(0x1a, 0x1a, 0x1a)).stroke(Stroke::new(1.0, theme::GRAY)).inner_margin(6.0);
     let mut close = None;
     for (i, name) in l.tools.clone().iter().enumerate() {
+        // The Sprite panel steps aside while the game runs (it edits the blueprint).
+        if name == "Sprite" && st.playing.is_some() {
+            continue;
+        }
         egui::Window::new(name.as_str())
             .id(egui::Id::new(("tool window", name.as_str())))
             .title_bar(false)

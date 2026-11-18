@@ -214,6 +214,37 @@ fn solid_sprites_turn_and_can_be_circles() {
 }
 
 #[test]
+fn self_stays_in_step_with_the_object_between_events() {
+    let blueprint = r#"(root: (name: "R", kind: Some(Object2D), children: [
+        (name: "A", kind: Some(Sprite2D), scripts: ["res://a.jlb"]),
+        (name: "B", kind: Some(Sprite2D), scripts: ["res://b.jlb"]),
+    ]))"#;
+    // A changes itself in different ways each frame and checks what it sees next frame;
+    // B changes A from outside.
+    let a = "t = 0\nme = 0\nDEF on_create() {\n    GLOBAL me = self\n}\nDEF on_step(dt) {\n    GLOBAL t += 1\n    IF t == 1 {\n        self.color.r = 0.5\n        self.hp = 3\n        name = \"Ann\"\n        visible = FALSE\n    }\n    IF t == 2 {\n        self.seen_r = self.color.r\n        self.seen_hp = hp\n        self.seen_name = name\n        self.seen_vis = visible\n        self.color = \"#0000ff\"\n    }\n    IF t == 3 {\n        self.seen_b = self.color.b\n        self.seen_from_b = self.label\n        self.me_x = me.x\n    }\n}\n";
+    let b = "t = 0\nDEF on_step(dt) {\n    GLOBAL t += 1\n    IF t == 2 {\n        SET(\"Ann\", \"label\", \"from B\")\n        SET(\"Ann\", \"x\", 77)\n    }\n}\n";
+    let p = project("selfsync", &[("main.jblueprint", blueprint), ("a.jlb", a), ("b.jlb", b)]);
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    for _ in 0..4 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    let t = g.tree();
+    let o = &t.objects[t.find_path(None, "R/Ann").expect("renamed")];
+    let get = |k: &str| o.props.get(k).cloned();
+    assert_eq!(get("seen_r"), Some(Variant::Num(0.5)));
+    assert_eq!(get("seen_hp"), Some(Variant::Num(3.0)));
+    assert_eq!(get("seen_name"), Some(Variant::Text("Ann".into())));
+    assert_eq!(get("seen_vis"), Some(Variant::Bool(false)));
+    assert_eq!(get("seen_b"), Some(Variant::Num(1.0)), "a color set as text reads back as a color");
+    assert_eq!(get("seen_from_b"), Some(Variant::Text("from B".into())));
+    assert_eq!(get("me_x"), Some(Variant::Num(0.0)), "a copy of self kept in a variable doesn't change");
+    assert_eq!(o.transform.position.x, 77.0);
+    assert!(!o.visible);
+}
+
+#[test]
 fn import_and_load_work_on_every_object() {
     let blueprint = r#"(root: (name: "R", kind: Some(Object2D), children: [
         (name: "A", kind: Some(Sprite2D), scripts: ["res://user.jlb"]),

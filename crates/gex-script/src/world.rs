@@ -225,6 +225,9 @@ struct ScriptInst {
     handlers: HashSet<String>,
     when_was: HashMap<String, bool>,
     dead: bool,
+    /// What this script's `self` holds, entry by entry, as of the last event: kept so the
+    /// next event only updates what changed on the object meanwhile.
+    sync: SelfSnap,
 }
 
 pub struct Game {
@@ -526,6 +529,7 @@ impl Game {
                     handlers,
                     when_was: HashMap::new(),
                     dead: false,
+                    sync: Vec::new(),
                 })
             }
             Err(f) => self.report(&f, res),
@@ -630,18 +634,11 @@ impl Game {
 
     /// The `self` table a script sees, and what it held (to tell what the script changed).
     fn self_table(&self, id: ObjectId) -> (Value, SelfSnap) {
-        self.self_table_reusing(id, None)
-    }
-
-    /// `self` for an object's script. `reuse`: the table the script had last time; when it
-    /// still has the same entries, they're refreshed in place instead of making a new table
-    /// (this runs for every event of every object, every frame).
-    fn self_table_reusing(&self, id: ObjectId, reuse: Option<Value>) -> (Value, SelfSnap) {
         let st = self.st.borrow();
         let Some(n) = st.tree.get(id) else { return (Value::Null, Vec::new()) };
         let t = &n.transform;
         let base: [(&str, Variant); 11] = [
-            ("name", Variant::Text(String::new())),
+            ("name", Variant::Text(n.name.clone())),
             ("x", Variant::Num(t.position.x as f64)),
             ("y", Variant::Num(t.position.y as f64)),
             ("z", Variant::Num(t.position.z as f64)),
@@ -653,51 +650,126 @@ impl Game {
             ("scale_z", Variant::Num(t.scale.z as f64)),
             ("visible", Variant::Bool(n.visible)),
         ];
-        let count = base.len() + n.props.len();
-        // The table from last time, if its entries are still these, in this order.
-        let old = match &reuse {
-            Some(Value::Table(rc, _)) if rc.named.len() == count + 2 => {
-                let e = rc.named.iter().as_slice();
-                let same = e[0].0.as_ref() == "id"
-                    && e[1].0.as_ref() == "kind"
-                    && base.iter().map(|b| b.0).chain(n.props.keys().map(|k| k.as_str())).zip(&e[2..]).all(|(k, (ek, _))| &**ek == k);
-                same.then_some(e)
-            }
-            _ => None,
-        };
-        // A value for a property: the one already in the table when it's the same text, so
-        // nothing new is made for text that didn't change.
-        let value = |i: usize, v: &Variant| -> Value {
-            if let (Some(e), Variant::Text(s) | Variant::Res(s)) = (old, v) {
-                if let Value::Text(t) = &*e[i + 2].1.borrow() {
-                    if **t == **s {
-                        return Value::Text(t.clone());
-                    }
-                }
-            }
-            to_value(v)
-        };
-        let mut snap: SelfSnap = Vec::with_capacity(count);
-        for (i, (k, v)) in base.iter().enumerate() {
-            let val = if i == 0 { value(0, &Variant::Text(n.name.clone())) } else { value(i, v) };
-            snap.push((key(k), val, None));
+        let mut snap: SelfSnap = Vec::with_capacity(base.len() + n.props.len());
+        for (k, v) in base.iter() {
+            snap.push((key(k), to_value(v), None));
         }
-        for (j, (k, v)) in n.props.iter().enumerate() {
-            let val = value(base.len() + j, v);
+        for (k, v) in &n.props {
+            let val = to_value(v);
             let keep = matches!(val, Value::Table(..)).then(|| v.clone());
             snap.push((key(k), val, keep));
         }
-        if let (Some(e), Some(table)) = (old, reuse.clone()) {
-            for (i, (_, v, _)) in snap.iter().enumerate() {
-                *e[i + 2].1.borrow_mut() = v.clone();
-            }
-            return (table, snap);
-        }
-        let mut entries: Vec<(Rc<str>, Value)> = Vec::with_capacity(count + 2);
+        let mut entries: Vec<(Rc<str>, Value)> = Vec::with_capacity(snap.len() + 2);
         entries.push((key("id"), id_value(id)));
         entries.push((key("kind"), Value::text(n.kind.name())));
         entries.extend(snap.iter().map(|(k, v, _)| (k.clone(), v.clone())));
         (jlb::embed::named_table_rc(entries), snap)
+    }
+
+    /// Before an event: the script's `self` brought up to date with the object. Only entries
+    /// whose property changed since the last event (moved by physics, SET by another
+    /// object...) are written; with nothing changed this makes nothing. (A new property, or
+    /// a table that isn't this script's any more, makes `self` afresh.)
+    fn self_in(&self, id: ObjectId, env: &Env, sync: &mut SelfSnap) {
+        let st = self.st.borrow();
+        let Some(n) = st.tree.get(id) else { return };
+        let t = &n.transform;
+        let base: [(&str, f64); 9] = [
+            ("x", t.position.x as f64),
+            ("y", t.position.y as f64),
+            ("z", t.position.z as f64),
+            ("rotation", t.rotation.z as f64),
+            ("rotation_x", t.rotation.x as f64),
+            ("rotation_y", t.rotation.y as f64),
+            ("scale_x", t.scale.x as f64),
+            ("scale_y", t.scale.y as f64),
+            ("scale_z", t.scale.z as f64),
+        ];
+        let count = 2 + base.len() + n.props.len();
+        let table = Interp::env_get(env, "self");
+        let fits = match &table {
+            Some(Value::Table(rc, _)) if rc.named.len() == count + 2 && sync.len() == count => {
+                let e = rc.named.iter().as_slice();
+                // The same entries in the same order (names are shared, so pointers compare).
+                e[2..].iter().zip(sync.iter()).all(|(a, b)| Rc::ptr_eq(&a.0, &b.0))
+                    && &*sync[0].0 == "name"
+                    && sync[1..1 + base.len()].iter().zip(&base).all(|(a, b)| &*a.0 == b.0)
+                    && &*sync[1 + base.len()].0 == "visible"
+                    && sync[2 + base.len()..].iter().zip(n.props.keys()).all(|(a, k)| &*a.0 == k.as_str())
+            }
+            _ => false,
+        };
+        if !fits {
+            drop(table);
+            drop(st);
+            let (me, snap) = self.self_table(id);
+            Interp::env_set(env, "self", me);
+            *sync = snap;
+            return;
+        }
+        let Some(Value::Table(rc, _)) = &table else { return };
+        let e = rc.named.iter().as_slice();
+        fn put(e: &[(Rc<str>, jlb::value::Slot)], sync: &mut SelfSnap, i: usize, v: Value, last: Option<Variant>) {
+            *e[i + 2].1.borrow_mut() = v.clone();
+            sync[i].1 = v;
+            sync[i].2 = last;
+        }
+        // name, the transform, visible, then the properties (the order PRINT(self) shows).
+        if !matches!(&sync[0].1, Value::Text(s) if **s == *n.name) {
+            put(e, sync, 0, Value::text(&n.name), None);
+        }
+        let vis = 1 + base.len();
+        if !matches!(&sync[vis].1, Value::Bool(b) if *b == n.visible) {
+            put(e, sync, vis, Value::Bool(n.visible), None);
+        }
+        for (j, (_, f)) in base.iter().enumerate() {
+            let i = 1 + j;
+            if !matches!(&sync[i].1, Value::Num(x) if x.to_f64() == *f) {
+                put(e, sync, i, num(*f), None);
+            }
+        }
+        for (j, v) in n.props.values().enumerate() {
+            let i = 2 + base.len() + j;
+            let same = match (&sync[i].2, v) {
+                (Some(last), v) => last == v,
+                (None, Variant::Num(f)) => matches!(&sync[i].1, Value::Num(x) if x.to_f64() == *f),
+                (None, Variant::Bool(b)) => matches!(&sync[i].1, Value::Bool(x) if x == b),
+                (None, Variant::Text(t) | Variant::Res(t)) => matches!(&sync[i].1, Value::Text(x) if **x == **t),
+                (None, Variant::Null) => matches!(&sync[i].1, Value::Null),
+                _ => false,
+            };
+            if !same {
+                let val = to_value(v);
+                let last = matches!(val, Value::Table(..)).then(|| v.clone());
+                put(e, sync, i, val, last);
+            }
+        }
+    }
+
+    /// After an event: what the script changed in `self` goes to the object, and the record
+    /// of what `self` holds is brought up to date.
+    fn self_out(&mut self, id: ObjectId, env: &Env, sync: &mut SelfSnap) {
+        self.read_self_back(id, env, sync);
+        // Entries the script changed now hold what the object has: remember them as such.
+        let Some(Value::Table(rc, _)) = Interp::env_get(env, "self") else { return };
+        let e = rc.named.iter().as_slice();
+        if e.len() != sync.len() + 2 {
+            sync.clear(); // new entries: made afresh next time
+            return;
+        }
+        for (i, s) in sync.iter_mut().enumerate() {
+            let now = e[i + 2].1.borrow();
+            let changed = match &s.2 {
+                Some(keep) => !matches!(&*now, Value::Table(..)) || to_variant(&now, Some(keep)).as_ref() != Some(keep),
+                None => !same_value(&now, &s.1),
+            };
+            if changed {
+                // Written by the script: the next event takes it afresh from the object (which
+                // has it now, in the property's own shape).
+                s.1 = Value::Builtin(STALE);
+                s.2 = None;
+            }
+        }
     }
 
     /// Applies what a script changed in `self` back to the object.
@@ -757,13 +829,14 @@ impl Game {
     }
 
     fn run_one(&mut self, id: ObjectId, i: usize, handler: &str, args: Vec<Value>) -> Option<Value> {
-        let (env, res) = {
+        let env = {
             let s = self.scripts.get(&id)?.get(i)?;
             if s.dead || !s.handlers.contains(handler) {
                 return None;
             }
-            (s.env.clone(), s.res.clone())
+            s.env.clone()
         };
+        let res = |g: &Self| g.scripts.get(&id).and_then(|v| v.get(i)).map(|s| s.res.clone()).unwrap_or_default();
         if pausable(handler) && self.st.borrow().frozen(id) {
             return None;
         }
@@ -771,9 +844,8 @@ impl Game {
         if !f.is_func() {
             return None;
         }
-        let last = Interp::env_get(&env, "self");
-        let (me, before) = self.self_table_reusing(id, last);
-        Interp::env_set(&env, "self", me);
+        let mut sync = self.scripts.get_mut(&id).and_then(|v| v.get_mut(i)).map(|s| std::mem::take(&mut s.sync)).unwrap_or_default();
+        self.self_in(id, &env, &mut sync);
         self.st.borrow_mut().current = Some(id);
         // Tasks this event STARTs belong to this object.
         self.it.event_tag = object_tag(id);
@@ -782,14 +854,19 @@ impl Game {
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
         self.stats.scripts_ms += ms;
         if ms > 0.05 {
-            self.stats.slowest.push((res.clone(), handler.to_string(), ms));
+            let r = res(self);
+            self.stats.slowest.push((r, handler.to_string(), ms));
             self.stats.slowest.sort_by(|a, b| b.2.total_cmp(&a.2));
             self.stats.slowest.truncate(5);
         }
-        self.read_self_back(id, &env, &before);
+        self.self_out(id, &env, &mut sync);
+        if let Some(s) = self.scripts.get_mut(&id).and_then(|v| v.get_mut(i)) {
+            s.sync = sync;
+        }
         match r {
             Ok(v) => Some(v),
             Err(f) => {
+                let res = res(self);
                 self.report(&f, &res);
                 if !matches!(f, Fault::End) {
                     if let Some(s) = self.scripts.get_mut(&id).and_then(|v| v.get_mut(i)) {
@@ -1654,6 +1731,9 @@ pub fn project_at(dir: PathBuf) -> Result<Project, String> {
 /// What went into an object's `self` table: each name, the value put in, and for tables
 /// (which a script can change in place) the property they came from.
 type SelfSnap = Vec<(Rc<str>, Value, Option<Variant>)>;
+
+/// In a SelfSnap: this entry is to be taken from the object again.
+const STALE: &str = "<stale>";
 
 /// The same value as went in (a number equal, a switch equal, the very same text).
 fn same_value(now: &Value, put: &Value) -> bool {
