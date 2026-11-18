@@ -33,6 +33,9 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 **Sprite animation.** A sprite sheet is one picture cut into `hframes` × `vframes` cells; `frame`
 picks one. Name animations in `animations`, like `idle=0; walk=1-5; jump=6,7,8`, then
 `ANIMATE(NULL, "walk")` (speed from `anim_fps`, looping from `anim_loop`).
+The easy way: select the sprite and press **Sprite sheet & animations…** in Properties. Set the
+columns and rows (or **Square frames**), press **+ Animation**, click frames in order (right-click
+takes one out), and watch the preview; the round button marks the one that plays when the game starts.
 
 **Backgrounds.** `parallax_x` below 1 makes a sprite (or tilemap) follow the camera only part
 of the way, so it looks far off: 0.5 for distant hills, 0 for a sky that never moves. `repeat_x`

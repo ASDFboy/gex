@@ -577,6 +577,9 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.label(RichText::new(format!("{} objects selected (editing this one; drag in the view moves them all)", n_sel)).small().color(theme::ACCENT));
     }
     ui.separator();
+    if kind == ObjectKind::Sprite2D && ui.button("Sprite sheet & animations…").tip("Cut the picture into frames and make named animations by clicking them, with a preview").clicked() {
+        st.open_sprite = true;
+    }
     if kind == ObjectKind::Animator && ui.button("Edit clips in the Timeline").tip("Opens the Timeline for this Animator: clips that change properties over time.").clicked() {
         st.open_timeline = true;
     }

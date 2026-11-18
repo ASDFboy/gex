@@ -182,6 +182,8 @@ pub struct EditorState {
     pub file_undo: Vec<FileOp>,
     /// Something asked for the Timeline panel to be shown.
     pub open_timeline: bool,
+    /// The Sprite panel was asked for (Properties of a sprite).
+    pub open_sprite: bool,
     /// Something asked for the command line to open (":" in Vim normal mode).
     pub open_command: bool,
 }
@@ -239,6 +241,7 @@ impl EditorState {
             previews: Default::default(),
             file_undo: Vec::new(),
             open_timeline: false,
+            open_sprite: false,
             search: Default::default(),
             commands_open: false,
             commands_show: None,

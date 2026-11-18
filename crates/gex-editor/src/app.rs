@@ -359,6 +359,9 @@ impl EditorApp {
         if std::mem::take(&mut st.open_timeline) {
             self.ws.open_tool("Timeline");
         }
+        if std::mem::take(&mut st.open_sprite) {
+            self.ws.open_tool("Sprite");
+        }
         if typing {
             return;
         }

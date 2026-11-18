@@ -30,6 +30,7 @@ mod docs;
 mod icons;
 mod viewport;
 mod workspace;
+mod sprites;
 
 use std::path::PathBuf;
 

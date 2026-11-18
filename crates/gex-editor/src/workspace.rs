@@ -409,8 +409,8 @@ fn tool_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, view: e
             .title_bar(false)
             .frame(frame)
             .resizable(true)
-            .default_pos(Pos2::new(view.left() + 20.0, view.bottom() - 300.0))
-            .default_size([640.0, 260.0])
+            .default_pos(if name == "Sprite" { Pos2::new(view.right() - 740.0, view.top() + 60.0) } else { Pos2::new(view.left() + 20.0, view.bottom() - 300.0) })
+            .default_size(if name == "Sprite" { [720.0, 420.0] } else { [640.0, 260.0] })
             .constrain_to(view)
             .show(&ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -424,6 +424,9 @@ fn tool_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, view: e
                 ui.separator();
                 match name.as_str() {
                     "Timeline" => crate::timeline::timeline(ui, st),
+                    "Sprite" => {
+                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| crate::sprites::panel(ui, st));
+                    }
                     _ => {
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| crate::tools::profiler(ui, st));
                     }
