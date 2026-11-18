@@ -52,8 +52,7 @@ and start it again.
   `when_x()` turning TRUE runs `on_x()`). Save data between runs with `SAVE_DATA`.
   See [docs/SCRIPTING.md](docs/SCRIPTING.md).
 - **The editor:** a GameMaker-style tab per blueprint for placing and editing instances, with its
-  scripts in small windows wired to their objects, or
-  the classic docked panels (View → Classic docked layout); a Monokai Black look,
+  scripts in small windows wired to their objects; a Monokai Black look,
   2D/3D view with move / rotate / scale tools, undo/redo, copy/paste, a Neovim-style
   `:` command line, optional Vim keys in the script editor, completion, go to definition,
   find/replace, find in files, breakpoints (with conditions and watches) and a debugger, a

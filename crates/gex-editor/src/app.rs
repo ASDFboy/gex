@@ -1,182 +1,17 @@
-//! The editor window: launcher (project library) or the docked editor.
+//! The editor window: launcher (project library) or the editor (a tab per open blueprint).
 
 use crate::docs::Tip as _;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui::{self, RichText};
-use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use gex_core::project::{MountConfig, MountKind, Project};
-use gex_script::LogKind;
 
 use crate::state::{self, EditorState};
-use crate::{code, panels, theme, tools, viewport};
-
-#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum Tab {
-    Blueprint,
-    Hierarchy,
-    Inspector,
-    Events,
-    Assets,
-    Console,
-    Script(String),
-    Profiler,
-    Search,
-    Timeline,
-}
-
-struct Viewer<'a> {
-    st: &'a mut EditorState,
-    rs: Option<&'a egui_wgpu::RenderState>,
-    viewport_tex: &'a mut Option<egui::TextureId>,
-    previews: &'a mut HashMap<String, egui::TextureHandle>,
-    closed: Vec<String>,
-}
-
-impl TabViewer for Viewer<'_> {
-    type Tab = Tab;
-
-    fn id(&mut self, tab: &mut Tab) -> egui::Id {
-        egui::Id::new(format!("{:?}", tab))
-    }
-
-    fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
-        match tab {
-            Tab::Blueprint => {
-                let name = self.st.blueprint_res.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
-                let dirty = if self.st.playing.is_none() && self.st.blueprint_dirty() { " *" } else { "" };
-                format!("🎬 {}{}", name, dirty).into()
-            }
-            Tab::Hierarchy => "🌲 Hierarchy".into(),
-            Tab::Inspector => "🔧 Inspector".into(),
-            Tab::Events => "⚡ Events".into(),
-            Tab::Assets => "📁 Assets".into(),
-            Tab::Console => {
-                let n = self.st.logs.iter().filter(|l| l.kind == LogKind::Error).count();
-                if n > 0 { format!("🖵 Console ({})", n).into() } else { "🖵 Console".into() }
-            }
-            Tab::Script(r) => {
-                let dirty = self.st.scripts.get(r).is_some_and(|s| s.dirty());
-                format!("📜 {}{}", r.rsplit('/').next().unwrap_or(r), if dirty { " *" } else { "" }).into()
-            }
-            Tab::Profiler => "📈 Profiler".into(),
-            Tab::Search => "🔍 Find in files".into(),
-            Tab::Timeline => "🎞 Timeline".into(),
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
-        match tab {
-            Tab::Blueprint => {
-                blueprint_tabs(ui, self.st);
-                viewport::viewport(ui, self.st, self.rs, self.viewport_tex)
-            }
-            Tab::Hierarchy => panels::hierarchy(ui, self.st),
-            Tab::Inspector => {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::inspector(ui, self.st));
-            }
-            Tab::Events => {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| panels::events(ui, self.st));
-            }
-            Tab::Assets => panels::assets(ui, self.st, self.previews),
-            Tab::Console => panels::console(ui, self.st),
-            Tab::Script(r) => code::script_ui(ui, self.st, r),
-            Tab::Profiler => {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| tools::profiler(ui, self.st));
-            }
-            Tab::Search => tools::search(ui, self.st),
-            Tab::Timeline => crate::timeline::timeline(ui, self.st),
-        }
-    }
-
-    fn is_closeable(&self, tab: &Tab) -> bool {
-        matches!(tab, Tab::Script(_) | Tab::Profiler | Tab::Search | Tab::Timeline)
-    }
-
-    fn on_close(&mut self, tab: &mut Tab) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
-        if let Tab::Script(r) = tab {
-            self.closed.push(r.clone());
-        }
-        egui_dock::widgets::tab_viewer::OnCloseResponse::Close
-    }
-}
-
-/// The strip of open blueprints above the blueprint view.
-fn blueprint_tabs(ui: &mut egui::Ui, st: &mut EditorState) {
-    if st.docs.is_empty() {
-        return;
-    }
-    let mut switch = None;
-    let mut close = false;
-    ui.horizontal(|ui| {
-        let name = |r: &Option<String>| r.as_deref().unwrap_or("untitled").rsplit('/').next().unwrap_or("").to_string();
-        ui.add(egui::Button::selectable(true, name(&st.blueprint_res)));
-        if ui.small_button("✖").tip("close this blueprint (Ctrl+W)").clicked() {
-            close = true;
-        }
-        for (i, d) in st.docs.iter().enumerate() {
-            if ui.add(egui::Button::selectable(false, name(&d.blueprint_res))).clicked() {
-                switch = Some(i);
-            }
-        }
-    });
-    if let Some(i) = switch {
-        st.switch_blueprint(i);
-    }
-    if close {
-        st.close_blueprint();
-    }
-}
-
-fn layout_file() -> PathBuf {
-    state::config_dir().join("layout.ron")
-}
-
-fn saved_dock() -> Option<DockState<Tab>> {
-    let text = std::fs::read_to_string(layout_file()).ok()?;
-    let mut d: DockState<Tab> = ron::from_str(&text).ok()?;
-    // Script tabs from last time don't carry over (their buffers aren't open).
-    d.retain_tabs(|t| !matches!(t, Tab::Script(_)));
-    d.find_tab(&Tab::Blueprint)?;
-    Some(d)
-}
-
-fn save_dock(d: &DockState<Tab>) {
-    let mut d = d.clone();
-    d.retain_tabs(|t| !matches!(t, Tab::Script(_)));
-    if let Ok(t) = ron::to_string(&d) {
-        let _ = std::fs::create_dir_all(state::config_dir());
-        let _ = std::fs::write(layout_file(), t);
-    }
-}
-
-/// Brings a panel to the front, opening it if it was closed (tool panels go with the Console).
-fn show_tab(dock: &mut DockState<Tab>, t: Tab) {
-    if let Some(p) = dock.find_tab(&t) {
-        let _ = dock.set_active_tab(p);
-        return;
-    }
-    let tool = matches!(t, Tab::Timeline | Tab::Profiler | Tab::Search | Tab::Console | Tab::Assets);
-    if let Some(p) = dock.find_tab(&Tab::Console).filter(|_| tool) {
-        dock.set_focused_node_and_surface(egui_dock::NodePath { surface: p.surface, node: p.node });
-    }
-    dock.push_to_focused_leaf(t);
-}
-
-fn default_dock() -> DockState<Tab> {
-    let mut d = DockState::new(vec![Tab::Blueprint]);
-    let t = d.main_surface_mut();
-    let [center, _left] = t.split_left(NodeIndex::root(), 0.18, vec![Tab::Hierarchy]);
-    let [center, right] = t.split_right(center, 0.74, vec![Tab::Inspector, Tab::Events]);
-    let _ = right;
-    let [_c, _b] = t.split_below(center, 0.72, vec![Tab::Console, Tab::Assets, Tab::Timeline]);
-    d
-}
+use crate::{panels, theme, viewport};
 
 pub struct EditorApp {
     st: Option<EditorState>,
-    dock: DockState<Tab>,
     viewport_tex: Option<egui::TextureId>,
     previews: HashMap<String, egui::TextureHandle>,
     // Launcher fields.
@@ -190,13 +25,7 @@ pub struct EditorApp {
     cursor_locked: bool,
     /// The layout (a tab per open blueprint) of the open project.
     ws: crate::workspace::Layout,
-    /// Use the older docked layout instead.
-    classic: bool,
     ws_saved_at: std::time::Instant,
-}
-
-fn classic_file() -> PathBuf {
-    state::config_dir().join("classic_layout")
 }
 
 /// Hides the mouse and holds it in the window (or gives it back).
@@ -249,7 +78,6 @@ impl EditorApp {
         gex_script::commands::register();
         let mut app = EditorApp {
             st: None,
-            dock: default_dock(),
             viewport_tex: None,
             previews: HashMap::new(),
             launcher: Default::default(),
@@ -259,7 +87,6 @@ impl EditorApp {
             pads: crate::gamepad::Pads::new(),
             cursor_locked: false,
             ws: Default::default(),
-            classic: classic_file().exists(),
             ws_saved_at: std::time::Instant::now(),
         };
         if let Some(p) = project {
@@ -289,7 +116,6 @@ impl EditorApp {
                 }
                 self.ws.last_blueprint = st.blueprint_res.clone();
                 self.st = Some(st);
-                self.dock = saved_dock().unwrap_or_else(default_dock);
                 self.viewport_tex = None;
                 self.previews.clear();
                 self.settings.loaded = false;
@@ -389,30 +215,13 @@ impl EditorApp {
                 }
             });
             crate::docs::menu(ui, "View", |ui| { crate::theme::fade_in(ui);
-                if self.classic {
-                    for t in [Tab::Blueprint, Tab::Hierarchy, Tab::Inspector, Tab::Events, Tab::Assets, Tab::Console, Tab::Timeline, Tab::Profiler] {
-                        let name = match &t {
-                            Tab::Search => "Find in files".to_string(),
-                            t => format!("{:?}", t),
-                        };
-                        if ui.button(name).clicked() {
-                            show_tab(&mut self.dock, t);
-                            ui.close();
-                        }
-                    }
-                    if ui.button("Reset layout").tip("Puts the docked panels back where they started.").clicked() {
-                        self.dock = default_dock();
+                ui.checkbox(&mut self.ws.show_assets, "Assets").tip("Shows or hides the Assets panel.");
+                ui.checkbox(&mut self.ws.show_console, "Console").tip("Shows or hides the Console panel.");
+                ui.separator();
+                for t in ["Timeline", "Profiler"] {
+                    if ui.button(t).clicked() {
+                        self.ws.open_tool(t);
                         ui.close();
-                    }
-                } else {
-                    ui.checkbox(&mut self.ws.show_assets, "Assets").tip("Shows or hides the Assets panel.");
-                    ui.checkbox(&mut self.ws.show_console, "Console").tip("Shows or hides the Console panel.");
-                    ui.separator();
-                    for t in ["Timeline", "Profiler"] {
-                        if ui.button(t).clicked() {
-                            self.ws.open_tool(t);
-                            ui.close();
-                        }
                     }
                 }
                 ui.separator();
@@ -424,21 +233,6 @@ impl EditorApp {
                 if theme::menu_item(ui, "Find in files", "Ctrl+F").tip("Searches every script and blueprint in the project.").clicked() {
                     st.search.open = true;
                     st.search.focus = true;
-                    ui.close();
-                }
-                ui.separator();
-                let mut classic = self.classic;
-                if ui.checkbox(&mut classic, "Classic docked layout").tip("Panels docked around one blueprint view, instead of a tab per blueprint").changed() {
-                    self.classic = classic;
-                    if classic {
-                        let _ = std::fs::create_dir_all(state::config_dir());
-                        let _ = std::fs::write(classic_file(), "on");
-                    } else {
-                        let _ = std::fs::remove_file(classic_file());
-                    }
-                    // Scripts already open show in the layout switched to.
-                    let open: Vec<String> = st.scripts.keys().cloned().collect();
-                    st.open_requests.extend(open);
                     ui.close();
                 }
             });
@@ -473,13 +267,11 @@ impl EditorApp {
                 ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
                 ui.add_space(8.0);
                 // The tabs take what's left between Play and the project's name.
-                if !self.classic {
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
-                        egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                            ui.horizontal(|ui| crate::workspace::tab_strip(ui, &mut self.ws, st));
-                        });
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
+                    egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                        ui.horizontal(|ui| crate::workspace::tab_strip(ui, &mut self.ws, st));
                     });
-                }
+                });
             });
         });
         let full = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), bar.response.rect.y_range()).expand2(egui::vec2(8.0, 2.0));
@@ -561,19 +353,11 @@ impl EditorApp {
         }
         // F1 anywhere (outside a script, where F1 on a command opens its page): the Command reference.
         if !typing && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
-            // (The classic layout's window toggles; the tabbed layout shows the Commands tab.)
-            st.commands_open = !self.classic || !st.commands_open;
+            st.commands_open = true;
         }
         crate::tools::search_window(ctx, st);
-        if self.classic {
-            crate::tools::command_window(ctx, st);
-        }
         if std::mem::take(&mut st.open_timeline) {
-            if self.classic {
-                show_tab(&mut self.dock, Tab::Timeline);
-            } else {
-                self.ws.open_tool("Timeline");
-            }
+            self.ws.open_tool("Timeline");
         }
         if typing {
             return;
@@ -635,7 +419,7 @@ impl EditorApp {
                 self.cmd = None;
             } else if enter {
                 let c = self.cmd.take().unwrap_or_default();
-                run_command(st, &c, &mut self.dock);
+                run_command(st, &c, &mut self.ws);
             }
         }
         let ctx = ui.ctx().clone();
@@ -964,7 +748,7 @@ impl EditorApp {
     }
 }
 
-fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
+fn run_command(st: &mut EditorState, c: &str, ws: &mut crate::workspace::Layout) {
     let mut parts = c.trim().splitn(2, ' ');
     let head = parts.next().unwrap_or("");
     let arg = parts.next().unwrap_or("").trim();
@@ -1007,7 +791,13 @@ fn run_command(st: &mut EditorState, c: &str, dock: &mut DockState<Tab>) {
                 st.new_script_for(id);
             }
         }
-        "layout" => *dock = default_dock(),
+        "layout" => {
+            // The panels back as they start: Assets and the Console shown, tool windows closed.
+            ws.show_assets = true;
+            ws.show_console = true;
+            ws.console_min = false;
+            ws.tools.clear();
+        }
         "vim" => {
             st.vim_enabled = !st.vim_enabled;
             let _ = std::fs::create_dir_all(state::config_dir());
@@ -1111,34 +901,6 @@ impl eframe::App for EditorApp {
             if !dropped.is_empty() {
                 st.import_files(&dropped);
             }
-            // Script tabs whose files were renamed.
-            for (old, new) in std::mem::take(&mut st.renamed_scripts) {
-                for (_, t) in self.dock.iter_all_tabs_mut() {
-                    if *t == Tab::Script(old.clone()) {
-                        *t = Tab::Script(new.clone());
-                    }
-                }
-            }
-            // Script tabs to open / close (the tabbed layout opens its own script windows).
-            let requests = if self.classic { std::mem::take(&mut st.open_requests) } else { Vec::new() };
-            for r in requests {
-                let t = Tab::Script(r);
-                match self.dock.find_tab(&t) {
-                    Some(p) => {
-                        let _ = self.dock.set_active_tab(p);
-                    }
-                    None => {
-                        // Next to the blueprint view.
-                        match self.dock.find_tab(&Tab::Blueprint) {
-                            Some(p) => {
-                                let _ = self.dock.set_focused_node_and_surface(p.node_path());
-                                self.dock.push_to_focused_leaf(t);
-                            }
-                            None => self.dock.push_to_first_leaf(t),
-                        }
-                    }
-                }
-            }
         }
         self.menu(ui);
         if self.st.is_none() {
@@ -1154,58 +916,17 @@ impl eframe::App for EditorApp {
         self.settings_window(&ctx);
         self.export_window(&ctx);
         let rs = frame.wgpu_render_state();
-        if !self.classic {
-            let st = self.st.as_mut().unwrap();
-            egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(4.0)).show(ui, |ui| {
-                crate::workspace::show(ui, &mut self.ws, st, rs, &mut self.viewport_tex, &mut self.previews);
-            });
-            if self.ws_saved_at.elapsed().as_secs_f32() > 2.0 {
-                self.ws.save(&st.project.dir);
-                self.ws_saved_at = std::time::Instant::now();
-            }
-            return;
-        }
         let st = self.st.as_mut().unwrap();
-        let mut viewer = Viewer { st, rs, viewport_tex: &mut self.viewport_tex, previews: &mut self.previews, closed: Vec::new() };
-        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-            let mut style = Style::from_egui(ui.style().as_ref());
-            // Glass panels: see-through bodies with a faint light edge; tab strips a shade darker.
-            style.tab_bar.bg_fill = theme::alpha(egui::Color32::BLACK, 170);
-            style.tab_bar.hline_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 16);
-            style.tab.tab_body.bg_fill = theme::glass_fill();
-            style.tab.tab_body.stroke = theme::glass_edge();
-            style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
-            for t in [&mut style.tab.active, &mut style.tab.inactive, &mut style.tab.focused, &mut style.tab.hovered, &mut style.tab.active_with_kb_focus, &mut style.tab.inactive_with_kb_focus, &mut style.tab.focused_with_kb_focus] {
-                t.corner_radius = egui::CornerRadius::ZERO;
-            }
-            for t in [&mut style.tab.active, &mut style.tab.focused, &mut style.tab.active_with_kb_focus, &mut style.tab.focused_with_kb_focus] {
-                t.bg_fill = theme::glass_fill();
-                t.outline_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22);
-                t.text_color = theme::TEXT;
-            }
-            style.tab.focused.text_color = theme::ACCENT;
-            for t in [&mut style.tab.inactive, &mut style.tab.inactive_with_kb_focus] {
-                t.bg_fill = egui::Color32::TRANSPARENT;
-                t.outline_color = egui::Color32::TRANSPARENT;
-                t.text_color = theme::TEXT_DIM;
-            }
-            style.tab.hovered.bg_fill = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10);
-            style.tab.hovered.text_color = theme::TEXT;
-            style.separator.color_idle = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 0);
-            style.separator.color_hovered = theme::alpha(theme::ACCENT, 140);
-            style.separator.color_dragged = theme::ACCENT;
-            style.main_surface_border_stroke = egui::Stroke::NONE;
-            DockArea::new(&mut self.dock).style(style).show_inside(ui, &mut viewer);
+        egui::CentralPanel::default().frame(egui::Frame::NONE.inner_margin(4.0)).show(ui, |ui| {
+            crate::workspace::show(ui, &mut self.ws, st, rs, &mut self.viewport_tex, &mut self.previews);
         });
-        for r in viewer.closed {
-            if self.st.as_ref().unwrap().scripts.get(&r).is_some_and(|s| !s.dirty()) {
-                self.st.as_mut().unwrap().scripts.remove(&r);
-            }
+        if self.ws_saved_at.elapsed().as_secs_f32() > 2.0 {
+            self.ws.save(&st.project.dir);
+            self.ws_saved_at = std::time::Instant::now();
         }
     }
 
     fn on_exit(&mut self) {
-        save_dock(&self.dock);
         if let Some(st) = &mut self.st {
             self.ws.save(&st.project.dir);
             st.stop();

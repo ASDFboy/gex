@@ -26,7 +26,7 @@ move it):
 sounds...). **+Blueprint**, **+Script** and **+Folder** make one, double-click opens one, right-click has
 the rest (rename, a highlight color, delete), and files dropped on the window are imported. The
 Console (messages and errors) comes up along the bottom when something is printed; double-click
-it to fold it down to a bar. Prefer panels docked around one view? **View → Classic docked layout** switches.
+it to fold it down to a bar.
 
 ## 2. Objects: make a player
 

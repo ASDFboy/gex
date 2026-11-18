@@ -2,8 +2,6 @@
 //! the blueprint's objects and the picked one's properties and events on the left and the view
 //! in the middle; scripts open as small windows floating over the view, wired to the object
 //! they belong to. The assets and the console sit beside every tab.
-//!
-//! The older docked layout is still there (View → Classic docked layout).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

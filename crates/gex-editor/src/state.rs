@@ -169,8 +169,6 @@ pub struct EditorState {
     /// The Command reference window is open (View → Commands, F1), and a command to show in it.
     pub commands_open: bool,
     pub commands_show: Option<String>,
-    /// Script tabs whose file was renamed: (old, new), for the dock to follow.
-    pub renamed_scripts: Vec<(String, String)>,
     pub timeline: crate::timeline::TimelineState,
     /// Breakpoint conditions: (script, line) → expression.
     pub bp_conditions: HashMap<(String, usize), String>,
@@ -233,7 +231,6 @@ impl EditorState {
             game_breakpoints: Default::default(),
             preview_particles: HashMap::new(),
             preview_particles_3d: HashMap::new(),
-            renamed_scripts: Vec::new(),
             timeline: Default::default(),
             bp_conditions: HashMap::new(),
             bp_edit: None,
@@ -815,7 +812,6 @@ impl EditorState {
             fix_text(&mut sc.saved);
             let key = match swap(&k) {
                 Some(x) => {
-                    self.renamed_scripts.push((k.clone(), x.clone()));
                     sc.res = x.clone();
                     x
                 }

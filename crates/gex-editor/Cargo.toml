@@ -16,7 +16,6 @@ gex-assets.workspace = true
 gex-render.workspace = true
 jlb.workspace = true
 eframe.workspace = true
-egui_dock.workspace = true
 egui-wgpu.workspace = true
 ron.workspace = true
 serde.workspace = true

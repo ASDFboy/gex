@@ -6,7 +6,7 @@
 |---|---|---|
 | Language | **Rust** | The JLB interpreter (jlb-rust) is Rust, so it embeds directly with no FFI layer. |
 | Rendering | **wgpu** | One API over DirectX 12, Vulkan and Metal (plus GL as a fallback). Free, no SDK installs. |
-| Editor UI | **egui + egui_dock** | Immediate-mode, native, small. The viewport is a wgpu texture inside the UI, so the editor and game share one renderer. Idle cost is near zero: egui only repaints on input (or while a game runs). |
+| Editor UI | **egui** | Immediate-mode, native, small. The viewport is a wgpu texture inside the UI, so the editor and game share one renderer. Idle cost is near zero: egui only repaints on input (or while a game runs). |
 | Math | glam | The usual for Rust games. |
 | Files | RON | Readable, diff-friendly text for blueprints and projects. |
 | Valve formats | own readers (VPK, VTF, VMT) | Small, no dependencies, tested against synthetic files. `vbsp`/`vmdl` crates are lined up for maps and models. |

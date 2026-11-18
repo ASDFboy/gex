@@ -287,7 +287,6 @@ mod tests {
         let player = st.tree.find_path(None, "Level/Player").unwrap();
         assert_eq!(st.tree.objects[player].scripts, vec!["res://code/player.jlb".to_string()]);
         assert!(st.scripts.contains_key("res://code/player.jlb"));
-        assert_eq!(st.renamed_scripts, vec![("res://scripts/player.jlb".to_string(), "res://code/player.jlb".to_string())]);
         assert!(!st.blueprint_dirty(), "the open blueprint matches the fixed file");
         st.delete_asset("res://code/player.jlb").unwrap();
         assert!(!st.scripts.contains_key("res://code/player.jlb"));

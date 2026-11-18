@@ -208,33 +208,9 @@ mod tests {
     }
 }
 
-/// The Command reference (View → Commands, F1) as a window (the classic layout; the tabbed
-/// one shows it in a tab): every engine command with how to use it and an example, the
-/// events, and the basics. Searchable.
-pub fn command_window(ctx: &egui::Context, st: &mut EditorState) {
-    if !st.commands_open {
-        return;
-    }
-    let mut open = true;
-    egui::Window::new("Commands")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_size([860.0, 600.0])
-        .default_pos(ctx.content_rect().center() - egui::vec2(430.0, 300.0))
-        .min_size([520.0, 300.0])
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            crate::theme::fade_in(ui);
-            command_page(ui, st);
-        });
-    if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        st.commands_open = false;
-    }
-}
-
-/// The Command reference's contents: the list of commands (searchable) on the left and the
-/// picked one's page. In a tab of its own, or in a window in the classic layout.
+/// The Command reference (View → Commands, F1), shown in a tab of its own: every engine
+/// command with how to use it and an example, the events, and the basics. The list of
+/// commands (searchable) on the left and the picked one's page.
 pub fn command_page(ui: &mut egui::Ui, st: &mut EditorState) {
     use gex_script::command_guide::{BASICS, EVENTS, GROUPS, GUIDE};
     let id = egui::Id::new("command reference");
