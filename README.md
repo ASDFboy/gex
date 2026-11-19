@@ -3,9 +3,12 @@
 A 2D and 3D game engine with a GameMaker-style editor (a tab per blueprint), Godot-style blueprints, and game logic written in
 [.jlb](https://github.com/ASDFboy/jlb-rust), using GameMaker-style events.
 
-By ASDFboy and Claude.
+By ASDFboy. **[Website](https://asdfboy.github.io/gex/) · [Download](https://github.com/ASDFboy/gex/releases/latest)**
 
 ## Run it
+
+On Windows, download `GEX.zip` from [Releases](https://github.com/ASDFboy/gex/releases/latest), unzip it and run
+`GEX.exe`. It's one file with no installer; the docs, templates and demo game are inside it.
 
 ```
 gex                       the project library (new / open / demo)
@@ -22,8 +25,8 @@ cargo test --workspace                         # everything's tests, including t
 
 To export games for other systems, put their GEX players in a `players` folder next to the
 `gex` program: `gex-windows.exe`, `gex-linux`, `gex-macos` (build each with `cargo build
---release -p gex-editor` on, or for, that system and rename it). The release downloads come
-with the Windows and Linux ones.
+--release -p gex-editor` on, or for, that system and rename it). The Linux player is attached
+to each release as `gex-linux`.
 
 If the window stays blank or GEX closes straight away, the graphics driver may not like the
 default graphics API: set the `WGPU_BACKEND` environment variable to `vulkan`, `dx12` or `gl`

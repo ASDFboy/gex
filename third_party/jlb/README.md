@@ -4,7 +4,7 @@
 
 The interpreter for **.jlb**, a small programming language, written in Rust.
 
-**Authors:** [ASDFboy](https://github.com/ASDFboy) and Claude
+**Author:** [ASDFboy](https://github.com/ASDFboy)
 
 ```text
 >> guess.jlb: a number guessing game
@@ -141,4 +141,4 @@ The full language reference is in [**docs/**](docs/README.md):
 
 ## Authors
 
-Made by **ASDFboy** and **Claude**.
+Made by **ASDFboy**.

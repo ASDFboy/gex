@@ -2,7 +2,7 @@
 name = "jlb"
 version = "0.1.0"
 edition = "2021"
-authors = ["ASDFboy", "Claude"]
+authors = ["ASDFboy"]
 description = "Interpreter for the .jlb programming language"
 repository = "https://github.com/ASDFboy/jlb-rust"
 

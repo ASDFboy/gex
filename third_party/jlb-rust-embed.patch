@@ -2,7 +2,7 @@ diff --git a/Cargo.toml b/Cargo.toml
 index 7f82806..b79f83c 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -6,6 +6,10 @@ authors = ["ASDFboy", "Claude"]
+@@ -6,6 +6,10 @@ authors = ["ASDFboy"]
  description = "Interpreter for the .jlb programming language"
  repository = "https://github.com/ASDFboy/jlb-rust"
  
