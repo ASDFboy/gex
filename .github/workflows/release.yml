@@ -1,0 +1,41 @@
+# Builds GEX for Windows and Linux and publishes a GitHub release with GEX.zip and gex-linux.
+# Runs when the release branch is pushed, or from Actions → Release → Run workflow.
+# The release is named after the version in Cargo.toml; a release with that tag is updated.
+name: Release
+on:
+  workflow_dispatch:
+  push:
+    branches: [release]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev pkg-config zip
+          rustup toolchain install stable --profile minimal --target x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release --workspace
+      - name: Build for Windows
+        run: cargo build --release --target x86_64-pc-windows-gnu -p gex-editor
+      - name: Build for Linux
+        run: cargo build --release -p gex-editor
+      - name: Package
+        run: |
+          mkdir dist
+          cp target/x86_64-pc-windows-gnu/release/gex.exe GEX.exe
+          zip -9 dist/GEX.zip GEX.exe
+          cp target/release/gex dist/gex-linux
+          echo "VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_ENV"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: GEX ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          body_path: .github/release-notes.md
+          files: dist/*

@@ -28,6 +28,10 @@ To export games for other systems, put their GEX players in a `players` folder n
 --release -p gex-editor` on, or for, that system and rename it). The Linux player is attached
 to each release as `gex-linux`.
 
+New releases are built by GitHub: push to the `release` branch (or run Actions → Release) and it
+builds Windows and Linux, runs the tests, and publishes `GEX.zip` and `gex-linux` under the version in
+`Cargo.toml`.
+
 If the window stays blank or GEX closes straight away, the graphics driver may not like the
 default graphics API: set the `WGPU_BACKEND` environment variable to `vulkan`, `dx12` or `gl`
 and start it again.
