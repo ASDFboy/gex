@@ -397,6 +397,39 @@ fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: ObjectId) {
 /// A built-in property's editor: a list for choices, a slider for numbers with a range,
 /// otherwise the plain editor for its type.
 fn prop_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str, info: &gex_core::props::PropInfo) -> bool {
+    // A mesh is a built-in shape or a model file: a list of shapes, and a field that takes a
+    // typed path or a model dropped from the assets (yours or a mounted game's).
+    if let (true, Variant::Text(cur)) = (key == "mesh", &mut *v) {
+        let mut changed = false;
+        // Anything that isn't a shape's name is a model path (maybe still being typed).
+        let model = !info.choices.contains(&cur.as_str());
+        ui.horizontal(|ui| {
+            let combo = egui::ComboBox::from_id_salt(("choice", key)).width(70.0).selected_text(if model { "model" } else { cur.as_str() }).show_ui(ui, |ui| {
+                for c in info.choices {
+                    if ui.selectable_label(cur == c, *c).clicked() && cur != c {
+                        *cur = c.to_string();
+                        changed = true;
+                    }
+                }
+            });
+            let mut path = if model { cur.clone() } else { String::new() };
+            let field = ui.add(egui::TextEdit::singleline(&mut path).hint_text("or drop a model here").desired_width(f32::INFINITY));
+            if field.changed() {
+                *cur = if path.is_empty() { "cube".into() } else { path };
+                changed = true;
+            }
+            for r in [&combo.response, &field] {
+                if r.dnd_hover_payload::<AssetPath>().is_some_and(|p| gex_assets::model::is_model(&p.0)) {
+                    ui.painter().rect_stroke(r.rect, 0.0, egui::Stroke::new(1.5, theme::ACCENT), egui::StrokeKind::Inside);
+                }
+                if let Some(p) = r.dnd_release_payload::<AssetPath>().filter(|p| gex_assets::model::is_model(&p.0)) {
+                    *cur = p.0.clone();
+                    changed = true;
+                }
+            }
+        });
+        return changed;
+    }
     if !info.choices.is_empty() {
         if let Variant::Text(cur) = v {
             let mut changed = false;
