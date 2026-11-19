@@ -145,6 +145,16 @@ impl Launcher {
             let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
             let ui = &mut ui;
             ui.horizontal(|ui| {
+                // The logo is pixel art: drawn at a whole multiple of its size, unblurred.
+                let logo = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new("gex logo"))).unwrap_or_else(|| {
+                    let img = image::load_from_memory(crate::LOGO).map(|i| i.to_rgba8()).unwrap_or_default();
+                    let c = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+                    let t = ui.ctx().load_texture("gex logo", c, egui::TextureOptions::NEAREST);
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("gex logo"), t.clone()));
+                    t
+                });
+                ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(64.0, 64.0)));
+                ui.add_space(4.0);
                 ui.label(RichText::new("GEX").size(34.0).strong().color(theme::ACCENT));
                 ui.add_space(6.0);
                 ui.vertical(|ui| {

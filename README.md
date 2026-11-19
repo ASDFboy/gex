@@ -1,3 +1,5 @@
+<img src="crates/gex-editor/assets/logo.png" width="64" height="64" alt="GEX logo">
+
 # GEX
 
 A 2D and 3D game engine with a GameMaker-style editor (a tab per blueprint), Godot-style blueprints, and game logic written in

@@ -26,6 +26,10 @@ pub struct EditorApp {
     /// The layout (a tab per open blueprint) of the open project.
     ws: crate::workspace::Layout,
     ws_saved_at: std::time::Instant,
+    /// Errors in the console that have been seen (by closing the console or clearing it);
+    /// while there are more, the window shows the error icon.
+    errors_seen: usize,
+    error_icon: bool,
 }
 
 /// Hides the mouse and holds it in the window (or gives it back).
@@ -84,6 +88,8 @@ impl EditorApp {
             cursor_locked: false,
             ws: Default::default(),
             ws_saved_at: std::time::Instant::now(),
+            errors_seen: 0,
+            error_icon: false,
         };
         if let Some(p) = project {
             app.open_project(&p);
@@ -846,6 +852,23 @@ fn browse_button(ui: &mut egui::Ui) -> Option<String> {
     None
 }
 
+impl EditorApp {
+    /// The window's icon turns to the error one when a game (played or built) reports an
+    /// error, until the console is cleared or closed.
+    fn error_icon(&mut self, ctx: &egui::Context) {
+        let errors = self.st.as_ref().map_or(0, |st| st.logs.iter().filter(|l| l.kind == gex_script::LogKind::Error).count());
+        if errors < self.errors_seen || !self.ws.show_console || self.ws.console_min {
+            self.errors_seen = errors;
+        }
+        let want = errors > self.errors_seen;
+        if want != self.error_icon {
+            self.error_icon = want;
+            let icon = crate::png_icon(if want { crate::ERROR_ICON } else { crate::ICON });
+            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(icon.map(std::sync::Arc::new)));
+        }
+    }
+}
+
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let frame_start = std::time::Instant::now();
@@ -863,6 +886,7 @@ impl eframe::App for EditorApp {
             return;
         }
         self.shortcuts(&ctx);
+        self.error_icon(&ctx);
         // Middle-click documentation, for what the last frame drew under the pointer.
         crate::docs::show(&ctx);
         if let Some(st) = &mut self.st {
@@ -1049,14 +1073,10 @@ impl eframe::App for PlayerApp {
             match m {
                 gex_script::thread::FromGame::Frame { list, logs, .. } => {
                     self.list = list;
-                    for l in logs {
-                        eprintln!("{}", l.text);
-                    }
+                    print_logs(logs);
                 }
                 gex_script::thread::FromGame::Stopped { logs } => {
-                    for l in logs {
-                        eprintln!("{}", l.text);
-                    }
+                    print_logs(logs);
                     self.ended = true;
                 }
                 gex_script::thread::FromGame::Paused(_) => self.handle.resume(),
@@ -1147,7 +1167,7 @@ impl eframe::App for PlayerApp {
             let nearest = d.scale_filter == "pixel" && d.scale_mode != "expand";
             let probs = viewport::paint_list(ui, rs, &mut self.renderer, &mut self.tex, &self.vfs, view, &self.list, &cams, &gex_render::Overlay::default(), nearest);
             for p in probs {
-                eprintln!("{}", p);
+                eprintln!("ERROR: {}", p);
             }
             let design = gex_core::glam::Vec2::new(design[0] as f32, design[1] as f32);
             let (map, scale) = viewport::ui_mapping(&self.list.display, design, view);
@@ -1158,6 +1178,17 @@ impl eframe::App for PlayerApp {
             viewport::paint_fade(ui, rect, self.list.fade);
         });
         repaint_capped(&ctx, self.list.graphics.fps_cap, frame_start);
+    }
+}
+
+/// What the game printed, on stderr: the editor's Build reads it back into its console
+/// (errors marked so they show as errors there).
+fn print_logs(logs: Vec<gex_script::LogLine>) {
+    for l in logs {
+        match l.kind {
+            gex_script::LogKind::Error => eprintln!("ERROR: {}", l.text),
+            _ => eprintln!("{}", l.text),
+        }
     }
 }
 

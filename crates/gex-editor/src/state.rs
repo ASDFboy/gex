@@ -1642,17 +1642,29 @@ impl EditorState {
     pub fn poll_build(&mut self) -> bool {
         let Some(b) = self.build.as_mut() else { return false };
         let lines: Vec<String> = b.lines.try_iter().collect();
-        let done = b.child.try_wait().map(|s| s.is_some()).unwrap_or(true);
+        let status = b.child.try_wait().unwrap_or(None);
+        let done = status.is_some() || b.child.try_wait().is_err();
         for l in lines {
-            // The player's own notes (graphics driver and such) aren't the game's.
+            // A crash or an error from the player is the game's; its other notes (graphics
+            // driver and such) aren't.
+            if let Some(e) = l.strip_prefix("[ERROR] gex: ") {
+                self.log(LogKind::Error, format!("Built game: {}", e));
+                continue;
+            }
             if l.starts_with('[') || l.starts_with("ALSA") || l.starts_with("libEGL") || l.trim().is_empty() {
                 continue;
             }
-            self.log(LogKind::Print, l);
+            match l.strip_prefix("ERROR: ") {
+                Some(e) => self.log(LogKind::Error, e.to_string()),
+                None => self.log(LogKind::Print, l),
+            }
         }
         if done {
             self.build = None;
             self.status = "The built game was closed.".into();
+            if status.is_some_and(|s| !s.success()) {
+                self.log(LogKind::Error, "The built game stopped with an error.");
+            }
         }
         !done
     }
@@ -1667,21 +1679,22 @@ impl EditorState {
         std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
         let mut program = std::fs::read(player).map_err(|e| format!("reading the player {}: {}", player.display(), e))?;
         let mut notes = Vec::new();
-        if !self.project.config.icon.is_empty() {
-            match platform {
-                Platform::Windows => match gex_assets::load_image(&self.vfs, &self.project.config.icon) {
-                    Ok(img) => match crate::export::set_exe_icon(&program, &img.pixels, img.width, img.height) {
-                        Ok(p) => program = p,
-                        Err(e) => notes.push(format!("the program keeps the GEX icon: {}", e)),
-                    },
-                    Err(e) => notes.push(format!("couldn't read the icon {}: {}", self.project.config.icon, e)),
+        if platform == Platform::Windows {
+            // The project's icon, or (without one) the GEX game icon its window shows too.
+            let icon = if self.project.config.icon.is_empty() {
+                image::load_from_memory(crate::GAME_ICON).map(|i| i.to_rgba8()).map(|i| (i.width(), i.height(), i.into_raw())).map_err(|e| e.to_string())
+            } else {
+                gex_assets::load_image(&self.vfs, &self.project.config.icon).map(|img| (img.width, img.height, img.pixels)).map_err(|e| format!("couldn't read the icon {}: {}", self.project.config.icon, e))
+            };
+            match icon {
+                Ok((w, h, px)) => match crate::export::set_exe_icon(&program, &px, w, h) {
+                    Ok(p) => program = p,
+                    Err(e) => notes.push(format!("the program keeps the GEX icon: {}", e)),
                 },
-                Platform::MacOs => {
-                    // Finder wants an .icns; the window and Dock icon is set when the game runs.
-                }
-                Platform::Linux => {}
+                Err(e) => notes.push(e),
             }
         }
+        // macOS: Finder wants an .icns; the window and Dock icon is set when the game runs.
         std::fs::write(&target, &program).map_err(|e| format!("writing the program: {}", e))?;
         #[cfg(unix)]
         {

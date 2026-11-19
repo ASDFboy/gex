@@ -47,14 +47,28 @@ fn options(title: &str, size: [f32; 2]) -> eframe::NativeOptions {
     }
 }
 
-/// The project's icon picture, for the window.
+/// The GEX icon (the editor's window and taskbar).
+pub const ICON: &[u8] = include_bytes!("../assets/icon.png");
+/// A game's window when its project has no icon of its own.
+pub const GAME_ICON: &[u8] = include_bytes!("../assets/game-icon.png");
+/// The editor's icon while the console holds errors nobody has looked at yet.
+pub const ERROR_ICON: &[u8] = include_bytes!("../assets/error-icon.png");
+/// The GEX logo (the project library).
+pub const LOGO: &[u8] = include_bytes!("../assets/logo.png");
+
+/// A .png as a window icon.
+pub fn png_icon(png: &[u8]) -> Option<egui::IconData> {
+    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.to_rgba8();
+    Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
+}
+
+/// The project's icon picture for the game's window, or the GEX game icon.
 fn window_icon(p: &gex_core::project::Project) -> Option<egui::IconData> {
-    if p.config.icon.is_empty() {
-        return None;
-    }
-    let vfs = gex_assets::Vfs::new(&p.dir, &p.config);
-    let img = gex_assets::load_image(&vfs, &p.config.icon).ok()?;
-    Some(egui::IconData { rgba: img.pixels, width: img.width, height: img.height })
+    let own = (!p.config.icon.is_empty()).then(|| {
+        let vfs = gex_assets::Vfs::new(&p.dir, &p.config);
+        gex_assets::load_image(&vfs, &p.config.icon).ok().map(|img| egui::IconData { rgba: img.pixels, width: img.width, height: img.height })
+    });
+    own.flatten().or_else(|| png_icon(GAME_ICON))
 }
 
 fn main() -> std::process::ExitCode {
@@ -109,5 +123,8 @@ fn main() -> std::process::ExitCode {
     // The editor draws its own title bar buttons in the menu bar (more room for everything else).
     let mut opts = options("GEX", [1500.0, 900.0]);
     opts.viewport = opts.viewport.with_decorations(false);
+    if let Some(icon) = png_icon(ICON) {
+        opts.viewport = opts.viewport.with_icon(icon);
+    }
     startup::run(eframe::run_native("GEX", opts, Box::new(move |cc| Ok(Box::new(app::EditorApp::new(cc, project))))))
 }
