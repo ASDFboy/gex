@@ -8,7 +8,7 @@
 <meta property="og:title" content="GEX game engine">
 <meta property="og:description" content="A 2D and 3D game engine with a tab-per-blueprint editor and game logic written in .jlb.">
 <meta property="og:image" content="https://asdfboy.github.io/gex/scripts.jpg">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23000'/%3E%3Cpath d='M12 4H4v8h8V8H8' fill='none' stroke='%23a6e22e' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" href="logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -40,7 +40,8 @@ a:hover { text-decoration: underline; }
 header { border-bottom: 1px solid var(--line); background: #0a0a0a; position: sticky; top: 0; z-index: 2; }
 header .wrap { display: flex; align-items: flex-end; gap: 4px; height: 48px; }
 .brand { font: 600 18px var(--mono); color: var(--text); margin-right: 20px; align-self: center; letter-spacing: 1px; }
-.brand b { color: var(--green); }
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand img, .logo { image-rendering: pixelated; }
 nav { display: flex; gap: 2px; overflow-x: auto; min-width: 0; scrollbar-width: none; }
 nav a {
   color: var(--dim); font-size: 14px; padding: 7px 22px 6px; background: var(--panel);
@@ -50,8 +51,9 @@ nav a:hover { color: var(--text); background: var(--panel2); text-decoration: no
 
 /* hero */
 .hero { padding: 72px 0 40px; }
-.hero h1 { font: 600 clamp(44px, 8vw, 84px)/1 var(--mono); margin: 0 0 18px; letter-spacing: -2px; }
-.hero h1 span { color: var(--pink); }
+.hero h1 { font: 600 clamp(44px, 8vw, 84px)/1 var(--mono); margin: 0 0 18px; letter-spacing: -2px; display: flex; align-items: center; gap: 24px; }
+.hero h1 .logo { width: clamp(64px, 9vw, 96px); height: auto; }
+.hero h1 em { color: var(--pink); font-style: normal; }
 .hero p.lead { font-size: clamp(18px, 2.4vw, 22px); color: var(--text); max-width: 720px; margin: 0 0 28px; }
 .hero p.lead em { font-style: normal; color: var(--yellow); }
 .buttons { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
@@ -117,7 +119,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: s
 <body>
 <header>
   <div class="wrap">
-    <a class="brand" href="#top"><b>G</b>EX</a>
+    <a class="brand" href="#top"><img src="logo.png" width="32" height="32" alt="">GEX</a>
     <nav>
       <a href="#features">Features</a>
       <a href="#scripting">Scripting</a>
@@ -129,7 +131,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: s
 
 <main id="top">
   <div class="wrap hero">
-    <h1>GEX<span>.</span></h1>
+    <h1><img class="logo" src="logo.png" width="96" height="96" alt="GEX logo"><span>GEX<em>.</em></span></h1>
     <p class="lead">A 2D and 3D game engine. Build levels in a tab per blueprint, write game logic as <em>events in .jlb</em>, and press Play.</p>
     <div class="buttons">
       <a class="btn go" href="https://github.com/ASDFboy/gex/releases/latest/download/GEX.zip">Download for Windows</a>
