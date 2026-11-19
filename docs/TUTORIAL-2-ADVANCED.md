@@ -227,8 +227,9 @@ it gets quieter the farther it is from the camera: put it under a waterfall or a
 ## UI
 
 UI objects (Panel, Label, Button, TextInput, ProgressBar, Image) are drawn over the game in
-window pixels and ignore cameras. `anchor` pins one to a side or corner (`top_right`,
-`bottom`, `center`...) so it stays there whatever the window size.
+window pixels and ignore cameras. `anchor` is its origin: the point of it that sits at
+its position (`top_left`, `top`, `center`, `bottom_right`...). A `center` button at the middle
+of the screen is centred whatever its size.
 
 | Object | Its events |
 |---|---|

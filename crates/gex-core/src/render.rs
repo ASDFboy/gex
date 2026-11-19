@@ -139,7 +139,7 @@ pub struct Light2DDraw {
 pub struct UiItem {
     pub object: ObjectId,
     pub kind: ObjectKind,
-    /// Position from the object's transform, before the anchor is applied.
+    /// Its origin point (from its transform): where the anchor point of it sits.
     pub pos: Vec2,
     pub size: Vec2,
     pub props: std::collections::BTreeMap<String, crate::Variant>,
@@ -155,12 +155,10 @@ impl UiItem {
     pub fn color(&self, k: &str) -> [f32; 4] {
         self.props.get(k).map(crate::Variant::as_color).unwrap_or([1.0; 4])
     }
-    /// Top-left corner in a window of `screen` size, after the anchor.
-    pub fn top_left(&self, screen: Vec2) -> Vec2 {
-        let a = self.text("anchor");
-        let fx = if a.ends_with("right") { 1.0 } else if a == "top" || a == "bottom" || a == "center" { 0.5 } else { 0.0 };
-        let fy = if a.starts_with("bottom") { 1.0 } else if a == "left" || a == "right" || a == "center" { 0.5 } else { 0.0 };
-        self.pos + Vec2::new(fx * (screen.x - self.size.x), fy * (screen.y - self.size.y))
+    /// Its top-left corner. The anchor is its origin: which point of it sits at its position
+    /// (top_left: the top-left corner; top: the middle of the top edge; center: the middle...).
+    pub fn top_left(&self, _screen: Vec2) -> Vec2 {
+        self.pos - anchor_fraction(self.text("anchor")) * self.size
     }
 }
 
@@ -419,6 +417,13 @@ fn mesh_look(n: &crate::Object, base: MeshDraw) -> MeshDraw {
         draw_distance: n.num("draw_distance", 0.0).max(0.0) as f32,
         ..base
     }
+}
+
+/// Where an anchor puts the origin, as a fraction of the size (0,0 top-left, 1,1 bottom-right).
+pub fn anchor_fraction(a: &str) -> Vec2 {
+    let fx = if a.ends_with("right") { 1.0 } else if a == "top" || a == "bottom" || a == "center" { 0.5 } else { 0.0 };
+    let fy = if a.starts_with("bottom") { 1.0 } else if a == "left" || a == "right" || a == "center" { 0.5 } else { 0.0 };
+    Vec2::new(fx, fy)
 }
 
 pub fn extract(tree: &BlueprintTree) -> RenderList {
@@ -689,4 +694,21 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
     out.sprites.sort_by(|a, b| a.layer.total_cmp(&b.layer));
     out.labels.sort_by(|a, b| a.layer.total_cmp(&b.layer));
     out
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+
+    #[test]
+    fn anchor_is_the_origin() {
+        let mut props = std::collections::BTreeMap::new();
+        props.insert("anchor".to_string(), crate::Variant::Text("top".into()));
+        let mut u = UiItem { object: Default::default(), kind: crate::object::ObjectKind::Button, pos: Vec2::ZERO, size: Vec2::new(140.0, 36.0), props };
+        assert_eq!(u.top_left(Vec2::new(1280.0, 720.0)), Vec2::new(-70.0, 0.0), "top: the middle of its top edge at the position");
+        u.props.insert("anchor".into(), crate::Variant::Text("bottom_right".into()));
+        assert_eq!(u.top_left(Vec2::new(1280.0, 720.0)), Vec2::new(-140.0, -36.0));
+        u.props.insert("anchor".into(), crate::Variant::Text("top_left".into()));
+        assert_eq!(u.top_left(Vec2::new(1280.0, 720.0)), Vec2::ZERO);
+    }
 }

@@ -414,6 +414,8 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     let mut edit_condition: Option<usize> = None;
     let mut cursor_rect: Option<egui::Rect> = None;
     let mut typed = false;
+    // Characters added by this frame's typing (negative when deleting).
+    let mut grew: i64 = 0;
     scroll.show(ui, |ui| {
         ui.horizontal_top(|ui| {
             // Gutter: line numbers; click one for a breakpoint.
@@ -463,6 +465,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
                 .layouter(&mut layouter)
                 .show(ui);
             typed = s.text != before;
+            grew = s.text.chars().count() as i64 - before.chars().count() as i64;
             // Middle-click a word: what it is.
             if let (true, Some(p)) = (crate::docs::clicked(ui.ctx()) && out.response.contains_pointer(), ui.ctx().pointer_latest_pos()) {
                 let at: usize = out.galley.cursor_from_pos(p - out.galley_pos).index.0;
@@ -523,8 +526,9 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
 
     // Completion popup, from what's just been typed.
     let mut now_cursor = egui::TextEdit::load_state(ui.ctx(), id).and_then(|st| st.cursor.char_range()).map(|r| r.primary.index.0).unwrap_or(0);
-    // Enter keeps the indentation (one more level after a "{").
-    if typed && now_cursor > 0 {
+    // Enter keeps the indentation (one more level after a "{"). Only when a line break was just
+    // typed: Backspace that leaves the cursor at a line's start mustn't put the indent back.
+    if typed && grew > 0 && now_cursor > 0 {
         let c: Vec<char> = s.text.chars().collect();
         if c.get(now_cursor - 1) == Some(&'\n') {
             let ls = c[..now_cursor - 1].iter().rposition(|x| *x == '\n').map(|p| p + 1).unwrap_or(0);

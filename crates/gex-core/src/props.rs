@@ -96,7 +96,7 @@ pub fn info(kind: ObjectKind, k: &str) -> PropInfo {
         (_, "color") => p(&[], None, "Its color (multiplies the texture, if there is one)."),
         (_, "texture") => p(&[], None, "An image file. Drag one in from the Assets panel."),
         (_, "layer") if kind.is_2d() && !matches!(kind, Body2D | Collider2D) => p(&[], None, "Drawing order: higher layers draw on top. Added to the object's z (Position), which does the same and carries to its children."),
-        (_, "anchor") => p(ANCHOR, None, "Which corner or edge of the game window its position counts from."),
+        (_, "anchor") => p(ANCHOR, None, "Its origin: which point of it sits at its position. top_left puts its top-left corner there, top the middle of its top edge, center its middle, bottom_right its bottom-right corner."),
         (_, "align") => p(&["left", "center", "right"], None, "How the text lines up."),
         // ---- lights ----
         (Light3D, "type") => p(&["directional", "point", "spot"], None, "directional: sunlight from one direction everywhere; point: a bulb shining all ways; spot: a cone (a flashlight)."),

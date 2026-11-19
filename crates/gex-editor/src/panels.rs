@@ -583,7 +583,8 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
     if kind == ObjectKind::Animator && ui.button("Edit clips in the Timeline").tip("Opens the Timeline for this Animator: clips that change properties over time.").clicked() {
         st.open_timeline = true;
     }
-    if kind != ObjectKind::Object && kind != ObjectKind::Animator {
+    // An instance is always placed by its own transform, whatever its blueprint's root is.
+    if (kind != ObjectKind::Object && kind != ObjectKind::Animator) || st.tree.objects[id].instance_of.is_some() {
         let h = egui::CollapsingHeader::new("Transform").default_open(true).show(ui, |ui| transform_ui(ui, st, id));
         crate::docs::mark(ui, h.header_response.rect.union(h.body_response.map_or(h.header_response.rect, |b| b.rect)), "ui:transform");
     }

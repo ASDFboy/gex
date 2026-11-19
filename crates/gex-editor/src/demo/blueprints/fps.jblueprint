@@ -34,7 +34,7 @@
         children: [
           (name: "Head", kind: Some(Camera3D), transform: Some((position: (0.0, 0.7, 0.0))), props: {"fov": Num(80.0)}),
         ]),
-      (name: "Crosshair", kind: Some(Label), transform: Some((position: (0.0, -2.0, 0.0))),
+      (name: "Crosshair", kind: Some(Label), transform: Some((position: (640.0, 358.0, 0.0))),
         props: {"text": Text("+"), "size": Num(24.0), "anchor": Text("center"), "align": Text("center"), "width": Num(40.0)}),
       (name: "Help", kind: Some(Label), transform: Some((position: (20.0, 16.0, 0.0))),
         props: {"text": Text("WASD move - mouse look - Space jump - click: shove a crate - Esc: menu"), "size": Num(16.0)}),

@@ -56,10 +56,11 @@ from 0. Solid tiles collide with bodies; `solid_tiles` like `"0-3, 7"` limits wh
 
 ## UI
 
-UI objects are drawn on top of the game at fixed screen positions (they ignore cameras). Position
-is the top-left corner; `anchor` (`top_left`, `top`, `top_right`, `left`, `center`, `right`,
-`bottom_left`, `bottom`, `bottom_right`) pins it to a side of the screen so it stays put when the
-window changes size.
+UI objects are drawn on top of the game at fixed screen positions (they ignore cameras). `anchor`
+(`top_left`, `top`, `top_right`, `left`, `center`, `right`, `bottom_left`, `bottom`,
+`bottom_right`) is the object's origin: which point of it sits at its position. With `top_left`
+the position is its top-left corner; with `center` it's its middle, so a 200-wide panel at
+x 640 spans 540 to 740.
 
 | Kind | What it is | Main properties | Events |
 |---|---|---|---|
