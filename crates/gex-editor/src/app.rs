@@ -951,18 +951,25 @@ pub struct PlayerApp {
     /// The window settings last asked of the OS (None until the first frame).
     applied: Option<gex_core::settings::Display>,
     applied_title: Option<String>,
+    /// Full screen as the window last reported it.
+    last_real_full: Option<bool>,
+    /// The player switched full screen: hold it until the game's frames agree...
+    pending_full: Option<bool>,
+    /// ...and tell the game in the next frame's input.
+    report_full: Option<bool>,
 }
 
 impl PlayerApp {
     pub fn new(project: Project) -> Result<PlayerApp, String> {
         gex_script::commands::register();
+        gex_script::world::STANDALONE.store(true, std::sync::atomic::Ordering::Relaxed);
         let text = project.read_text(&project.config.main_blueprint)?;
         let tree = gex_core::blueprint::load(&text, &|p: &str| project.read_text(p)).map_err(|e| e.0)?;
         let vfs = gex_assets::Vfs::new(&project.dir, &project.config);
         let mut list = gex_core::render::extract(&tree);
         list.graphics = project.config.graphics.clone();
         list.display = project.config.display.clone();
-        Ok(PlayerApp { handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied: None, applied_title: None })
+        Ok(PlayerApp { handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied: None, applied_title: None, last_real_full: None, pending_full: None, report_full: None })
     }
 }
 
@@ -971,35 +978,65 @@ impl PlayerApp {
     /// whenever the game changes them.
     fn apply_display(&mut self, ctx: &egui::Context) {
         use egui::ViewportCommand as V;
+        // Frames the game made before it heard about the player's own switch still have the old
+        // value: keep the player's choice until the game's frames agree.
+        if let Some(v) = self.pending_full {
+            if self.list.display.fullscreen == v {
+                self.pending_full = None;
+            } else {
+                self.list.display.fullscreen = v;
+            }
+        }
         let d = self.list.display.clone();
         let old = self.applied.clone();
         if old.as_ref() == Some(&d) {
             return;
         }
         let first = old.is_none();
-        let was_full = old.as_ref().map(|o| o.fullscreen);
-        if first || was_full != Some(d.fullscreen) {
+        if first || old.as_ref().is_some_and(|o| o.fullscreen != d.fullscreen) {
             ctx.send_viewport_cmd(V::Fullscreen(d.fullscreen));
         }
         if first || old.as_ref().is_some_and(|o| o.resizable != d.resizable) {
             ctx.send_viewport_cmd(V::Resizable(d.resizable));
         }
-        // The window's size (when not full screen): the resolution times window_scale in
-        // real pixels, kept inside the screen.
         let resized = old.as_ref().is_some_and(|o| o.width != d.width || o.height != d.height || o.window_scale != d.window_scale || (o.fullscreen && !d.fullscreen));
         if !d.fullscreen && (first || resized) {
-            let ppp = ctx.pixels_per_point();
-            let mut size = egui::vec2(d.width as f32, d.height as f32) * d.window_scale / ppp;
-            if let Some(m) = ctx.input(|i| i.viewport().monitor_size) {
-                let k = (m.x * 0.92 / size.x).min(m.y * 0.88 / size.y).min(1.0);
-                size *= k;
-                ctx.send_viewport_cmd(V::InnerSize(size));
-                ctx.send_viewport_cmd(V::OuterPosition(((m - size) / 2.0).to_pos2().max(egui::Pos2::ZERO)));
-            } else {
-                ctx.send_viewport_cmd(V::InnerSize(size));
-            }
+            window_size(ctx, &d);
         }
         self.applied = Some(d);
+    }
+
+    /// The player switched full screen (F11, Alt+Enter, or the OS did): `send` asks the
+    /// window for it; either way the game is told.
+    fn player_fullscreen(&mut self, ctx: &egui::Context, v: bool, send: bool) {
+        if send {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(v));
+        }
+        if !v {
+            window_size(ctx, &self.list.display);
+        }
+        if let Some(a) = &mut self.applied {
+            a.fullscreen = v;
+        }
+        self.list.display.fullscreen = v;
+        self.pending_full = Some(v);
+        self.report_full = Some(v);
+    }
+}
+
+/// Sizes the game's window (not full screen): the resolution times window_scale in real
+/// pixels, kept inside the screen and centred on it.
+fn window_size(ctx: &egui::Context, d: &gex_core::settings::Display) {
+    use egui::ViewportCommand as V;
+    let ppp = ctx.pixels_per_point();
+    let mut size = egui::vec2(d.width as f32, d.height as f32) * d.window_scale / ppp;
+    match ctx.input(|i| i.viewport().monitor_size) {
+        Some(m) => {
+            size *= (m.x * 0.92 / size.x).min(m.y * 0.88 / size.y).min(1.0);
+            ctx.send_viewport_cmd(V::InnerSize(size));
+            ctx.send_viewport_cmd(V::OuterPosition(((m - size) / 2.0).to_pos2().max(egui::Pos2::ZERO)));
+        }
+        None => ctx.send_viewport_cmd(V::InnerSize(size)),
     }
 }
 
@@ -1052,10 +1089,17 @@ impl eframe::App for PlayerApp {
         self.mouse_delta[0] += d[0];
         self.mouse_delta[1] += d[1];
         // Display settings from the game (SET_DISPLAY, FULLSCREEN) and WINDOW_TITLE; Alt+Enter or F11 toggles full screen too.
+        let real = ctx.input(|i| i.viewport().fullscreen);
         if ctx.input(|i| (i.modifiers.alt && i.key_pressed(egui::Key::Enter)) || i.key_pressed(egui::Key::F11)) {
-            let now = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!now));
+            let now = real.unwrap_or(self.list.display.fullscreen);
+            self.player_fullscreen(&ctx, !now, true);
+        } else if let (Some(r), Some(last)) = (real, self.last_real_full) {
+            // Switched some other way (by the OS): the game should know too.
+            if r != last && self.pending_full.is_none() && self.applied.as_ref().is_some_and(|a| a.fullscreen != r) {
+                self.player_fullscreen(&ctx, r, false);
+            }
         }
+        self.last_real_full = real;
         self.apply_display(&ctx);
         if self.list.window_title.is_some() && self.list.window_title != self.applied_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.list.window_title.clone().unwrap()));
@@ -1093,6 +1137,7 @@ impl eframe::App for PlayerApp {
                     mouse_delta: std::mem::take(&mut self.mouse_delta),
                     axes,
                     ui: std::mem::take(&mut self.ui_events),
+                    fullscreen: self.report_full.take(),
                 });
                 self.last = now;
             }
@@ -1157,7 +1202,12 @@ fn settings_rows(ui: &mut egui::Ui, fields: &[gex_core::settings::FieldInfo], ge
                         }
                         (Variant::Num(n), "whole") => {
                             let mut k = *n as i64;
-                            let r = ui.add(egui::Slider::new(&mut k, f.min as i64..=f.max as i64));
+                            // Wide ranges (resolution, shadow map size) are typed or dragged, not slid.
+                            let r = if f.max - f.min > 2000.0 {
+                                ui.add(egui::DragValue::new(&mut k).range(f.min as i64..=f.max as i64).speed(1.0))
+                            } else {
+                                ui.add(egui::Slider::new(&mut k, f.min as i64..=f.max as i64))
+                            };
                             *n = k as f64;
                             r.changed()
                         }

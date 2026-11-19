@@ -1243,6 +1243,7 @@ DEF on_create() {
     SET_ACTION("old", NULL)
     self.keys = ACTION("jump")[2]
     self.fire = ACTION().fire[1]
+    SAVE_DISPLAY()
 }
 DEF on_step(dt) {
     IF KEY_DOWN("jump") { self.jumped = TRUE }
@@ -1252,8 +1253,14 @@ DEF on_step(dt) {
     let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
     g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
     g.frame(1.0 / 60.0, ["w".to_string()].into_iter().collect(), [0.0; 2], HashSet::new());
-    let errs: Vec<_> = g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect();
+    let logs = g.take_logs();
+    let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.clone()).collect();
     assert!(errs.is_empty(), "{:#?}", errs);
+    assert!(logs.iter().any(|l| l.text.contains("only kept by the built game")), "SAVE_DISPLAY does nothing in the editor");
+    // The player switching full screen (F11) reaches the game.
+    g.step(crate::FrameInput { dt: 1.0 / 60.0, fullscreen: Some(false), ..Default::default() });
+    assert!(!g.render_list().display.fullscreen);
+    g.step(crate::FrameInput { dt: 1.0 / 60.0, fullscreen: Some(true), ..Default::default() });
     let list = g.render_list();
     assert_eq!(list.display.size(), [320, 180]);
     assert_eq!(list.display.scale_mode, "pixel");

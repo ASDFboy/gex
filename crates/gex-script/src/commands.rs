@@ -873,6 +873,11 @@ impl Host for EngineHost {
             }
             "SAVE_DISPLAY" => {
                 let keep = a.first().is_none_or(|v| !matches!(v, Value::Bool(false) | Value::Null));
+                // Only a built game keeps them: in the editor, Project settings stay in charge.
+                if !crate::world::STANDALONE.load(std::sync::atomic::Ordering::Relaxed) {
+                    st.log(crate::LogKind::Info, "SAVE_DISPLAY: display settings are only kept by the built game (Build or an export), not when playing in the editor");
+                    return Ok(Value::Null);
+                }
                 let c = &st.project.config;
                 crate::extras::save_display(&c.name, keep.then_some(&c.display)).or_else(err)?;
                 Ok(Value::Null)

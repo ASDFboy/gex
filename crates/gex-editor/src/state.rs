@@ -1543,6 +1543,7 @@ impl EditorState {
                 mouse_delta: std::mem::take(&mut p.mouse_delta),
                 axes: p.axes.clone(),
                 ui: std::mem::take(&mut p.ui_events),
+                fullscreen: None,
             });
         }
     }

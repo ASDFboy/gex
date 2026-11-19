@@ -303,7 +303,7 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
      "A display setting's current value; DISPLAY() with no input gives a table of all of them.",
      "res = DISPLAY(\"width\") + \"x\" + DISPLAY(\"height\")"),
     ("SAVE_DISPLAY", "Settings",
-     "Keeps the current display settings on this computer, so the exported game starts with them next time instead of the project's: the Apply button of an options menu. SAVE_DISPLAY(FALSE) forgets them and the project's settings are used again. (Playing in the editor always uses the project's settings.)",
+     "Keeps the current display settings on this computer, so the exported game starts with them next time instead of the project's: the Apply button of an options menu. SAVE_DISPLAY(FALSE) forgets them and the project's settings are used again. (Only the built game keeps them: while playing in the editor, SAVE_DISPLAY does nothing and Project settings stay in charge.)",
      "DEF on_pressed_apply() {\n\tSET_DISPLAY(\"fullscreen\", GLOBAL.want_full)\n\tSET_DISPLAY(\"vsync\", GLOBAL.want_vsync)\n\tSAVE_DISPLAY()\n}"),
     ("SET_ACTION", "Settings",
      "Gives an input action (Project settings → Input) new keys while the game runs, for key rebinding: SET_ACTION(action, keys). keys is a list ([\"space\", \"w\"]) or a text (\"space, w\"); none removes the action. KEY_DOWN(\"jump\") and on_press_jump() use the new keys at once. It lasts until the game stops (keep choices with SAVE and set them again at the start).",

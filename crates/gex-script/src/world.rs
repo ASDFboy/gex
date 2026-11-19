@@ -85,7 +85,12 @@ pub struct FrameInput {
     /// Gamepad sticks and triggers: "left_x", "left_y", "right_x", "right_y", "lt", "rt".
     pub axes: HashMap<String, f32>,
     pub ui: Vec<UiEvent>,
+    /// The player switched full screen itself (F11, Alt+Enter): the window's new state.
+    pub fullscreen: Option<bool>,
 }
+
+/// True in a built or exported game (`gex --play`), false when playing in the editor.
+pub static STANDALONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
 pub enum UiEvent {
@@ -902,6 +907,9 @@ impl Game {
             let mut st = self.st.borrow_mut();
             moved = st.input.mouse != input.mouse;
             st.input.next_frame(input.keys, input.mouse, input.buttons);
+            if let Some(f) = input.fullscreen {
+                st.project.config.display.fullscreen = f;
+            }
             st.axes = input.axes;
             st.wheel = input.wheel;
             st.mouse_delta = input.mouse_delta;
