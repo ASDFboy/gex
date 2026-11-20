@@ -206,6 +206,7 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
     });
     let bps: Vec<usize> = st.breakpoints.get(res).map(|b| b.iter().copied().collect()).unwrap_or_default();
     let conditional: Vec<usize> = st.bp_conditions.keys().filter(|(r, _)| r == res).map(|(_, l)| *l).collect();
+    let mut collab = st.collab.as_mut();
     let Some(s) = st.scripts.get_mut(res) else {
         ui.label("This script isn't open.");
         return;
@@ -509,6 +510,15 @@ pub fn script_ui(ui: &mut egui::Ui, st: &mut EditorState, res: &str) {
             if let Some(r) = out.cursor_range {
                 let p = out.galley.pos_from_cursor(r.primary);
                 cursor_rect = Some(p.translate(out.galley_pos.to_vec2()));
+            }
+            // Working together: the others' text cursors here, and this one for them.
+            if let Some(c) = collab.as_deref_mut() {
+                if let (true, Some(r)) = (out.response.has_focus(), out.cursor_range) {
+                    c.local.script = res.to_string();
+                    c.local.caret = Some(r.primary.index.0 as u32);
+                    c.caret_frame = c.frame;
+                }
+                crate::collab::carets(ui, Some(&*c), res, &s.text, &out.galley, out.galley_pos);
             }
             // Ctrl+click: go to a function's definition.
             if out.response.clicked() && ui.input(|i| i.modifiers.command) {

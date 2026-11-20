@@ -17,6 +17,7 @@ pub const GROUPS: &[(&str, &str)] = &[
     ("Saving and remembering", "Keeping values between blueprints, and on disk between runs."),
     ("Settings", "Changing project display, graphics, physics and input settings while the game runs."),
     ("Maps", "Half-Life 2 maps (.bsp) shown by a Mesh3D: their entities and doors."),
+    ("Multiplayer", "Hosting and joining games over the network, shared objects, and events between players' games."),
 ];
 
 /// (name, group, how to use it, example).
@@ -320,6 +321,68 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
     ("USE_DOOR", "Maps",
      "Opens (TRUE) or closes (FALSE) one of a map's doors; with no second input it toggles. A map's doors are in the group map_doors.",
      "FOR d IN OBJECTS(\"map_doors\") {\n\tIF DISTANCE(NULL, d) < 2 { USE_DOOR(d) }\n}"),
+    // ---------------------------------------------------------------- multiplayer
+    ("HOST_GAME", "Multiplayer",
+     "Starts a multiplayer game on this computer that others can join with JOIN_GAME: HOST_GAME() uses port 7777, HOST_GAME(port) another.\n\n\
+      You're player 1 straight away. Each player who joins runs on_player_joined(id) in your game. Players on the same network join with your MY_ADDRESS(); players over the internet need the port forwarded on your router (or a VPN like ZeroTier or Tailscale, which are free).\n\n\
+      To try it alone: Build the game, start the built game and press Play in the editor, and join \"localhost\" from one of them.",
+     "DEF on_pressed_host() {\n\tHOST_GAME()\n\tPRINT(\"hosting at \" + MY_ADDRESS())\n\tNET_SPAWN(\"res://player.jblueprint\", 100, 300)\n}"),
+    ("JOIN_GAME", "Multiplayer",
+     "Joins a game someone is hosting: JOIN_GAME(\"192.168.1.20\") (port 7777), JOIN_GAME(\"192.168.1.20\", 8000) or JOIN_GAME(\"host.example.com:8000\"). JOIN_GAME() joins this computer (\"localhost\").\n\n\
+      It takes a moment: on_connected(id) runs once you're in (id is your player number), or on_join_failed(reason) if it didn't work. The host's shared objects appear in your game when you're in. Both games must be the same project.",
+     "DEF on_pressed_join() {\n\tJOIN_GAME(address_box_text)\n}\nDEF on_connected(id) {\n\tNET_SPAWN(\"res://player.jblueprint\", 100 * id, 300)\n}\nDEF on_join_failed(reason) {\n\tPRINT(\"couldn't join: \" + reason)\n}"),
+    ("LEAVE_GAME", "Multiplayer",
+     "Leaves the multiplayer game: other players' objects disappear from yours, and yours from theirs. When the host leaves, the game ends for everyone (they get on_disconnected).",
+     "DEF on_pressed_quit_to_menu() {\n\tLEAVE_GAME()\n\tCHANGE_BLUEPRINT(\"res://blueprints/menu.jblueprint\")\n}"),
+    ("ONLINE", "Multiplayer",
+     "TRUE while you're hosting or in someone's game (not while still joining).",
+     "IF ONLINE() {\n\tPRINT(LEN(PLAYERS()) + \" players\")\n}"),
+    ("IS_HOST", "Multiplayer",
+     "TRUE in the host's game. Decisions only one game should make (spawning enemies, the score, who won) usually belong to the host.",
+     "DEF on_timer_spawn_enemy() {\n\tIF IS_HOST() {\n\t\tNET_SPAWN(\"res://enemy.jblueprint\", RANDOM(0, 1280), 0)\n\t}\n}"),
+    ("MY_ID", "Multiplayer",
+     "Your player number: 1 for the host, then 2, 3... in the order players join. 0 when you're not online.",
+     "self.text = \"You are player \" + MY_ID()"),
+    ("PLAYERS", "Multiplayer",
+     "Every player's number in the game, yours included, as a table.",
+     "FOR p IN PLAYERS() {\n\tPRINT(\"player \" + p)\n}"),
+    ("NET_EMIT", "Multiplayer",
+     "Runs an event in every other player's game: NET_EMIT(\"exploded\", x, y) runs on_exploded(x, y) on every object that has it there (not in your own game; EMIT that too if you want it here).\n\n\
+      Inputs can be numbers, text, TRUE/FALSE, NULL or tables of those. Object ids differ between games, so send a shared object's NET_ID instead. In the event, SENDER() is who sent it.",
+     "DEF on_press_space() {\n\tNET_EMIT(\"chat\", \"hello!\")\n}\nDEF on_chat(text) {\n\tPRINT(\"player \" + SENDER() + \": \" + text)\n}"),
+    ("NET_SEND", "Multiplayer",
+     "Runs an event in one player's game: NET_SEND(player, \"event\", inputs...). The player is a number from PLAYERS(), SENDER() or on_player_joined(id).",
+     "DEF on_player_joined(id) {\n\tNET_SEND(id, \"welcome\", \"hi, player \" + id)\n}"),
+    ("SENDER", "Multiplayer",
+     "Inside an event another player's game sent (NET_EMIT / NET_SEND): that player's number. NULL in any other event.",
+     "DEF on_hit(damage) {\n\tPRINT(\"player \" + SENDER() + \" hit me for \" + damage)\n}"),
+    ("NET_SPAWN", "Multiplayer",
+     "SPAWN for everyone: NET_SPAWN(blueprint, x, y, z, parent) makes the instance in every player's game, and your game owns it: its position, rotation, size, visibility and properties (self.health, a sprite's flip, an animation...), and those of the objects inside it, are sent to the others 20 times a second when they change, and their copies glide there.\n\n\
+      Its scripts run in every game, so code that reads keys should first check IS_MINE(), or every player's copy would follow your keyboard. Other players' copies of a body follow yours instead of falling, and their cameras stay off.\n\n\
+      DESTROY on a shared object removes it for everyone. When a player leaves, the objects their game owned go too. Players who join later get every shared object that's still there.",
+     "DEF on_connected(id) {\n\tme = NET_SPAWN(\"res://player.jblueprint\", 200, 300)\n}\n\n>> in player.jlb:\nDEF on_physics(dt) {\n\tIF !IS_MINE() { RETURN }\n\tx += AXIS(\"left\", \"right\") * 200 * dt\n}"),
+    ("NET_SYNC", "Multiplayer",
+     "Shares an object that's placed in the blueprint (a door, a moving platform, the ball), so it's the same in every player's game: NET_SYNC() in its own on_create, or NET_SYNC(object). The host's game moves it until SET_OWNER hands it to someone else; in the other games it follows.\n\n\
+      Every game should NET_SYNC the same objects (the same script does that). Destroying it removes it for everyone.",
+     "DEF on_create() {\n\tNET_SYNC()\n}\nDEF on_physics(dt) {\n\tIF IS_MINE() {\n\t\tself.rotation += 45 * dt\n\t}\n}"),
+    ("OWNER", "Multiplayer",
+     "The number of the player whose game moves a shared object (an object inside one counts as part of it). Your own number for objects that aren't shared.",
+     "IF OWNER(\"Ball\") == SENDER() {\n\tPRINT(\"they have the ball\")\n}"),
+    ("IS_MINE", "Multiplayer",
+     "TRUE when your game is the one moving this object: a shared object you own (or an object inside one), or any object that isn't shared. FALSE on other players' copies. With no input, asks about this object. Always TRUE when not online, so the same scripts work in single player.",
+     "DEF on_step(dt) {\n\tIF IS_MINE() AND KEY_PRESSED(\"jump\") {\n\t\tIMPULSE(NULL, 0, -400)\n\t}\n}"),
+    ("SET_OWNER", "Multiplayer",
+     "Hands a shared object to another player's game, which moves it from then on (picking up the ball, getting into a car): SET_OWNER(object, player).",
+     "DEF on_collide_start(other) {\n\tIF IS_MINE(other) AND !IS_MINE() {\n\t\tSET_OWNER(NULL, MY_ID())\n\t}\n}"),
+    ("NET_ID", "Multiplayer",
+     "A shared object's name, the same in every player's game (object ids aren't): send it with NET_EMIT, and the other game finds the object with NET_OBJECT. NULL for objects that aren't shared.",
+     "NET_EMIT(\"shot\", NET_ID(target), 10)"),
+    ("NET_OBJECT", "Multiplayer",
+     "The object in this game for a NET_ID from another game, or NULL when it isn't here.",
+     "DEF on_shot(who, damage) {\n\tt = NET_OBJECT(who)\n\tIF t !== NULL AND IS_MINE(t) {\n\t\tSET(t, \"health\", GET(t, \"health\") - damage)\n\t}\n}"),
+    ("MY_ADDRESS", "Multiplayer",
+     "This computer's address on the local network, like \"192.168.1.20\": what friends on the same Wi-Fi type into JOIN_GAME. NULL if there's no network.",
+     "self.text = \"Hosting at \" + MY_ADDRESS()"),
 ];
 
 /// The basics every command relies on, shown first.
@@ -354,6 +417,9 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("on_pressed_<button name>()", "on every script: a Button with that name was clicked (Start Game -> on_pressed_start_game)"),
     ("on_text_changed(text) / on_text_submitted(text)", "on a TextInput's scripts: typed in / Enter pressed"),
     ("on_<event>(...)", "your own: SEND(object, \"<event>\", ...) or EMIT(\"<event>\", ...)"),
+    ("on_connected(id) / on_join_failed(reason)", "multiplayer: JOIN_GAME got you in (id is your player number) / couldn't"),
+    ("on_player_joined(id) / on_player_left(id)", "multiplayer: another player joined / left"),
+    ("on_disconnected(reason)", "multiplayer: the host left or the connection broke"),
     ("when_<name>() -> on_<name>()", "a condition: on_<name> runs once each time when_<name> turns TRUE"),
 ];
 

@@ -124,8 +124,8 @@ pub struct EditorState {
     /// Other open blueprints (the one being edited is in the fields above).
     pub docs: Vec<BlueprintDoc>,
     pub tool: Tool,
-    undo: Vec<BlueprintTree>,
-    redo: Vec<BlueprintTree>,
+    pub undo: Vec<BlueprintTree>,
+    pub redo: Vec<BlueprintTree>,
     last_change: Option<(String, Instant)>,
     pub logs: Vec<LogLine>,
     pub scripts: HashMap<String, Script>,
@@ -194,6 +194,8 @@ pub struct EditorState {
     pub open_sprite: bool,
     /// Something asked for the command line to open (":" in Vim normal mode).
     pub open_command: bool,
+    /// Working on the project together with others (File → Work together).
+    pub collab: Option<crate::collab::Session>,
 }
 
 impl EditorState {
@@ -256,6 +258,7 @@ impl EditorState {
             particle_clock: Instant::now(),
             vim_enabled: std::fs::read_to_string(config_dir().join("vim")).map(|s| s.trim() == "on").unwrap_or(false),
             open_command: false,
+            collab: None,
         };
         for w in st.vfs.warnings() {
             st.log(LogKind::Error, w);
@@ -1459,7 +1462,7 @@ impl EditorState {
         self.save_all();
         self.logs.retain(|l| l.kind == LogKind::Error && l.file.is_none());
         self.sync_breakpoints();
-        let handle = GameHandle::start_with(self.project.clone(), self.tree.clone(), self.game_breakpoints.clone());
+        let handle = GameHandle::start_with(self.project.clone(), self.tree.clone(), self.blueprint_res.as_deref().unwrap_or(""), self.game_breakpoints.clone());
         self.playing = Some(Playing {
             handle,
             list: gex_core::render::extract(&self.tree),

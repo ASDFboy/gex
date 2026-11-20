@@ -759,6 +759,16 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     if let Some(p) = &mut st.playing {
         p.ui_events.extend(events);
     }
+    // Working together: the others' mice and selections, and this mouse for them.
+    if st.collab.is_some() && !game_cam {
+        let hover = pointer.filter(|p| rect.contains(*p) && resp.hovered()).and_then(|pp| pointer_world(st, &cams, to_px(pp), 0.0));
+        let mode3 = st.mode_3d;
+        let to_screen = |w: Vec3| -> Option<Pos2> {
+            let s = if mode3 { cams.world_3d_to_screen(w)? } else { cams.world_2d_to_screen(w.truncate()) };
+            Some(rect.min + egui::vec2(s.x / ppp, s.y / ppp))
+        };
+        crate::collab::viewport(&ui.painter_at(rect), st, &to_screen, hover);
+    }
     if let Some((g, lit)) = gizmo_draw {
         g.paint(&ui.painter_at(rect), &cams, rect.min, ppp, lit);
     }

@@ -405,7 +405,7 @@ fn breakpoints_pause_and_scripts_reload() {
     let p = project("debug", &[("main.jblueprint", blueprint), ("s.jlb", "count = 0\nDEF on_step(dt) {\n    LOCAL x = 41\n    GLOBAL count += 1\n}\n")]);
     let text = p.read_text("res://main.jblueprint").unwrap();
     let tree = gex_core::blueprint::load(&text, &|q: &str| p.read_text(q)).unwrap();
-    let mut h = GameHandle::start(p.clone(), tree.clone());
+    let mut h = GameHandle::start(p.clone(), tree.clone(), "");
     let file = p.res_to_path("res://s.jlb").unwrap().canonicalize().unwrap();
     h.breakpoints.set(file.clone(), [3, 4].into());
     h.breakpoints.set_condition(file, 3, "count > 5");
@@ -573,7 +573,7 @@ fn blueprint_changes_keep_remembered_values_and_fade_in() {
     let p = project("remember", &[("a.jblueprint", a), ("b.jblueprint", b), ("a.jlb", sa), ("b.jlb", sb)]);
     let text = p.read_text("res://a.jblueprint").unwrap();
     let tree = gex_core::blueprint::load(&text, &|r: &str| p.read_text(r)).unwrap();
-    let mut h = crate::thread::GameHandle::start(p, tree);
+    let mut h = crate::thread::GameHandle::start(p, tree, "");
     let mut seen = String::new();
     let mut faded_in = false;
     for _ in 0..200 {
@@ -1272,4 +1272,73 @@ DEF on_step(dt) {
     assert_eq!(r.get("keys"), Some(&Variant::Text("w".into())));
     assert_eq!(r.get("fire"), Some(&Variant::Text("x".into())));
     assert_eq!(r.get("jumped"), Some(&Variant::Bool(true)), "the new key works at once");
+}
+
+/// Two games on this computer: one hosts, one joins; shared objects and events cross over.
+#[test]
+fn multiplayer_host_and_join() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let ball = r#"(name: "Ball", kind: Some(Sprite2D), scripts: ["res://ball.jlb"])"#;
+    let host_bp = format!(r#"(root: (name: "Root", kind: Some(Object2D), scripts: ["res://host.jlb"], children: [{}]))"#, ball);
+    let client_bp = format!(r#"(root: (name: "Root", kind: Some(Object2D), scripts: ["res://client.jlb"], children: [{}]))"#, ball);
+    let host = format!("DEF on_create() {{\n    HOST_GAME({})\n    NET_SPAWN(\"res://p.jblueprint\", 10, 20)\n}}\nDEF on_player_joined(id) {{\n    PRINT(\"joined \" + id)\n}}\nDEF on_player_left(id) {{\n    PRINT(\"left \" + id)\n}}\nDEF on_hello(t, tb) {{\n    PRINT(\"hello \" + t + \" \" + tb.a + \" from \" + SENDER())\n    NET_SEND(SENDER(), \"reply\", MY_ID())\n}}\n", port);
+    let client = format!("DEF on_create() {{\n    JOIN_GAME(\"localhost:{}\")\n}}\nDEF on_connected(id) {{\n    PRINT(\"connected \" + id + \" \" + LEN(PLAYERS()))\n    NET_SPAWN(\"res://p.jblueprint\", 50, 60)\n    NET_EMIT(\"hello\", \"hi\", [a: 1])\n}}\nDEF on_reply(n) {{\n    PRINT(\"reply \" + n + \" \" + IS_HOST())\n}}\n", port);
+    let p_script = "DEF on_step(dt) {\n    IF IS_MINE() {\n        x += 60 * dt\n        self.hp = MY_ID() * 10\n    }\n}\n";
+    let ball_script = "DEF on_create() {\n    NET_SYNC()\n}\nDEF on_step(dt) {\n    IF IS_MINE() { rotation += 90 * dt }\n}\n";
+    let files = [
+        ("host.jblueprint", host_bp.as_str()), ("client.jblueprint", client_bp.as_str()), ("host.jlb", host.as_str()), ("client.jlb", client.as_str()),
+        ("p.jblueprint", r#"(root: (name: "P", kind: Some(Sprite2D), scripts: ["res://p.jlb"], children: [(name: "Cam", kind: Some(Camera2D))]))"#),
+        ("p.jlb", p_script), ("ball.jlb", ball_script),
+    ];
+    let pr = project("net", &files);
+    let mut h = Game::from_blueprint(pr.clone(), "res://host.jblueprint", None).unwrap();
+    let mut c = Game::from_blueprint(pr, "res://client.jblueprint", None).unwrap();
+    // The same level as far as the network is concerned.
+    h.st.borrow_mut().blueprint = "res://main.jblueprint".into();
+    c.st.borrow_mut().blueprint = "res://main.jblueprint".into();
+    let mut hl = Vec::new();
+    let mut cl = Vec::new();
+    for _ in 0..240 {
+        h.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        c.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        hl.extend(h.take_logs());
+        cl.extend(c.take_logs());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let text = |l: &Vec<crate::LogLine>| l.iter().map(|l| l.text.clone()).collect::<Vec<_>>();
+    let (ht, ct) = (text(&hl), text(&cl));
+    assert!(!hl.iter().chain(&cl).any(|l| l.kind == LogKind::Error), "{:?} {:?}", ht, ct);
+    assert!(ht.contains(&"joined 2".to_string()), "{:?}", ht);
+    assert!(ht.contains(&"hello hi 1 from 2".to_string()), "{:?}", ht);
+    assert!(ct.contains(&"connected 2 2".to_string()), "{:?}", ct);
+    assert!(ct.contains(&"reply 1 FALSE".to_string()), "{:?}", ct);
+    let ps = |g: &Game| {
+        let t = g.tree();
+        let mut v: Vec<(f32, f64, bool)> = t.walk().into_iter().filter(|i| t.objects[*i].name.starts_with('P'))
+            .map(|i| { let cam = t.objects[i].children[0]; (t.objects[i].transform.position.y, t.objects[i].num("hp", 0.0), t.objects[cam].prop("current").is_none_or(|v| v.as_bool())) }).collect();
+        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        v
+    };
+    let (hp, cp) = (ps(&h), ps(&c));
+    assert_eq!(hp.len(), 2, "both players in the host's game: {:?}", hp);
+    assert_eq!(cp.len(), 2, "both players in the client's game: {:?}", cp);
+    // Host's own player (y 20, hp 10, its camera on); the client's copy of it has the host's hp, camera off.
+    assert_eq!((hp[0].1, hp[0].2), (10.0, true));
+    assert_eq!((cp[0].1, cp[0].2), (10.0, false));
+    assert_eq!((hp[1].1, hp[1].2), (20.0, false));
+    assert_eq!((cp[1].1, cp[1].2), (20.0, true));
+    let x_of = |g: &Game, y: f32| { let t = g.tree(); t.walk().into_iter().find(|i| t.objects[*i].name.starts_with('P') && t.objects[*i].transform.position.y == y).map(|i| t.objects[i].transform.position.x).unwrap() };
+    let (a, b) = (x_of(&h, 20.0), x_of(&c, 20.0));
+    assert!(a > 100.0 && (a - b).abs() < 15.0, "the client's copy follows the host's player: {} {}", a, b);
+    let rot = |g: &Game| { let t = g.tree(); let b = t.find_path(None, "Root/Ball").unwrap(); t.objects[b].transform.rotation.z };
+    assert!(rot(&h) > 200.0 && (rot(&h) - rot(&c)).abs() < 20.0, "the host moves the shared ball: {} {}", rot(&h), rot(&c));
+    // The client leaves: its player goes from the host's game.
+    drop(c);
+    for _ in 0..30 {
+        h.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+        hl.extend(h.take_logs());
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(text(&hl).contains(&"left 2".to_string()));
+    assert_eq!(ps(&h).len(), 1);
 }

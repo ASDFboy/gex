@@ -98,6 +98,24 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("SAVE_DISPLAY", "(keep)", "keeps the current display settings for the next time the game starts (an options menu's Apply); FALSE forgets them"),
     ("SET_ACTION", "(action, keys)", "gives an input action new keys (a list or a text like \"space, w\"), for key rebinding; no keys removes it"),
     ("ACTION", "(action)", "an input action's keys as a list; with no input, a table of every action"),
+    ("HOST_GAME", "(port)", "starts a multiplayer game other players can join (port 7777 if left out); you're player 1"),
+    ("JOIN_GAME", "(address, port)", "joins a multiplayer game someone hosts (\"192.168.1.20\", \"localhost\", \"host:port\"); then on_connected(id), or on_join_failed(reason)"),
+    ("LEAVE_GAME", "()", "leaves the multiplayer game, or stops hosting it"),
+    ("ONLINE", "()", "TRUE while hosting or in someone's game"),
+    ("IS_HOST", "()", "TRUE while hosting"),
+    ("MY_ID", "()", "your player number: 1 for the host, 2, 3... for players who join; 0 when not online"),
+    ("PLAYERS", "()", "every player's number (yours too), as a table"),
+    ("NET_EMIT", "(event, inputs...)", "runs on_<event>(inputs...) on every object in every other player's game"),
+    ("NET_SEND", "(player, event, inputs...)", "runs on_<event>(inputs...) on every object in one player's game"),
+    ("SENDER", "()", "in an event from another player's game: that player's number (NULL otherwise)"),
+    ("NET_SPAWN", "(blueprint, x, y, z, parent)", "SPAWN for everyone: the instance appears in every player's game and follows yours (position, rotation, size, visibility and properties); gives its id"),
+    ("NET_SYNC", "(object)", "shares an object placed in the blueprint so it's the same in every game; the host's game moves it until SET_OWNER"),
+    ("OWNER", "(object)", "the number of the player whose game moves a shared object"),
+    ("IS_MINE", "(object)", "TRUE when your game moves this object: one you shared, or any that isn't shared; FALSE for other players' copies"),
+    ("SET_OWNER", "(object, player)", "hands a shared object to another player's game, which moves it from then on"),
+    ("NET_ID", "(object)", "a shared object's name, the same in every game (ids aren't): send it, then NET_OBJECT it"),
+    ("NET_OBJECT", "(net_id)", "the object in this game for a NET_ID, or NULL"),
+    ("MY_ADDRESS", "()", "this computer's address on the local network (what friends on the same network type into JOIN_GAME)"),
 ];
 
 /// Names from before nodes were called objects and scenes blueprints: scripts using them
@@ -882,6 +900,110 @@ impl Host for EngineHost {
                 crate::extras::save_display(&c.name, keep.then_some(&c.display)).or_else(err)?;
                 Ok(Value::Null)
             }
+            "HOST_GAME" => {
+                let port = num_arg(&a, 0, crate::net::DEFAULT_PORT as f64);
+                if !(1.0..=65535.0).contains(&port) {
+                    return err("HOST_GAME's port is a number from 1 to 65535");
+                }
+                crate::net::host(st, port as u16).or_else(err)?;
+                Ok(Value::Null)
+            }
+            "JOIN_GAME" => {
+                let addr = match a.first() {
+                    None | Some(Value::Null) => "localhost".to_string(),
+                    _ => text_arg(name, &a, 0)?,
+                };
+                let (host, port) = crate::wire::split_address(&addr, num_arg(&a, 1, crate::net::DEFAULT_PORT as f64) as u16);
+                crate::net::join(st, &host, port).or_else(err)?;
+                Ok(Value::Null)
+            }
+            "LEAVE_GAME" => {
+                for id in crate::net::leave(st) {
+                    st.queue.push_back(Pending::Destroy(id));
+                }
+                Ok(Value::Null)
+            }
+            "ONLINE" => Ok(Value::Bool(st.net.as_ref().is_some_and(|n| !n.joining()))),
+            "IS_HOST" => Ok(Value::Bool(st.net.as_ref().is_some_and(|n| n.host))),
+            "MY_ID" => Ok(num(st.net.as_ref().map(|n| n.me).unwrap_or(0) as f64)),
+            "PLAYERS" => {
+                let mut p: Vec<u32> = st.net.as_ref().map(|n| n.players.clone()).unwrap_or_default();
+                p.sort();
+                Ok(list_table(p.into_iter().map(|i| num(i as f64)).collect()))
+            }
+            "SENDER" => Ok(st.net.as_ref().and_then(|n| n.sender).map(|i| num(i as f64)).unwrap_or(Value::Null)),
+            "NET_EMIT" => {
+                let ev = text_arg(name, &a, 0)?;
+                crate::net::send_event(st, None, &ev, &a[1..]).or_else(err)?;
+                Ok(Value::Null)
+            }
+            "NET_SEND" => {
+                let to = match a.first() {
+                    Some(v @ Value::Num(_)) => as_f64(v).unwrap_or(0.0) as u32,
+                    _ => return err("NET_SEND needs a player number first (from PLAYERS, SENDER or on_player_joined)"),
+                };
+                let ev = text_arg(name, &a, 1)?;
+                let me = st.net.as_ref().map(|n| n.me);
+                if me == Some(to) {
+                    st.queue.push_back(Pending::Event { target: None, handler: format!("on_{}", ev), args: a[2..].to_vec() });
+                } else {
+                    crate::net::send_event(st, Some(to), &ev, &a[2..]).or_else(err)?;
+                }
+                Ok(Value::Null)
+            }
+            "NET_SPAWN" => {
+                let res = text_arg(name, &a, 0)?;
+                let parent = match a.get(4) {
+                    None | Some(Value::Null) => st.tree.root,
+                    v => Some(target(st, v)?),
+                };
+                let project = st.project.clone();
+                let id = blueprint::instance(&mut st.tree, parent, &res, &|p: &str| project.read_text(p)).map_err(|e| jlb::value::fault(e.0))?;
+                let t = &mut st.tree.objects[id].transform;
+                t.position.x = num_arg(&a, 1, t.position.x as f64) as f32;
+                t.position.y = num_arg(&a, 2, t.position.y as f64) as f32;
+                t.position.z = num_arg(&a, 3, t.position.z as f64) as f32;
+                crate::net::spawned(st, id, &res);
+                st.queue.push_back(Pending::Created(id));
+                Ok(id_value(id))
+            }
+            "NET_SYNC" => {
+                let id = target(st, a.first())?;
+                crate::net::sync(st, id).or_else(err)?;
+                Ok(Value::Null)
+            }
+            "OWNER" => {
+                let id = target(st, a.first())?;
+                let me = st.net.as_ref().map(|n| n.me).unwrap_or(0);
+                Ok(num(crate::net::shared_root(st, id).and_then(|(_, net)| st.net.as_ref()?.owner_of(&net)).unwrap_or(me) as f64))
+            }
+            "IS_MINE" => {
+                let id = target(st, a.first())?;
+                let Some(n) = st.net.as_ref() else { return Ok(Value::Bool(true)) };
+                let owner = crate::net::shared_root(st, id).and_then(|(_, net)| n.owner_of(&net));
+                Ok(Value::Bool(owner.is_none_or(|o| o == n.me)))
+            }
+            "SET_OWNER" => {
+                let id = target(st, a.first())?;
+                let p = match a.get(1) {
+                    Some(v @ Value::Num(_)) => as_f64(v).unwrap_or(0.0) as u32,
+                    _ => return err("SET_OWNER needs a player number"),
+                };
+                if st.net.is_none() {
+                    return Ok(Value::Null);
+                }
+                crate::net::set_owner(st, id, p).or_else(err)?;
+                Ok(Value::Null)
+            }
+            "NET_ID" => {
+                let id = target(st, a.first())?;
+                Ok(crate::net::shared_root(st, id).filter(|(r, _)| *r == id).map(|(_, n)| Value::text(&n)).unwrap_or(Value::Null))
+            }
+            "NET_OBJECT" => {
+                let n = text_arg(name, &a, 0)?;
+                Ok(crate::net::net_object(st, &n).map(id_value).unwrap_or(Value::Null))
+            }
+            "MY_ADDRESS" => Ok(crate::wire::local_ip().map(|s| Value::text(&s)).unwrap_or(Value::Null)),
             "SET_ACTION" => {
                 let action = text_arg(name, &a, 0)?.trim().to_lowercase().replace(' ', "_");
                 let keys: Vec<String> = match a.get(1) {

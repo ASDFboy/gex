@@ -30,9 +30,13 @@ To export games for other systems, put their GEX players in a `players` folder n
 --release -p gex-editor` on, or for, that system and rename it). The Linux player is attached
 to each release as `gex-linux`.
 
-New releases are built by GitHub: push to the `release` branch (or run Actions → Release) and it
-builds Windows and Linux, runs the tests, and publishes `GEX.zip` and `gex-linux` under the version in
-`Cargo.toml`.
+GEX keeps itself up to date: when the editor starts it checks this repository's latest release,
+and if it's newer it downloads it in the background and offers a restart (turn it off under
+File → Project settings → General). It uses the system's `curl`, which Windows 10 and later have.
+
+New releases are built by GitHub: raise the version in `Cargo.toml` and push to `main` (or push the
+`release` branch, or run Actions → Release) and it builds Windows and Linux, runs the tests, and
+publishes `GEX.zip`, `gex-windows.exe` and `gex-linux` under that version.
 
 If the window stays blank or GEX closes straight away, the graphics driver may not like the
 default graphics API: set the `WGPU_BACKEND` environment variable to `vulkan`, `dx12` or `gl`
@@ -77,6 +81,13 @@ and start it again.
 - **Export:** File → Export game makes a folder with the game and a player that runs it, for
   Windows, Linux or macOS (an .app), named as you like and with your icon on the Windows
   program.
+- **Multiplayer games:** `HOST_GAME()` and `JOIN_GAME(address)` in scripts; shared objects
+  (`NET_SPAWN`, `NET_SYNC`) stay in step between players' games, and `NET_EMIT` runs events in
+  everyone's. See [Multiplayer](docs/SCRIPTING.md#multiplayer).
+- **Work together, live:** File → Work together shares the open project; others join with your
+  address and get a copy. Blueprints sync object by object, scripts letter by letter (two people
+  can type in one script), saved files sync, and everyone sees the others' tabs, mouse pointers,
+  selections and text cursors. See [docs/COLLABORATION.md](docs/COLLABORATION.md).
 - **Half-Life 2 assets**, read in place from your own Steam install (`hl2://`): VPK archives,
   VTF textures, VMT materials, models, maps and sounds. They are never copied into exports.
   See [docs/HL2.md](docs/HL2.md).
@@ -111,7 +122,7 @@ and start it again.
 3. Reference: [every object](docs/OBJECTS.md), [every script event and command](docs/SCRIPTING.md),
    [graphics and physics settings](docs/SETTINGS.md) (all changeable from scripts while playing),
    [the built-in placeholder art](docs/PLACEHOLDERS.md) (`gex://`: 700 shapes, patterns, icons
-   and more, ready to drag into a blueprint).
+   and more, ready to drag into a blueprint), [working on a project together](docs/COLLABORATION.md).
 
 ## Layout
 

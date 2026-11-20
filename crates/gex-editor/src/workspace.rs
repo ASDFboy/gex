@@ -279,6 +279,7 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
         let label = if r == COMMANDS_TAB { "Commands" } else { r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jblueprint") };
         let out = theme::tab(ui, label, i == l.active, true, r != COMMANDS_TAB && st.is_dirty(r));
         crate::docs::mark(ui, out.resp.rect, "ui:tabs");
+        crate::collab::tab_marks(ui, st, r, out.resp.rect);
         rects.push(out.resp.rect);
         if out.close || out.resp.middle_clicked() {
             close = Some(i);
@@ -552,6 +553,7 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
                             let dirty = st.scripts.get(res).is_some_and(|s| s.dirty());
                             let out = theme::tab(ui, short(res).trim_end_matches(".jlb"), *res == showing, true, dirty);
                             let out = crate::theme::TabOut { resp: out.resp.on_hover_text(res.trim_start_matches("res://")), close: out.close };
+                            crate::collab::tab_marks(ui, st, res, out.resp.rect);
                             rects.push(out.resp.rect);
                             if out.close || out.resp.middle_clicked() {
                                 close = Some(*i);

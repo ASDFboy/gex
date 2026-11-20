@@ -30,6 +30,12 @@ pub struct EditorApp {
     /// while there are more, the window shows the error icon.
     errors_seen: usize,
     error_icon: bool,
+    /// Checks for a newer GEX when the editor starts.
+    updater: crate::update::Updater,
+    /// File → Work together.
+    collab_panel: crate::collab::Panel,
+    /// Joining someone's project: its files are on their way.
+    joining: Option<crate::collab::Session>,
 }
 
 /// Hides the mouse and holds it in the window (or gives it back).
@@ -90,6 +96,9 @@ impl EditorApp {
             ws_saved_at: std::time::Instant::now(),
             errors_seen: 0,
             error_icon: false,
+            updater: crate::update::Updater::start(),
+            collab_panel: Default::default(),
+            joining: None,
         };
         if let Some(p) = project {
             app.open_project(&p);
@@ -132,6 +141,74 @@ impl EditorApp {
         if let Some(dir) = self.launcher.show(ui) {
             self.open_project(&dir);
         }
+        if std::mem::take(&mut self.launcher.join) {
+            self.collab_panel.open = true;
+        }
+    }
+
+    /// Working together: the window, joining, and the session itself.
+    fn collab(&mut self, ctx: &egui::Context) {
+        if let Some(j) = &mut self.joining {
+            crate::collab::tick_joining(ctx, j);
+            if let Some(why) = j.ended.take() {
+                self.collab_panel.message = format!("Couldn't join: {}", why);
+                self.collab_panel.open = true;
+                self.joining = None;
+            } else if j.ready {
+                let mut s = self.joining.take().unwrap();
+                let dir = s.dir.clone();
+                self.open_project(&dir);
+                match &mut self.st {
+                    Some(st) if st.project.dir == dir => {
+                        s.opened = true;
+                        st.collab = Some(s);
+                    }
+                    _ => self.collab_panel.message = "The project arrived but didn't open.".into(),
+                }
+            }
+        }
+        if let Some(st) = &mut self.st {
+            crate::collab::tick(ctx, st);
+            if let Some(why) = st.collab.as_mut().and_then(|s| s.ended.take()) {
+                st.collab = None;
+                st.log(gex_script::LogKind::Info, format!("Working together ended: {}. Your copy of the project stays here.", why));
+                self.collab_panel.message = format!("Working together ended: {}. Your copy of the project stays here.", why);
+                self.collab_panel.open = true;
+            }
+        }
+        if let Some(j) = crate::collab::window(ctx, &mut self.collab_panel, self.st.as_mut(), &self.joining) {
+            self.joining = Some(j);
+        }
+    }
+
+    /// A new GEX was downloaded: say so, with a restart button.
+    fn update_bar(&mut self, ui: &mut egui::Ui) {
+        use crate::update::State;
+        self.updater.poll();
+        if matches!(self.updater.state, State::Checking | State::Downloading(_)) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        let State::Ready(v) = self.updater.state.clone() else { return };
+        if self.updater.dismissed {
+            return;
+        }
+        egui::Panel::top("update bar").frame(egui::Frame::NONE.fill(theme::GRAY).inner_margin(egui::Margin::symmetric(8, 4))).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("GEX {} is installed (this is {}). Restart to use it.", v, crate::update::VERSION)).color(theme::TEXT));
+                let label = if self.st.is_some() { "Save all and restart" } else { "Restart" };
+                if ui.button(label).clicked() {
+                    let dir = self.st.as_mut().map(|st| {
+                        st.save_all();
+                        self.ws.save(&st.project.dir);
+                        st.project.dir.clone()
+                    });
+                    crate::update::restart(ui.ctx(), self.updater.exe(), dir.as_deref());
+                }
+                if ui.button("Later").tip("The new version starts next time you open GEX").clicked() {
+                    self.updater.dismissed = true;
+                }
+            });
+        });
     }
 
     fn menu(&mut self, ui: &mut egui::Ui) {
@@ -180,6 +257,10 @@ impl EditorApp {
                     ui.close();
                 }
                 ui.separator();
+                if ui.button(if st.collab.is_some() { "Working together…" } else { "Work together…" }).tip("Share this project so others can work on it with you, live, or join someone else's").clicked() {
+                    self.collab_panel.open = true;
+                    ui.close();
+                }
                 if ui.button("Export game…").tip("A folder with the game, ready to run or share").clicked() {
                     st.show_export = true;
                     ui.close();
@@ -269,6 +350,9 @@ impl EditorApp {
                 theme::window_buttons(ui);
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
+                if crate::collab::people_bar(ui, st) {
+                    self.collab_panel.open = true;
+                }
                 ui.add_space(8.0);
                 // The tabs take what's left between Play and the project's name.
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
@@ -572,6 +656,19 @@ impl EditorApp {
                 }
                 ui.end_row();
             });
+            ui.separator();
+            let mut auto = crate::update::enabled();
+            if ui.checkbox(&mut auto, "Update GEX by itself").tip("When GEX starts it checks GitHub for a newer version, downloads it and offers a restart. For every project on this computer.").changed() {
+                crate::update::set_enabled(auto);
+            }
+            ui.label(RichText::new(format!("GEX {} · {}", crate::update::VERSION, match &self.updater.state {
+                crate::update::State::Off => "not checked".to_string(),
+                crate::update::State::Checking => "checking for updates…".to_string(),
+                crate::update::State::Downloading(v) => format!("downloading {}…", v),
+                crate::update::State::Ready(v) => format!("{} is installed, restart to use it", v),
+                crate::update::State::UpToDate => "up to date".to_string(),
+                crate::update::State::Failed(e) => format!("couldn't update: {}", e),
+            })).small().color(theme::TEXT_DIM));
             }
             if f.tab == 4 {
             theme::title(ui, "Input actions");
@@ -886,6 +983,8 @@ impl eframe::App for EditorApp {
         let ctx = ui.ctx().clone();
         theme::backdrop(&ctx);
         theme::window_resize(&ctx);
+        self.update_bar(ui);
+        self.collab(&ctx);
         if self.st.is_none() {
             egui::Panel::top("launcher bar").frame(egui::Frame::NONE).show(ui, |ui| {
                 let top = ui.cursor().top();
@@ -1003,7 +1102,7 @@ impl PlayerApp {
         let mut list = gex_core::render::extract(&tree);
         list.graphics = project.config.graphics.clone();
         list.display = project.config.display.clone();
-        Ok(PlayerApp { handle: gex_script::thread::GameHandle::start(project, tree), vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied: None, applied_title: None, last_real_full: None, pending_full: None, report_full: None })
+        Ok(PlayerApp { handle: { let main = project.config.main_blueprint.clone(); gex_script::thread::GameHandle::start(project, tree, &main) }, vfs, list, renderer: None, tex: None, last: std::time::Instant::now(), ended: false, ui_events: Vec::new(), ui_images: HashMap::new(), pads: crate::gamepad::Pads::new(), taps: Default::default(), tap_buttons: Default::default(), mouse_delta: [0.0; 2], cursor_locked: false, applied: None, applied_title: None, last_real_full: None, pending_full: None, report_full: None })
     }
 }
 

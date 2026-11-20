@@ -770,6 +770,11 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("on_text_submitted(text)", "Enter was pressed in this TextInput"),
     ("on_animation_end(name)", "a non-looping animation on this object finished"),
     ("on_tween_end(property)", "a TWEEN of one of this object's properties finished"),
+    ("on_connected(id)", "multiplayer: you joined a game (id is your player number)"),
+    ("on_join_failed(reason)", "multiplayer: JOIN_GAME couldn't join"),
+    ("on_player_joined(id)", "multiplayer: another player joined"),
+    ("on_player_left(id)", "multiplayer: a player left (their shared objects go with them)"),
+    ("on_disconnected(reason)", "multiplayer: the host left, or the connection broke"),
     ("when_ready()", "a condition: return TRUE to run on_ready()"),
     ("on_ready()", "runs when when_ready() turns TRUE"),
 ];
@@ -796,6 +801,11 @@ fn event_label(h: &str) -> String {
         ("on_text_submitted", "Text submitted"),
         ("on_animation_end", "Animation end"),
         ("on_tween_end", "Tween end"),
+        ("on_connected", "Joined a game"),
+        ("on_join_failed", "Couldn't join"),
+        ("on_player_joined", "Player joined"),
+        ("on_player_left", "Player left"),
+        ("on_disconnected", "Disconnected"),
         ("on_ready", "When ready"),
         ("when_ready", "Ready condition"),
     ];
@@ -815,7 +825,7 @@ fn broadcast_names(st: &EditorState) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for f in list_files(st, "res://", "jlb") {
         let text = st.script_text(&f);
-        for call in ["EMIT(\"", "BROADCAST(\""] {
+        for call in ["EMIT(\"", "BROADCAST(\"", "NET_EMIT(\""] {
             for part in text.split(call).skip(1) {
                 if let Some(name) = part.split('"').next().filter(|n| jlb::value::is_ident(n)) {
                     if !out.iter().any(|o| o == name) {
@@ -877,6 +887,13 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
         item(ui, "Start", "on_collide_start(other)");
         item(ui, "While colliding", "on_collide(other)");
         item(ui, "End", "on_collide_end(other)");
+    });
+    crate::docs::menu(ui, "Multiplayer", |ui| { crate::theme::fade_in(ui);
+        item(ui, "Joined a game", "on_connected(id)");
+        item(ui, "Couldn't join", "on_join_failed(reason)");
+        item(ui, "Player joined", "on_player_joined(id)");
+        item(ui, "Player left", "on_player_left(id)");
+        item(ui, "Disconnected", "on_disconnected(reason)");
     });
     crate::docs::menu(ui, "Other", |ui| { crate::theme::fade_in(ui);
         item(ui, "Timer", "on_timer(name)");

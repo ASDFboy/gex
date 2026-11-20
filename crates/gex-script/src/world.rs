@@ -195,6 +195,10 @@ pub struct WorldState {
     /// Particles2D emitters and their live particles.
     pub(crate) particles: HashMap<ObjectId, crate::particles::Emitter>,
     pub(crate) particles_3d: HashMap<ObjectId, crate::particles::Emitter3>,
+    /// The blueprint file being played ("" when the tree didn't come from one).
+    pub blueprint: String,
+    /// A multiplayer game (HOST_GAME / JOIN_GAME).
+    pub net: Option<crate::net::Net>,
 }
 
 impl WorldState {
@@ -314,6 +318,8 @@ impl Game {
             cam2_center: None,
             shake: (0.0, 0.0),
             shake_seed: 12345,
+            blueprint: String::new(),
+            net: None,
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
@@ -328,7 +334,9 @@ impl Game {
         let text = project.read_text(blueprint_res)?;
         let p2 = project.clone();
         let tree = blueprint::load(&text, &|p: &str| p2.read_text(p)).map_err(|e| e.0)?;
-        Ok(Game::new(project, tree, cancel))
+        let g = Game::new(project, tree, cancel);
+        g.st.borrow_mut().blueprint = blueprint_res.to_string();
+        Ok(g)
     }
 
     pub fn tree(&self) -> std::cell::Ref<'_, BlueprintTree> {
@@ -924,6 +932,7 @@ impl Game {
             }
             st.draws.clear();
         }
+        self.net_poll(real_dt);
         // UI first: a click belongs to the frame it happened in.
         for ev in input.ui {
             self.ui_event(ev);
@@ -1069,6 +1078,30 @@ impl Game {
         }
         self.conditions();
         self.drain();
+        crate::net::send_states(&mut self.st.borrow_mut(), real_dt);
+    }
+
+    /// Multiplayer: what other players' games sent since the last frame.
+    fn net_poll(&mut self, dt: f64) {
+        if self.st.borrow().net.is_none() {
+            return;
+        }
+        let actions = crate::net::poll(&mut self.st.borrow_mut(), dt);
+        for a in actions {
+            match a {
+                crate::net::Action::Event { handler, args, from } => {
+                    if let Some(n) = self.st.borrow_mut().net.as_mut() {
+                        n.sender = (from > 0).then_some(from);
+                    }
+                    self.broadcast(&handler, args);
+                    if let Some(n) = self.st.borrow_mut().net.as_mut() {
+                        n.sender = None;
+                    }
+                }
+                crate::net::Action::Created(id) => self.st.borrow_mut().queue.push_back(Pending::Created(id)),
+                crate::net::Action::Destroy(id) => self.st.borrow_mut().queue.push_back(Pending::Destroy(id)),
+            }
+        }
     }
 
     /// A click or text change from the UI.
@@ -1600,13 +1633,20 @@ impl Game {
                     }
                 }
                 Pending::Destroy(id) => {
+                    if !self.st.borrow().tree.contains(id) {
+                        continue;
+                    }
                     let mut ids = Vec::new();
                     self.st.borrow().tree.walk_from(id, &mut ids);
                     for i in ids.iter().rev() {
                         self.run(*i, "on_destroy", vec![]);
                     }
                     let mut st = self.st.borrow_mut();
+                    if !st.tree.contains(id) {
+                        continue;
+                    }
                     let gone = st.tree.remove(id);
+                    crate::net::forget(&mut st, &gone);
                     for g in gone {
                         self.it.cancel_tagged(object_tag(g));
                         self.scripts.remove(&g);

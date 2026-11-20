@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "gex-assets"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dot_vox",
  "gex-core",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "gex-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "glam 0.33.12",
  "ron",
@@ -1629,7 +1629,7 @@ dependencies = [
 
 [[package]]
 name = "gex-editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "editpe",
  "eframe",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "gex-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "egui-wgpu",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "gex-script"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "gex-assets",
  "gex-core",
@@ -1672,6 +1672,7 @@ dependencies = [
  "rapier2d",
  "rapier3d",
  "rodio",
+ "serde",
  "serde_json",
  "slotmap",
  "symphonia 0.6.1",

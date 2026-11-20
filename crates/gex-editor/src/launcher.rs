@@ -29,10 +29,13 @@ pub struct Launcher {
     /// The folder new projects are made in (each in its own folder inside).
     location: String,
     demo: bool,
+    #[cfg_attr(windows, allow(dead_code))]
     open_path: String,
     dialog: Option<Dialog>,
     focus_name: bool,
     pub error: String,
+    /// "Join someone" was clicked.
+    pub join: bool,
 }
 
 impl Default for Launcher {
@@ -40,7 +43,7 @@ impl Default for Launcher {
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
         // Where the last project was made, or a "GEX Projects" folder.
         let location = std::fs::read_to_string(state::config_dir().join("projects_dir.txt")).ok().map(|s| s.trim().to_string()).filter(|s| Path::new(s).is_dir()).unwrap_or_else(|| home.join("GEX Projects").to_string_lossy().into_owned());
-        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, demo: false, open_path: String::new(), dialog: None, focus_name: true, error: String::new() }
+        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, demo: false, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false }
     }
 }
 
@@ -309,6 +312,12 @@ impl Launcher {
                         }
                     });
                     ui.label(RichText::new("Or drop a project folder on this window.").small().color(theme::TEXT_DIM));
+                    ui.add_space(18.0);
+                    theme::title(ui, "Work on someone's project");
+                    ui.add_space(6.0);
+                    if ui.button("Join someone…").tip("Someone shares their project (File → Work together); join it with their address to work on it together, live.").clicked() {
+                        self.join = true;
+                    }
                     if !self.error.is_empty() {
                         ui.add_space(10.0);
                         ui.label(RichText::new(&self.error).color(theme::BAD));

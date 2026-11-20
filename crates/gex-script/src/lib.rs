@@ -25,10 +25,12 @@ pub mod command_guide;
 pub mod commands;
 pub mod convert;
 pub mod extras;
+pub mod net;
 pub mod particles;
 pub mod tween;
 pub mod physics;
 pub mod thread;
+pub mod wire;
 pub mod world;
 
 pub use world::{FrameInput, Game, LogKind, LogLine, UiEvent};

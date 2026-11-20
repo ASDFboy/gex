@@ -111,7 +111,10 @@ scripts can read it with `GET(object, "speed")`.
 | `on_clip_end(clip)` | on an Animator's parent (and the Animator): its clip finished |
 | `on_tween_end(property)` | a `TWEEN` on this object finished |
 | `on_animation_end(name)` | a non-looping sprite or model animation finished |
-| `on_<event>(...)` | `SEND(object, "<event>", ...)` or `EMIT("<event>", ...)` |
+| `on_<event>(...)` | `SEND(object, "<event>", ...)` or `EMIT("<event>", ...)` (or `NET_EMIT` / `NET_SEND` from another player's game) |
+| `on_connected(id)` / `on_join_failed(reason)` | multiplayer: `JOIN_GAME` got you in, as player `id` / couldn't |
+| `on_player_joined(id)` / `on_player_left(id)` | multiplayer: another player joined / left |
+| `on_disconnected(reason)` | multiplayer: the host left, or the connection broke |
 | `when_<name>()` → `on_<name>()` | a condition: `on_<name>` runs once each time `when_<name>` turns TRUE |
 
 The Events panel lists these; click one to add it to a script.
@@ -280,6 +283,62 @@ mode, moon gravity.
 
 Each object's own look and physics properties change like any other: `self.opacity = 0.4`,
 `SET("Crate", "linear_damping", 3)`.
+
+## Multiplayer
+
+One player hosts and the others join; every game runs the same project. Everything goes
+through the host's game, which passes it on.
+
+| Command | What it does |
+|---|---|
+| `HOST_GAME(port)` | starts a game others can join (port 7777 when left out); you're player 1 |
+| `JOIN_GAME(address, port)` | joins one: `JOIN_GAME("192.168.1.20")`, `JOIN_GAME("localhost")`, `JOIN_GAME("example.com:8000")`; then `on_connected(id)` or `on_join_failed(reason)` |
+| `LEAVE_GAME()` | leaves (when the host leaves, the game ends for everyone) |
+| `ONLINE()`, `IS_HOST()`, `MY_ID()`, `PLAYERS()` | whether you're in a game, whether you host it, your player number (0 offline), every player's number |
+| `NET_EMIT(event, inputs...)` | runs `on_<event>(inputs...)` on every object in every *other* player's game |
+| `NET_SEND(player, event, inputs...)` | the same in one player's game |
+| `SENDER()` | in such an event: who sent it |
+| `NET_SPAWN(blueprint, x, y, z, parent)` | `SPAWN` for everyone; your game owns the instance |
+| `NET_SYNC(object)` | shares an object placed in the blueprint (the host owns it) |
+| `OWNER(object)`, `IS_MINE(object)`, `SET_OWNER(object, player)` | who moves a shared object; hand it to someone else |
+| `NET_ID(object)`, `NET_OBJECT(net_id)` | a shared object's name in every game, and back (object ids differ between games) |
+| `MY_ADDRESS()` | this computer's local network address, for friends to join |
+
+**Shared objects.** The owner's game sends a shared object's position, rotation, size,
+visibility and properties (`self.health`, a sprite's `flip_x`, ...), and those of the objects
+inside it, 20 times a second when they change; the other games glide their copies there.
+`DESTROY` removes it for everyone, and a player's objects go when they leave. Players who
+join later get every shared object still there; objects only appear for players in the same
+blueprint.
+
+**Scripts run in every game**, on every copy. Code that reads keys (or decides things only one
+game should) checks first: `IF !IS_MINE() { RETURN }`, `IF IS_HOST() { ... }`. Not online,
+`IS_MINE()` is always TRUE, so the same scripts work in single player. Other players' copies of
+a body follow instead of falling, and their cameras stay off.
+
+```
+>> main.jlb, on the menu:
+DEF on_pressed_host() {
+    HOST_GAME()
+    NET_SPAWN("res://player.jblueprint", 200, 300)
+}
+DEF on_pressed_join() {
+    JOIN_GAME("localhost")
+}
+DEF on_connected(id) {
+    NET_SPAWN("res://player.jblueprint", 200 + 80 * id, 300)
+}
+
+>> player.jlb:
+DEF on_physics(dt) {
+    IF !IS_MINE() { RETURN }
+    x += AXIS("left", "right") * 250 * dt
+}
+```
+
+To try it on one computer, Build the game, run it and host, then press Play in the editor and
+join `"localhost"`. Over the internet the host forwards the port (TCP 7777) on their router, or
+everyone joins a free virtual network such as ZeroTier or Tailscale and uses its addresses.
 
 ## Waiting: tasks
 

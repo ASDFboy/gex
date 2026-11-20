@@ -31,6 +31,8 @@ mod icons;
 mod viewport;
 mod workspace;
 mod sprites;
+mod update;
+mod collab;
 
 use std::path::PathBuf;
 
