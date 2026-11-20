@@ -89,7 +89,7 @@ pub fn file(name: &str) -> &'static str {
         "plugin"
     } else if ends(&[".jlb"]) {
         "script"
-    } else if ends(&[".wav", ".mp3", ".ogg", ".flac"]) {
+    } else if gex_assets::formats::is_audio(&n) {
         "music"
     } else if gex_assets::model::is_model(&n) {
         "package"

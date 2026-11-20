@@ -340,7 +340,7 @@ fn lookup(topic: &str) -> (String, &'static str, String) {
                 "A picture. Drag it into the 2D view to make a sprite, or onto a texture property."
             } else if gex_assets::model::is_model(&low) {
                 "A 3D model. Drag it into the 3D view to make a Mesh3D."
-            } else if [".wav", ".mp3", ".ogg", ".flac"].iter().any(|e| low.ends_with(e)) {
+            } else if gex_assets::formats::is_audio(&low) {
                 "A sound. Select it to hear it; use it on a Sound object or with PLAY_SOUND."
             } else {
                 "A file in the project."

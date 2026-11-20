@@ -185,7 +185,7 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
     // ---------------------------------------------------------------- sound
     ("PLAY_SOUND", "Sound",
      "Plays a sound file once and gives its id: PLAY_SOUND(file, volume, pitch, pan, echo).\n\n\
-      file is res://... (.wav, .ogg, .mp3, .flac) or hl2://.... volume 1 is normal; pitch 1 is normal (2 an octave up); pan -1 is left, 1 right; echo 0 to 1 adds an echo. Keep the id to stop it with STOP_SOUND.",
+      file is res://... (.wav, .ogg, .mp3, .flac, .opus, .m4a, .aiff, tracker music .mod/.xm/.s3m/.it and more) or hl2://.... volume 1 is normal; pitch 1 is normal (2 an octave up); pan -1 is left, 1 right; echo 0 to 1 adds an echo. Keep the id to stop it with STOP_SOUND.",
      "PLAY_SOUND(\"res://sounds/jump.wav\")\nPLAY_SOUND(\"res://sounds/hit.wav\", 0.6, RANDOM(0.9, 1.1))"),
     ("STOP_SOUND", "Sound",
      "Stops a sound PLAY_SOUND started, by its id. STOP_SOUND(NULL) stops every sound.",

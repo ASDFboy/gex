@@ -10,6 +10,12 @@ gex-core.workspace = true
 jlb.workspace = true
 gex-assets.workspace = true
 rodio.workspace = true
+# Tracker music (.mod, .xm, .s3m, .it).
+xmrs = "0.15"
+xmrsplayer = "0.15"
+# Opus (.opus): a pure-Rust decoder for Symphonia (the audio decoder rodio uses).
+symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
+symphonia-opus = "0.1"
 serde_json.workspace = true
 slotmap.workspace = true
 rapier2d = "0.36"

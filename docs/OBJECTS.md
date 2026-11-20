@@ -14,7 +14,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 |---|---|---|
 | `Object` | an empty object: a folder, or a holder for scripts (game managers) | |
 | `Animator` | plays clips made in the Timeline: property values (position, color, any number, text or switch) keyed over time, on its parent and the objects under it | `clips` (the .anim file the Timeline saves), `autoplay` (a clip to start with), `speed`. Scripts use `PLAY_CLIP`, `STOP_CLIP`, `CLIP_PLAYING` and get `on_clip_end(clip)`. Put it under the thing it animates. |
-| `Sound` | a sound you can start and stop | `stream` (a .wav/.ogg/.mp3/.flac file), `volume`, `pitch`, `loop`, `autoplay`; `spatial` makes it quieter the farther it is from the camera (silent at `range`: 0 = 25 m in 3D, 1000 px in 2D) and moves it left or right to where it is; `pan` (-1 left to 1 right) when not spatial; `echo` (0 to 1) and `echo_delay` (seconds) for caves and halls. Put it under the thing making the noise. |
+| `Sound` | a sound you can start and stop | `stream` (a sound file: see [File formats](#file-formats)), `volume`, `pitch`, `loop`, `autoplay`; `spatial` makes it quieter the farther it is from the camera (silent at `range`: 0 = 25 m in 3D, 1000 px in 2D) and moves it left or right to where it is; `pan` (-1 left to 1 right) when not spatial; `echo` (0 to 1) and `echo_delay` (seconds) for caves and halls. Put it under the thing making the noise. |
 
 ## 2D
 
@@ -87,7 +87,7 @@ one small frame image makes boxes of any size.
 | Kind | What it is | Main properties |
 |---|---|---|
 | `Object3D` | an empty 3D object to group others | |
-| `Mesh3D` | a shape or a model | `mesh` (`cube`, `sphere`, `plane`, `quad`, or a model file: .glb/.gltf, .obj, and from a Source game .mdl or a .bsp map), `color`, `texture`, `uv_scale_x/y`, `cast_shadows`, `collision`; material: `normal_map`, `specular` (0 matte to 1 glossy), `emissive` (glows; with bloom, it shines), `unlit`, `shader` (see [SHADERS.md](SHADERS.md)); models: `animation`, `anim_speed`, `anim_loop`, `anim_blend` (seconds to crossfade into a new animation) |
+| `Mesh3D` | a shape or a model | `mesh` (`cube`, `sphere`, `plane`, `quad`, or a model file: see [File formats](#file-formats)), `color`, `texture`, `uv_scale_x/y`, `cast_shadows`, `collision`; material: `normal_map`, `specular` (0 matte to 1 glossy), `emissive` (glows; with bloom, it shines), `unlit`, `shader` (see [SHADERS.md](SHADERS.md)); models: `animation`, `anim_speed`, `anim_loop`, `anim_blend` (seconds to crossfade into a new animation) |
 | `Sprite3D` | a picture in 3D: faces the camera (`billboard`) or stands like a sign | `texture`, `width`, `height`, `color`, `billboard`, `unlit` |
 | `Label3D` | text over a point in 3D (names over heads, signs) | `text`, `size` (screen pixels), `color`, `font` |
 | `Particles3D` | fire, smoke, sparks, dust in 3D (plays in the editor too) | like Particles2D, with `direction_x/y/z`, metres and metres per second, and `glow` |
@@ -162,3 +162,19 @@ or **Instance into blueprint** in its preview): every copy follows the original 
 copy show greyed in the Hierarchy; select one and change it in the Inspector to change that copy
 only (only the differences are saved). Right-click a copy → **Open its blueprint** to change them all,
 or **Make local** to cut it loose from the file. `SPAWN("res://blueprints/enemy.jblueprint", x, y)` adds one while the game runs.
+
+## File formats
+
+What GEX reads, by file ending. Drag any of them from Assets onto a property or into the view.
+
+| Kind | Formats |
+|---|---|
+| Pictures (sprites, textures, icons) | PNG, JPEG, GIF (first frame), BMP, TGA, WebP, TIFF, ICO, QOI, DDS, HDR, EXR, PBM/PGM/PPM/PAM, farbfeld, SVG (drawn at its own size), Photoshop .psd (the flattened picture), and from a Source game .vtf and .vmt |
+| 3D models (Mesh3D's `mesh`) | glTF (.glb, .gltf; with skeletons and animations), FBX (binary and text, 2011 or newer), COLLADA (.dae), Wavefront .obj, 3D Studio .3ds, STL, PLY, MagicaVoxel .vox (a voxel is 10 cm), and from a Source game .mdl models and .bsp maps |
+| Sounds and music | WAV, MP3, MP2, OGG Vorbis, Opus, FLAC, AIFF, CAF, M4A/MP4 (AAC, ALAC), Matroska/WebM audio, and tracker music: .mod, .xm, .s3m, .it |
+
+Only glTF models bring their animations; FBX and COLLADA models come in their rest pose. Models
+keep their materials' colours and textures (textures packed inside an FBX too). FBX and COLLADA
+files say their size and which way is up, and GEX uses that (metres, y up); STL, 3DS and VOX
+files are turned z-up to y-up and kept in the file's own units.
+

@@ -1071,8 +1071,7 @@ fn asset_context_menu(r: &egui::Response, st: &mut EditorState, e: &gex_assets::
 }
 
 fn is_sound(n: &str) -> bool {
-    let n = n.to_ascii_lowercase();
-    [".wav", ".mp3", ".ogg", ".flac"].iter().any(|e| n.ends_with(e))
+    gex_assets::formats::is_audio(n)
 }
 
 /// Everything in the project as (path, is a folder), without the project file and hidden

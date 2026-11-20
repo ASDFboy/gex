@@ -804,7 +804,7 @@ fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
         place(st, id);
         st.selected = Some(id);
         st.mode_3d = true;
-    } else if lower.ends_with(".wav") || lower.ends_with(".mp3") || lower.ends_with(".ogg") || lower.ends_with(".flac") {
+    } else if gex_assets::formats::is_audio(&lower) {
         st.will_change("drop");
         let mut n = Object::new("Sound", ObjectKind::Sound);
         n.props.insert("stream".into(), Variant::Res(path.to_string()));

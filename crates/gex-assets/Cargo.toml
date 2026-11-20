@@ -15,3 +15,8 @@ tobj.workspace = true
 vmdl.workspace = true
 vbsp.workspace = true
 lzma-rs = "0.3"
+# More picture and model formats.
+resvg = { version = "0.45", default-features = false }
+roxmltree = "0.20"
+dot_vox = "5"
+miniz_oxide = "0.8"

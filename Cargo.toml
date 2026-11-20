@@ -20,7 +20,7 @@ ron = "0.12"
 slotmap = { version = "1", features = ["serde"] }
 eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland", "accesskit"] }
 bytemuck = { version = "1", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "gif", "webp", "ico", "tiff", "pnm", "qoi", "dds", "hdr", "exr", "ff"] }
 rfd = "0.15"
 egui-wgpu = "0.36"
 steamlocate = "2"
@@ -30,7 +30,7 @@ gltf = "1"
 tobj = "4"
 vmdl = "0.2"
 vbsp = "0.9"
-rodio = { version = "0.23", default-features = false, features = ["playback", "wav", "mp3", "vorbis", "flac", "symphonia-wav", "symphonia-adpcm"] }
+rodio = { version = "0.23", default-features = false, features = ["playback", "wav", "mp3", "vorbis", "flac", "symphonia-all"] }
 
 [profile.dev]
 opt-level = 1

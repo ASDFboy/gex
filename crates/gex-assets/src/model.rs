@@ -1,4 +1,5 @@
-//! 3D models: glTF (.glb/.gltf, with skins and animations), OBJ, and from a Source game,
+//! 3D models: glTF (.glb/.gltf, with skins and animations), OBJ, the formats in
+//! formats.rs (FBX, COLLADA, 3DS, STL, PLY, MagicaVoxel), and from a Source game,
 //! models (.mdl + .vvd + .dx90.vtx) and maps (.bsp). Everything becomes `ModelData`, in
 //! metres with y up. Models are cached by path (they're shared by every thread).
 
@@ -279,8 +280,7 @@ pub fn map_base(path: &str) -> &str {
 }
 
 pub fn is_model(path: &str) -> bool {
-    let l = map_base(path).to_ascii_lowercase();
-    [".glb", ".gltf", ".obj", ".mdl", ".bsp"].iter().any(|e| l.ends_with(e))
+    crate::formats::is_model(path)
 }
 
 pub fn load(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
@@ -293,8 +293,10 @@ pub fn load(vfs: &Vfs, path: &str) -> Result<ModelData, String> {
         load_mdl(vfs, path, &mut |p| vfs.read(p))
     } else if l.ends_with(".bsp") {
         load_bsp(vfs, path)
+    } else if let Some(m) = crate::formats::load(vfs, path) {
+        m
     } else {
-        Err(format!("{} isn't a model format GEX reads (.glb, .gltf, .obj, .mdl, .bsp)", path))
+        Err(format!("{} isn't a model format GEX reads ({})", path, crate::formats::MODELS.iter().map(|e| format!(".{}", e)).collect::<Vec<_>>().join(", ")))
     }?;
     Ok(m.finish())
 }

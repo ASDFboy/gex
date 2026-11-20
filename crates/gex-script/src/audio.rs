@@ -55,6 +55,169 @@ impl<S: Source> Source for Panned<S> {
     }
 }
 
+/// Tracker music (.mod, .xm, .s3m, .it), played by the module player. It plays from the
+/// module it owns: the player borrows it, so the module is boxed (it never moves) and the
+/// player is dropped first (fields drop in order).
+struct Tracker {
+    player: xmrsplayer::prelude::XmrsPlayer<'static>,
+    _module: Box<xmrs::prelude::Module>,
+    rate: u32,
+}
+
+impl Tracker {
+    fn new(bytes: &[u8], looped: bool) -> Result<Tracker, String> {
+        let module = Box::new(xmrs::prelude::Module::load(bytes).map_err(|e| format!("{:?}", e))?);
+        let rate = 48_000;
+        // SAFETY: the module lives in its box for as long as the player (see above).
+        let m: &'static xmrs::prelude::Module = unsafe { &*(module.as_ref() as *const xmrs::prelude::Module) };
+        let mut player = xmrsplayer::prelude::XmrsPlayer::new(m, rate, 0);
+        // 0 loops forever; 1 plays the song once.
+        player.set_max_loop_count(if looped { 0 } else { 1 });
+        Ok(Tracker { player, _module: module, rate })
+    }
+}
+
+impl Iterator for Tracker {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        self.player.next().map(|s| s as f32 / 32768.0)
+    }
+}
+
+impl Source for Tracker {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        NonZero::new(2).unwrap()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        NonZero::new(self.rate).unwrap()
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+/// Opus (.opus, or Opus in .ogg/.webm/.mka when the usual decoder can't): decoded by the
+/// pure-Rust Opus decoder through Symphonia 0.6, a packet at a time.
+struct Opus {
+    bytes: std::sync::Arc<Vec<u8>>,
+    looped: bool,
+    format: Box<dyn symphonia::core::formats::FormatReader>,
+    decoder: Box<dyn symphonia::core::codecs::audio::AudioDecoder>,
+    track: u32,
+    buf: Vec<f32>,
+    at: usize,
+    rate: u32,
+    channels: u16,
+}
+
+impl Opus {
+    fn open(bytes: &std::sync::Arc<Vec<u8>>) -> Result<(Box<dyn symphonia::core::formats::FormatReader>, Box<dyn symphonia::core::codecs::audio::AudioDecoder>, u32, u32, u16), String> {
+        use symphonia::core::codecs::audio::AudioDecoderOptions;
+        use symphonia::core::codecs::registry::CodecRegistry;
+        use symphonia::core::common::Tier;
+        use symphonia::core::formats::probe::Hint;
+        use symphonia::core::formats::{FormatOptions, TrackType};
+        use symphonia::core::io::MediaSourceStream;
+        use symphonia::core::meta::MetadataOptions;
+        let mut codecs = CodecRegistry::new();
+        codecs.register_audio_decoder_at_tier::<symphonia_opus::OpusDecoder>(Tier::Fallback);
+        let mss = MediaSourceStream::new(Box::new(Cursor::new(Bytes(bytes.clone()))), Default::default());
+        let format = symphonia::default::get_probe().probe(&Hint::new(), mss, FormatOptions::default(), MetadataOptions::default()).map_err(|e| e.to_string())?;
+        let track = format.default_track(TrackType::Audio).ok_or("no sound in it")?;
+        let id = track.id;
+        let params = track.codec_params.as_ref().and_then(|p| p.audio()).ok_or("no sound in it")?.clone();
+        let decoder = codecs.make_audio_decoder(&params, &AudioDecoderOptions::default()).map_err(|e| e.to_string())?;
+        let rate = params.sample_rate.unwrap_or(48_000);
+        let channels = params.channels.as_ref().map(|c| c.count() as u16).unwrap_or(2).max(1);
+        Ok((format, decoder, id, rate, channels))
+    }
+
+    fn new(bytes: std::sync::Arc<Vec<u8>>, looped: bool) -> Result<Opus, String> {
+        let (format, decoder, track, rate, channels) = Opus::open(&bytes)?;
+        let mut o = Opus { bytes, looped, format, decoder, track, buf: Vec::new(), at: 0, rate, channels };
+        // The first packet tells the real rate and channels.
+        o.refill();
+        Ok(o)
+    }
+
+    /// Decodes the next packet into `buf`; false at the end.
+    fn refill(&mut self) -> bool {
+        for _ in 0..10_000 {
+            match self.format.next_packet() {
+                Ok(Some(p)) if p.track_id == self.track => {
+                    let Ok(d) = self.decoder.decode(&p) else { continue };
+                    self.rate = d.spec().rate();
+                    self.channels = (d.spec().channels().count() as u16).max(1);
+                    self.buf.clear();
+                    d.copy_to_vec_interleaved::<f32>(&mut self.buf);
+                    self.at = 0;
+                    if !self.buf.is_empty() {
+                        return true;
+                    }
+                }
+                Ok(Some(_)) => {}
+                _ => {
+                    if !self.looped {
+                        return false;
+                    }
+                    let Ok((f, d, t, _, _)) = Opus::open(&self.bytes) else { return false };
+                    (self.format, self.decoder, self.track) = (f, d, t);
+                }
+            }
+        }
+        false
+    }
+}
+
+impl Iterator for Opus {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if self.at >= self.buf.len() && !self.refill() {
+            return None;
+        }
+        self.at += 1;
+        Some(self.buf[self.at - 1])
+    }
+}
+
+impl Source for Opus {
+    fn current_span_len(&self) -> Option<usize> {
+        // The rate and channels hold for the rest of this packet.
+        Some(self.buf.len() - self.at.min(self.buf.len()))
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        NonZero::new(self.channels).unwrap()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        NonZero::new(self.rate.max(1)).unwrap()
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+/// Decodes a sound file (any format the audio decoders know, or tracker music).
+fn decode(bytes: std::sync::Arc<Vec<u8>>, path: &str, looped: bool) -> Result<Box<dyn Source + Send>, String> {
+    if gex_assets::formats::is_tracker(path) {
+        return Ok(Box::new(Tracker::new(&bytes, looped).map_err(|e| format!("{}: {}", path, e))?));
+    }
+    let len = bytes.len() as u64;
+    let bytes2 = bytes.clone();
+    let b = rodio::Decoder::builder().with_data(Cursor::new(Bytes(bytes))).with_byte_len(len).with_seekable(true);
+    let ext = gex_assets::formats::extension(path);
+    let b = if ext.is_empty() { b } else { b.with_hint(&ext) };
+    let err = |e: rodio::decoder::DecoderError| format!("{}: {}", path, e);
+    let decoded: Result<Box<dyn Source + Send>, String> = if looped { b.build_looped().map(|d| Box::new(d) as Box<dyn Source + Send>).map_err(err) } else { b.build().map(|d| Box::new(d) as Box<dyn Source + Send>).map_err(err) };
+    // Opus isn't one the usual decoder knows.
+    decoded.or_else(|e| match Opus::new(bytes2, looped) {
+        Ok(o) => Ok(Box::new(o) as Box<dyn Source + Send>),
+        Err(_) => Err(e),
+    })
+}
+
 /// Extras for a sound: balance (shared, so it can move) and an echo (delay seconds, loudness).
 #[derive(Default, Clone)]
 pub struct SoundFx {
@@ -124,16 +287,11 @@ impl Audio {
         let master = self.master;
         let Some(dev) = self.device() else {
             // No sound device: still check the file can be decoded, so problems show up.
-            rodio::Decoder::new(Cursor::new(Bytes(bytes))).map_err(|e| format!("{}: {}", path, e))?;
+            decode(bytes, path, false)?;
             return Ok(0);
         };
         let player = rodio::Player::connect_new(dev.mixer());
-        let cur = Cursor::new(Bytes(bytes));
-        let src: Box<dyn Source + Send> = if looped {
-            Box::new(rodio::Decoder::new_looped(cur).map_err(|e| format!("{}: {}", path, e))?)
-        } else {
-            Box::new(rodio::Decoder::new(cur).map_err(|e| format!("{}: {}", path, e))?)
-        };
+        let src = decode(bytes, path, looped)?;
         let src: Box<dyn Source + Send> = match fx.echo {
             Some((delay, amount)) if amount > 0.0 => Box::new(src.buffered().reverb(std::time::Duration::from_secs_f32(delay.clamp(0.01, 2.0)), amount.clamp(0.0, 0.95))),
             _ => src,
@@ -218,5 +376,34 @@ mod tests {
         pan.store(0.0f32.to_bits(), Ordering::Relaxed);
         let (l, r) = (p.next().unwrap(), p.next().unwrap());
         assert!((l - 0.5).abs() < 1e-3 && (r - 0.5).abs() < 1e-3, "middle: {} {}", l, r);
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    /// Decodes every sound file under $GEX_AUDIO (a second's worth each):
+    /// `GEX_AUDIO=dir cargo test --release -p gex-script audio_corpus -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn audio_corpus() {
+        let Ok(dir) = std::env::var("GEX_AUDIO") else { return };
+        let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
+        names.sort();
+        for p in names {
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            if !gex_assets::formats::is_audio(&name) {
+                println!("skip {} (not a sound GEX knows)", name);
+                continue;
+            }
+            let bytes = std::sync::Arc::new(std::fs::read(&p).unwrap());
+            match super::decode(bytes, &name, false) {
+                Ok(src) => {
+                    let (rate, ch) = (src.sample_rate().get(), src.channels().get());
+                    let n = src.take(48_000 * 2).filter(|s| s.abs() > 0.001).count();
+                    println!("ok   {}: {} Hz, {} ch, {} loud samples in the first second", name, rate, ch, n);
+                }
+                Err(e) => println!("FAIL {}: {}", name, e),
+            }
+        }
     }
 }

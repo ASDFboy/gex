@@ -47,11 +47,14 @@ and start it again.
 - **2D:** sprites with sprite-sheet animation, text, cameras, trigger areas, physics bodies
   (dynamic / kinematic / static, boxes, circles, capsules), tilemaps painted in the editor with
   automatic collision and A* pathfinding, and `DRAW_*` commands for quick shapes.
-- **3D:** cubes, spheres, planes and models (glTF/GLB with skeletal animation, OBJ, Source
-  `.mdl` and `.bsp`), directional / point / spot lights with shadows, sky, fog, physics bodies
+- **3D:** cubes, spheres, planes and models (glTF/GLB with skeletal animation, FBX, COLLADA,
+  OBJ, 3DS, STL, PLY, MagicaVoxel, Source `.mdl` and `.bsp`), directional / point / spot lights with shadows, sky, fog, physics bodies
   and mesh collision.
-- **UI:** panels, labels, buttons, text inputs, progress bars and images, anchored to the screen.
-- **Sound:** sound effects, music, Sound objects (wav, ogg, mp3, flac).
+- **UI:** panels, labels, buttons, text inputs, progress bars and images.
+- **Sound:** sound effects, music, Sound objects (WAV, MP3, OGG, Opus, FLAC, AIFF, M4A, WebM and
+  tracker music: MOD, XM, S3M, IT).
+- **Pictures:** PNG, JPEG, GIF, WebP, BMP, TGA, TIFF, SVG, Photoshop PSD, DDS, EXR, HDR and more
+  ([every format](docs/OBJECTS.md#file-formats)).
 - **Input:** keyboard, mouse and gamepads, with named input actions set in Project settings.
 - **Particles:** a Particles2D object for sparks, smoke and trails (previewed live in the editor).
 - **Scripting in .jlb.** Any number of scripts per object. A script's outside variables are that

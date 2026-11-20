@@ -101,3 +101,60 @@ fn builtin_pack_is_readable() {
         crate::load_image(&vfs, &format!("gex://{}", p)).unwrap_or_else(|e| panic!("{}: {}", p, e));
     }
 }
+
+/// Loads every model, picture and sound file under $GEX_CORPUS and prints what came out:
+/// `GEX_CORPUS=dir cargo test --release -p gex-assets corpus -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn corpus() {
+    let Ok(dir) = std::env::var("GEX_CORPUS") else { return };
+    let root = std::path::PathBuf::from(&dir);
+    let vfs = Vfs::new(&root, &ProjectConfig::default());
+    let mut stack = vec![root.clone()];
+    let (mut ok, mut bad) = (0, 0);
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries {
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let rel = format!("res://{}", p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"));
+            let r = if crate::formats::is_model(&rel) {
+                crate::model::load(&vfs, &rel).map(|m| {
+                    let verts: usize = m.parts.iter().map(|p| p.positions.len()).sum();
+                    let tex = m.parts.iter().filter(|p| p.texture.is_some()).count();
+                    let bad_normals = m.parts.iter().flat_map(|p| &p.normals).filter(|n| !n.is_finite()).count();
+                    format!("{} parts, {} verts, {} textured, size {:.2?}{}", m.parts.len(), verts, tex, m.max - m.min, if bad_normals > 0 { " BAD NORMALS" } else { "" })
+                })
+            } else if crate::formats::is_image(&rel) {
+                load_image(&vfs, &rel).map(|i| format!("{}x{}", i.width, i.height))
+            } else {
+                continue;
+            };
+            match r {
+                Ok(s) => {
+                    ok += 1;
+                    println!("ok   {}: {}", rel, s)
+                }
+                Err(e) => {
+                    bad += 1;
+                    println!("FAIL {}: {}", rel, e)
+                }
+            }
+        }
+    }
+    println!("{} loaded, {} failed", ok, bad);
+}
+
+#[test]
+#[ignore]
+fn one_model() {
+    let Ok(f) = std::env::var("GEX_MODEL") else { return };
+    let p = std::path::PathBuf::from(&f);
+    let vfs = Vfs::new(p.parent().unwrap(), &ProjectConfig::default());
+    let m = crate::model::load(&vfs, &format!("res://{}", p.file_name().unwrap().to_string_lossy())).unwrap();
+    println!("{} parts, min {:?} max {:?}", m.parts.len(), m.min, m.max);
+}

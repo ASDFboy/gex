@@ -35,7 +35,7 @@ Everything in a game is an object, and a blueprint is a tree of objects.
 1. **+ Object → Sprite2D**. It appears in the middle of the view. Rename it by typing `Player`
    in the name field at the top of Properties.
 2. Set `width` and `height` to 40 and `color` to something bright.
-3. Want a picture instead of a colored box? Drop a PNG on the editor window (it's copied into
+3. Want a picture instead of a colored box? Drop a picture (PNG, JPEG, WebP, SVG...) on the editor window (it's copied into
    the project), then drag it from Assets onto the `texture` field.
 
 The frame in the blueprint view is the game window. 2D positions are in pixels, with y going

@@ -297,7 +297,7 @@ IF s !== NULL { CHANGE_BLUEPRINT("res://blueprints/level" + s.level + ".jbluepri
    `spot` for a torch. Point and spot lights reach `range` metres.
 3. An **Environment** (optional): sky colors or a panorama picture, ambient light and fog.
 4. Things to look at: **Mesh3D** with `mesh` = `cube`, `sphere` or `plane`, or a model file.
-   Drag a `.glb`, `.gltf` or `.obj` from the Assets panel into the 3D view.
+   Drag a model (`.glb`, `.fbx`, `.obj`, `.dae` and [more](OBJECTS.md#file-formats)) from the Assets panel into the 3D view.
 
 In the 3D view, right-drag orbits, right-drag with WASD flies, middle-drag (or Shift+right-drag)
 pans, and the wheel zooms.

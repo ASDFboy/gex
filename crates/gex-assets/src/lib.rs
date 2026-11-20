@@ -6,6 +6,7 @@
 //! copies them, and `Vfs::redistributable` lets export tools leave them out.
 
 pub mod builtin;
+pub mod formats;
 pub mod image_load;
 pub mod model;
 pub mod source;
