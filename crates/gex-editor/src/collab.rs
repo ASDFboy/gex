@@ -958,6 +958,8 @@ pub struct Session {
     /// Uids to object ids in the blueprint open here, for drawing others' selections.
     ids: (String, HashMap<u64, ObjectId>),
     busy: bool,
+    /// Hosting: this computer's addresses, labelled by network (ZeroTier first).
+    pub addrs: Vec<(String, &'static str)>,
     pub chat: Vec<ChatLine>,
     pub unread: usize,
     /// Following someone: their blueprint, view and script.
@@ -1047,6 +1049,7 @@ impl Session {
             ended: None,
             ids: (String::new(), HashMap::new()),
             busy: false,
+            addrs: Vec::new(),
             chat: Vec::new(),
             unread: 0,
             following: None,
@@ -1071,6 +1074,7 @@ impl Session {
         s.token = random::<8>().iter().map(|b| format!("{:02x}", b)).collect();
         let _ = std::fs::create_dir_all(st.project.dir.join(".gex"));
         let _ = std::fs::write(st.project.dir.join(".gex").join("sharing"), &s.token);
+        s.addrs = gex_script::wire::addresses();
         s.scan(true);
         s.status = format!("Sharing {}", s.project);
         Ok(s)
@@ -1085,11 +1089,6 @@ impl Session {
         s.status = format!("Connecting to {}:{}…", h, p);
         s.address = (h, p);
         s
-    }
-
-    /// What others need to join: this computer's network address and the port.
-    pub fn address(&self) -> String {
-        format!("{}:{}", gex_script::wire::local_ip().unwrap_or_else(|| "this computer's address".into()), self.port)
     }
 
     pub fn reconnecting(&self) -> bool {
@@ -2475,11 +2474,14 @@ pub struct Panel {
     pub port: u16,
     pub message: String,
     pub say: String,
+    /// Windows Firewall: whether GEX's rule is there (checked once), and the rule being added.
+    firewall: Option<Option<bool>>,
+    firewall_job: Option<Receiver<Result<(), String>>>,
 }
 
 impl Default for Panel {
     fn default() -> Panel {
-        Panel { open: false, name: default_name(), address: String::new(), code: String::new(), folder: default_folder().to_string_lossy().into_owned(), port: DEFAULT_PORT, message: String::new(), say: String::new() }
+        Panel { open: false, name: default_name(), address: String::new(), code: String::new(), folder: default_folder().to_string_lossy().into_owned(), port: DEFAULT_PORT, message: String::new(), say: String::new(), firewall: None, firewall_job: None }
     }
 }
 
@@ -2541,6 +2543,7 @@ pub fn window(ctx: &egui::Context, panel: &mut Panel, mut st: Option<&mut Editor
                 ui.label(RichText::new("Open a project to share it.").small().color(theme::TEXT_DIM));
             }
         }
+        firewall_ui(ui, panel);
         ui.separator();
         theme::title(ui, "Join someone");
         egui::Grid::new("join").num_columns(2).show(ui, |ui| {
@@ -2578,25 +2581,74 @@ pub fn window(ctx: &egui::Context, panel: &mut Panel, mut st: Option<&mut Editor
     out
 }
 
+/// Windows: whether others can get in through the firewall, and a button to let them.
+fn firewall_ui(ui: &mut egui::Ui, panel: &mut Panel) {
+    if !cfg!(windows) {
+        return;
+    }
+    if let Some(rx) = &panel.firewall_job {
+        match rx.try_recv() {
+            Ok(Ok(())) => {
+                panel.firewall = Some(Some(true));
+                panel.firewall_job = None;
+            }
+            Ok(Err(e)) => {
+                panel.message = e;
+                panel.firewall_job = None;
+            }
+            Err(_) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Waiting for Windows' admin prompt…");
+                });
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+                return;
+            }
+        }
+    }
+    let state = *panel.firewall.get_or_insert_with(crate::firewall::allowed);
+    if state == Some(true) {
+        ui.label(RichText::new("Windows Firewall lets others in on every network (ZeroTier too).").small().color(theme::MK_GREEN));
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Windows Firewall may block friends on ZeroTier.").small().color(theme::WARN));
+        if ui.small_button("Allow GEX through the firewall").tip("Windows treats ZeroTier, Tailscale and Hamachi networks as Public and blocks GEX on them unless it's allowed there. This lets GEX in on every network type, after a Windows admin prompt (once per computer, and again if GEX moves).").clicked() {
+            panel.firewall_job = Some(crate::firewall::allow());
+        }
+    });
+}
+
 fn session_ui(ui: &mut egui::Ui, panel: &mut Panel, st: &mut EditorState) {
     let (mut stop, mut play) = (false, false);
     let s = st.collab.as_mut().unwrap();
     s.unread = 0;
     ui.label(RichText::new(&s.status).color(theme::TEXT));
     if s.host {
-        let a = s.address();
-        egui::Grid::new("invite").num_columns(2).show(ui, |ui| {
-            ui.label("Address");
-            ui.label(RichText::new(&a).color(theme::ACCENT).monospace());
-            ui.end_row();
+        ui.horizontal(|ui| {
             ui.label("Invite code");
             ui.label(RichText::new(&s.code).color(theme::ACCENT).monospace());
-            ui.end_row();
         });
-        if ui.button("Copy invite").tip("The address and code together: whoever joins pastes it into Address").clicked() {
-            ui.ctx().copy_text(format!("{}  {}", a, s.code));
+        // Every address, by network: friends on ZeroTier use the ZeroTier one, and so on.
+        egui::Grid::new("invite").num_columns(3).show(ui, |ui| {
+            for (ip, label) in &s.addrs {
+                ui.label(RichText::new(*label).color(if *label == "ZeroTier" { theme::MK_ORANGE } else { theme::TEXT_DIM }));
+                let a = format!("{}:{}", ip, s.port);
+                ui.label(RichText::new(&a).color(theme::ACCENT).monospace());
+                if ui.small_button("Copy invite").tip(format!("{} and the invite code together, for someone on your {} network: they paste it into Address", a, label)).clicked() {
+                    ui.ctx().copy_text(format!("{}  {}", a, s.code));
+                }
+                ui.end_row();
+            }
+        });
+        if s.addrs.is_empty() {
+            ui.label(RichText::new("This computer isn't on a network.").color(theme::WARN));
         }
-        ui.label(RichText::new("Give these only to people you trust. On the same network that's all; over the internet, forward this TCP port on your router, or all join a free virtual network (ZeroTier, Tailscale) and use its address.").small().color(theme::TEXT_DIM));
+        if ui.small_button("Look again").tip("Joined ZeroTier or another network just now? This finds its address").clicked() {
+            s.addrs = gex_script::wire::addresses();
+        }
+        ui.label(RichText::new("Give these only to people you trust. Friends on your ZeroTier (or Tailscale, Hamachi) network use that address; on the same Wi-Fi, the LAN one; otherwise forward this TCP port on your router.").small().color(theme::TEXT_DIM));
+        firewall_ui(ui, panel);
     } else if !s.editor {
         ui.label(RichText::new("View only: the host decides who can make changes.").color(theme::WARN));
     }

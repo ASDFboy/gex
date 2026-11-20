@@ -381,7 +381,8 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
      "The object in this game for a NET_ID from another game, or NULL when it isn't here.",
      "DEF on_shot(who, damage) {\n\tt = NET_OBJECT(who)\n\tIF t !== NULL AND IS_MINE(t) {\n\t\tSET(t, \"health\", GET(t, \"health\") - damage)\n\t}\n}"),
     ("MY_ADDRESS", "Multiplayer",
-     "This computer's address on the local network, like \"192.168.1.20\": what friends on the same Wi-Fi type into JOIN_GAME. NULL if there's no network.",
+     "This computer's address for friends to type into JOIN_GAME: its ZeroTier address when it's on a ZeroTier network (or Tailscale, Hamachi), otherwise its local network one, like \"192.168.1.20\". NULL if there's no network.\n\n\
+      On Windows, friends on ZeroTier can only get in once GEX is allowed through the firewall on every network type (File → Work together → Allow GEX through the firewall does it for the editor; a built game asks Windows itself: tick Public too).",
      "self.text = \"Hosting at \" + MY_ADDRESS()"),
 ];
 

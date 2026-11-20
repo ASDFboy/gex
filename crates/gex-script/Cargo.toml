@@ -18,6 +18,7 @@ symphonia = { version = "0.6", default-features = false, features = ["ogg"] }
 symphonia-opus = "0.1"
 serde_json.workspace = true
 serde.workspace = true
+if-addrs = "0.13"
 slotmap.workspace = true
 rapier2d = "0.36"
 rapier3d = "0.36"

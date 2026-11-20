@@ -302,7 +302,7 @@ through the host's game, which passes it on.
 | `NET_SYNC(object)` | shares an object placed in the blueprint (the host owns it) |
 | `OWNER(object)`, `IS_MINE(object)`, `SET_OWNER(object, player)` | who moves a shared object; hand it to someone else |
 | `NET_ID(object)`, `NET_OBJECT(net_id)` | a shared object's name in every game, and back (object ids differ between games) |
-| `MY_ADDRESS()` | this computer's local network address, for friends to join |
+| `MY_ADDRESS()` | this computer's address for friends to join: its ZeroTier one when it has one, else its local network one |
 
 **Shared objects.** The owner's game sends a shared object's position, rotation, size,
 visibility and properties (`self.health`, a sprite's `flip_x`, ...), and those of the objects
@@ -337,8 +337,11 @@ DEF on_physics(dt) {
 ```
 
 To try it on one computer, Build the game, run it and host, then press Play in the editor and
-join `"localhost"`. Over the internet the host forwards the port (TCP 7777) on their router, or
-everyone joins a free virtual network such as ZeroTier or Tailscale and uses its addresses.
+join `"localhost"`. Over the internet everyone joins the same ZeroTier network (free; Tailscale
+works too) and uses the host's ZeroTier address (`MY_ADDRESS()` gives it), or the host forwards
+the port (TCP 7777) on their router. Windows counts ZeroTier networks as Public: when it asks
+about the firewall the first time a game hosts, tick Public too (in the editor, File → Work
+together → Allow GEX through the firewall does it).
 
 ## Waiting: tasks
 

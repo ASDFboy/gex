@@ -174,12 +174,43 @@ pub fn split_address(s: &str, default_port: u16) -> (String, u16) {
     (if s.is_empty() { "localhost".to_string() } else { s.to_string() }, default_port)
 }
 
-/// This computer's address on the local network (what friends on the same Wi-Fi join), found
-/// without sending anything.
+/// This computer's best address for others to join: a ZeroTier (or Tailscale, Hamachi)
+/// address when there is one, since that's what friends elsewhere use, otherwise the local
+/// network one.
 pub fn local_ip() -> Option<String> {
-    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    s.connect("8.8.8.8:80").ok()?;
-    Some(s.local_addr().ok()?.ip().to_string())
+    addresses().into_iter().next().map(|(ip, _)| ip)
+}
+
+/// Every address others could join this computer at, with what network it's on, best first:
+/// ZeroTier, Tailscale, Hamachi, the local network, then anything else.
+pub fn addresses() -> Vec<(String, &'static str)> {
+    let mut out: Vec<(u8, String, &'static str)> = Vec::new();
+    for i in if_addrs::get_if_addrs().unwrap_or_default() {
+        let std::net::IpAddr::V4(ip) = i.ip() else { continue };
+        if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() {
+            continue;
+        }
+        let name = i.name.to_lowercase();
+        let o = ip.octets();
+        let (rank, label) = if name.contains("zerotier") || name.starts_with("zt") {
+            (0, "ZeroTier")
+        } else if name.contains("tailscale") || (o[0] == 100 && (64..128).contains(&o[1])) {
+            (1, "Tailscale")
+        } else if name.contains("hamachi") || o[0] == 25 {
+            (2, "Hamachi")
+        } else if name.contains("vethernet") || name.contains("docker") || name.contains("virtualbox") || name.contains("vmware") || name.starts_with("br-") || name.starts_with("veth") {
+            // Virtual machines' and containers' own networks: no friend is on those.
+            continue;
+        } else if ip.is_private() {
+            (3, "LAN")
+        } else {
+            (4, "Internet")
+        };
+        out.push((rank, ip.to_string(), label));
+    }
+    out.sort();
+    out.dedup_by(|a, b| a.1 == b.1);
+    out.into_iter().map(|(_, ip, l)| (ip, l)).collect()
 }
 
 /// Called when something arrives (to wake a window that only redraws when there's news).
@@ -386,5 +417,19 @@ impl Drop for Listener {
         // Wake the waiting accept with a connection of our own, so the thread ends.
         self.stop.store(true, Ordering::Relaxed);
         let _ = TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], self.port)), Duration::from_millis(500));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn addresses_are_real_and_labelled() {
+        for (ip, label) in super::addresses() {
+            let ip: std::net::Ipv4Addr = ip.parse().unwrap();
+            assert!(!ip.is_loopback() && !ip.is_link_local(), "{}", ip);
+            assert!(["ZeroTier", "Tailscale", "Hamachi", "LAN", "Internet"].contains(&label));
+        }
+        assert_eq!(super::split_address("10.147.17.5:7778", 1), ("10.147.17.5".to_string(), 7778));
+        assert_eq!(super::split_address("10.147.17.5", 7778), ("10.147.17.5".to_string(), 7778));
     }
 }

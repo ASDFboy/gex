@@ -15,10 +15,17 @@ copied into a folder named after it, inside the folder shown (the one new projec
 already there that match aren't sent again, so joining the same project later is quick. A bar
 shows the copy's progress, and the project opens when it's all there.
 
-On the same network (home Wi-Fi, a LAN) that's all. Over the internet the person sharing
-forwards the port (TCP 7778) on their router to their computer, or everyone joins the same free
-virtual network (ZeroTier, Tailscale) and uses its addresses. Windows asks whether GEX may use
-the network the first time: allow it.
+The window lists every address of the computer sharing, labelled by network, with the
+**ZeroTier** one first: friends on your ZeroTier network use that one (each address has its own
+**Copy invite**), friends on the same Wi-Fi the LAN one. Joined ZeroTier after sharing started?
+**Look again** finds it. Without ZeroTier (or Tailscale, Hamachi), the person sharing forwards
+the port (TCP 7778) on their router.
+
+**Windows Firewall:** Windows counts ZeroTier, Tailscale and Hamachi networks as Public and blocks
+programs there unless they're allowed (its first-time prompt only ticks Private). The Work
+together window says whether GEX is allowed; **Allow GEX through the firewall** fixes it on every
+network type after one Windows admin prompt, and removes any block Windows added if its prompt
+was cancelled. Only the person sharing needs it (and whoever hosts when playing together).
 
 ## What stays in step
 

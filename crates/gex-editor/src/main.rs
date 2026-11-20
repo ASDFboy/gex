@@ -33,6 +33,7 @@ mod workspace;
 mod sprites;
 mod update;
 mod collab;
+mod firewall;
 
 use std::path::PathBuf;
 

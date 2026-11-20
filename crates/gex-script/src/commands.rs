@@ -115,7 +115,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("SET_OWNER", "(object, player)", "hands a shared object to another player's game, which moves it from then on"),
     ("NET_ID", "(object)", "a shared object's name, the same in every game (ids aren't): send it, then NET_OBJECT it"),
     ("NET_OBJECT", "(net_id)", "the object in this game for a NET_ID, or NULL"),
-    ("MY_ADDRESS", "()", "this computer's address on the local network (what friends on the same network type into JOIN_GAME)"),
+    ("MY_ADDRESS", "()", "this computer's address for friends to join: ZeroTier (or Tailscale) when it has one, otherwise the local network one"),
 ];
 
 /// Names from before nodes were called objects and scenes blueprints: scripts using them

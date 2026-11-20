@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "gex-assets"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dot_vox",
  "gex-core",
@@ -1725,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "gex-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "glam 0.33.12",
  "ron",
@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "gex-editor"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chacha20poly1305",
  "editpe",
@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "gex-render"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytemuck",
  "egui-wgpu",
@@ -1773,11 +1773,12 @@ dependencies = [
 
 [[package]]
 name = "gex-script"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "gex-assets",
  "gex-core",
  "glam 0.33.12",
+ "if-addrs",
  "jlb",
  "rapier2d",
  "rapier3d",
@@ -2264,6 +2265,16 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "if-addrs"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b2eeee38fef3aa9b4cc5f1beea8a2444fc00e7377cafae396de3f5c2065e24"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
