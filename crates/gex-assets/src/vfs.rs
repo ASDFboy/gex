@@ -29,6 +29,30 @@ pub struct Vfs {
     pub mounts: Vec<Mount>,
 }
 
+/// Where assets fetched from others go (working on a project together): mounted files from
+/// another computer (its Half-Life 2, its asset folders) that this one doesn't have. Hidden, so
+/// it isn't shared or exported.
+pub const REMOTE_DIR: &str = ".gex/remote";
+
+/// Paths under mounts that couldn't be read, by project, for working together to fetch (the
+/// editor and a game it plays both read through their own Vfs).
+type Misses = std::collections::HashMap<PathBuf, std::collections::HashSet<String>>;
+static MISSES: std::sync::Mutex<Option<Misses>> = std::sync::Mutex::new(None);
+
+/// What couldn't be read in a project since the last call (mounted paths only), and forgets them.
+pub fn take_misses(project_dir: &Path) -> Vec<String> {
+    MISSES.lock().ok().and_then(|mut m| m.as_mut()?.remove(project_dir)).map(|s| s.into_iter().collect()).unwrap_or_default()
+}
+
+fn missed(project_dir: &Path, path: &str) {
+    if let Ok(mut m) = MISSES.lock() {
+        let set = m.get_or_insert_with(Default::default).entry(project_dir.to_path_buf()).or_default();
+        if set.len() < 10_000 {
+            set.insert(path.to_string());
+        }
+    }
+}
+
 fn split(path: &str) -> Option<(&str, &str)> {
     path.split_once("://")
 }
@@ -72,13 +96,46 @@ impl Vfs {
         if scheme == "gex" {
             return crate::builtin::get(rel).map(|b| b.to_vec()).ok_or_else(|| format!("{} isn't one of the built-in assets", path));
         }
-        let m = self.mounts.iter().find(|m| m.scheme == scheme).ok_or_else(|| format!("nothing is mounted at {}://", scheme))?;
+        let r = match self.mounts.iter().find(|m| m.scheme == scheme) {
+            None => Err(format!("nothing is mounted at {}://", scheme)),
+            Some(m) => match &m.imp {
+                MountImpl::Folder(base) => {
+                    let p = safe_join(base, rel).ok_or("paths can't leave the mount")?;
+                    std::fs::read(&p).map_err(|e| format!("{}: {}", path, e))
+                }
+                MountImpl::Source(g) => g.read(rel).unwrap_or_else(|| Err(format!("{} isn't in the game files", path))),
+            },
+        };
+        if r.is_ok() {
+            return r;
+        }
+        // Not here: maybe fetched from someone working on the project with this computer.
+        if let Some(b) = self.remote_path(scheme, rel).and_then(|p| std::fs::read(p).ok()) {
+            return Ok(b);
+        }
+        missed(&self.project_dir, path);
+        r
+    }
+
+    /// Where a fetched copy of a mounted file goes.
+    pub fn remote_path(&self, scheme: &str, rel: &str) -> Option<PathBuf> {
+        if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+            return None;
+        }
+        let rel = rel.trim_start_matches('/');
+        if rel.is_empty() || rel.contains(':') || rel.split(['/', '\\']).any(|p| p.is_empty() || p == "." || p == "..") {
+            return None;
+        }
+        Some(self.project_dir.join(REMOTE_DIR).join(scheme).join(rel))
+    }
+
+    /// Whether this computer can read a path itself (its own mounts, not fetched copies).
+    pub fn has_locally(&self, path: &str) -> bool {
+        let Some((scheme, rel)) = split(path) else { return false };
+        let Some(m) = self.mounts.iter().find(|m| m.scheme == scheme) else { return false };
         match &m.imp {
-            MountImpl::Folder(base) => {
-                let p = safe_join(base, rel).ok_or("paths can't leave the mount")?;
-                std::fs::read(&p).map_err(|e| format!("{}: {}", path, e))
-            }
-            MountImpl::Source(g) => g.read(rel).unwrap_or_else(|| Err(format!("{} isn't in the game files", path))),
+            MountImpl::Folder(base) => safe_join(base, rel).is_some_and(|p| p.is_file()),
+            MountImpl::Source(g) => g.read(rel).is_some_and(|r| r.is_ok()),
         }
     }
 
@@ -101,6 +158,13 @@ impl Vfs {
         ];
         for m in &self.mounts {
             r.push(Entry { name: format!("{}://", m.scheme), path: format!("{}://", m.scheme), is_dir: true });
+        }
+        // Mounts only another computer has: what was fetched from them.
+        for e in std::fs::read_dir(self.project_dir.join(REMOTE_DIR)).into_iter().flatten().flatten() {
+            let scheme = e.file_name().to_string_lossy().into_owned();
+            if e.path().is_dir() && !self.mounts.iter().any(|m| m.scheme == scheme) {
+                r.push(Entry { name: format!("{}:// (from others)", scheme), path: format!("{}://", scheme), is_dir: true });
+            }
         }
         r
     }
@@ -136,7 +200,9 @@ impl Vfs {
                 .chain(files.into_iter().map(|n| Entry { path: base(&n), name: n, is_dir: false }))
                 .collect();
         }
-        let Some(m) = self.mounts.iter().find(|m| m.scheme == scheme) else { return Vec::new() };
+        let Some(m) = self.mounts.iter().find(|m| m.scheme == scheme) else {
+            return from_fs(&self.project_dir.join(REMOTE_DIR).join(scheme));
+        };
         match &m.imp {
             MountImpl::Folder(p) => from_fs(p),
             MountImpl::Source(g) => {

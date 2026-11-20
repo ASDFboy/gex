@@ -43,6 +43,27 @@ was cancelled. Only the person sharing needs it (and whoever hosts when playing 
 
 Unsaved changes are shared too; saving writes them to everyone's disk.
 
+### Assets from outside the project (Half-Life 2, mounted folders)
+
+Files a project uses from a mount (`hl2://...`, or a folder of art mounted as `art://...`) live
+on the computer that mounted them, not in the project, so they don't come with the copy. GEX
+fetches them instead, so everyone sees and hears the same thing:
+
+- The person sharing offers every mounted file the project names (in blueprints, scripts,
+  animations, settings, unsaved changes included); each computer takes what it doesn't have.
+- Anything else a computer tries to read and doesn't have (a model's textures, a map's
+  materials, a sound whose name a script builds) is fetched the moment it's missed, and shows up
+  a moment later.
+- **Half-Life 2 is never sent whole**: only the files the project actually uses, and the ones
+  those need. Someone who has Half-Life 2 themselves (mounted under Settings → Half-Life 2) uses
+  their own copy and fetches nothing.
+- Files can come from anyone in the session, not only the one sharing: if a joiner has a folder
+  mounted that others don't, its files reach them through the host.
+- Fetched files are kept in the project's hidden `.gex/remote` folder, so joining again is
+  quick; they're never shared on or put into exported games.
+- Each computer keeps its own mounts in the project settings: someone else's Half-Life 2
+  folder doesn't replace yours (or get set on a computer that doesn't have it).
+
 ## Seeing each other
 
 Everyone has a color, and is a colored square with their initial at the top right: hover it to

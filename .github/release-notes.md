@@ -2,6 +2,10 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.2:
+- Working together shares mounted assets: files from Half-Life 2 or mounted folders that the project uses reach everyone (only what's used, never all of Half-Life 2), fetched as soon as anyone's GEX needs one. Each computer keeps its own mounts.
+- Images, models and sounds changed by others show the new version at once.
+
 New in 0.3.1:
 - Work together and multiplayer games use ZeroTier: the ZeroTier address is listed first (each address has its own Copy invite), MY_ADDRESS() gives it, and Work together can allow GEX through the Windows Firewall on every network type (ZeroTier networks count as Public).
 

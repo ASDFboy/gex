@@ -146,6 +146,15 @@ enum Hi {
 #[serde(tag = "t")]
 enum M {
     Hello { name: String },
+    /// The mounts this computer has (hl2, asset folders): others may fetch files from it.
+    Schemes { schemes: Vec<String> },
+    /// Hosting: mounted files the project uses (path, hash), for others to fetch if they lack them.
+    Offer { items: Vec<(String, u64)> },
+    /// Mounted files wanted.
+    NeedAssets { paths: Vec<String> },
+    /// A mounted file; its bytes come in the next message.
+    Asset { path: String },
+    NoAsset { path: String },
     Refused { reason: String },
     Welcome { id: u32, project: String, people: Vec<Person>, files: Vec<(String, u64, u64)>, token: String },
     Need { paths: Vec<String> },
@@ -866,15 +875,22 @@ struct Peer {
     queue: VecDeque<String>,
     synced_sent: bool,
     asked: bool,
-    /// A file whose bytes come next.
+    /// A file whose bytes come next (and whether it's a mounted asset rather than a project file).
     incoming: Option<String>,
+    incoming_asset: bool,
     editor: bool,
+    /// The mounts they have.
+    schemes: Vec<String>,
+    /// Mounted files to send them.
+    assets: VecDeque<String>,
+    /// Hosting: mounted files already offered to them.
+    offered: HashSet<String>,
 }
 
 impl Peer {
     fn new(link: Link) -> Peer {
         let ip = link.peer_ip();
-        Peer { id: 0, link, ip, stage: Stage::Hi, out: None, inn: None, nonce: Vec::new(), queue: VecDeque::new(), synced_sent: false, asked: false, incoming: None, editor: true }
+        Peer { id: 0, link, ip, stage: Stage::Hi, out: None, inn: None, nonce: Vec::new(), queue: VecDeque::new(), synced_sent: false, asked: false, incoming: None, incoming_asset: false, editor: true, schemes: Vec::new(), assets: VecDeque::new(), offered: HashSet::new() }
     }
     fn hi(&mut self, m: &Hi) {
         if let Ok(b) = serde_json::to_vec(m) {
@@ -884,6 +900,13 @@ impl Peer {
     fn send(&mut self, m: &M) {
         if let (Ok(b), Some(c)) = (serde_json::to_vec(m), self.out.as_mut()) {
             let sealed = c.seal(0, &b);
+            self.link.send_bytes(&sealed);
+        }
+    }
+    fn send_asset(&mut self, path: &str, bytes: &[u8]) {
+        self.send(&M::Asset { path: path.to_string() });
+        if let Some(c) = self.out.as_mut() {
+            let sealed = c.seal(1, bytes);
             self.link.send_bytes(&sealed);
         }
     }
@@ -960,6 +983,18 @@ pub struct Session {
     busy: bool,
     /// Hosting: this computer's addresses, labelled by network (ZeroTier first).
     pub addrs: Vec<(String, &'static str)>,
+    /// Mounted files asked for (each once a session).
+    asked_assets: HashSet<String>,
+    /// Hosting: mounted files being fetched from someone, and who's waiting for them.
+    waiting: HashMap<String, Vec<u32>>,
+    /// Hosting: the project's mounted files may have changed (new references): offer again.
+    refs_dirty: bool,
+    refs_at: Instant,
+    ref_hashes: HashMap<String, u64>,
+    /// Fetched files arrived: textures and models load again.
+    reload: bool,
+    /// The mounts told to the host.
+    told_schemes: Option<Vec<String>>,
     pub chat: Vec<ChatLine>,
     pub unread: usize,
     /// Following someone: their blueprint, view and script.
@@ -1050,6 +1085,13 @@ impl Session {
             ids: (String::new(), HashMap::new()),
             busy: false,
             addrs: Vec::new(),
+            asked_assets: HashSet::new(),
+            waiting: HashMap::new(),
+            refs_dirty: true,
+            refs_at: now,
+            ref_hashes: HashMap::new(),
+            reload: false,
+            told_schemes: None,
             chat: Vec::new(),
             unread: 0,
             following: None,
@@ -1155,6 +1197,13 @@ impl Session {
     /// Writes a file someone sent (and remembers it, so it isn't sent back).
     fn write_file(&mut self, rel: &str, bytes: &[u8], st: Option<&mut EditorState>) -> bool {
         let Some(p) = safe_path(&self.dir, rel) else { return false };
+        let merged;
+        let bytes = if rel == gex_core::project::PROJECT_FILE {
+            merged = merge_project_file(&p, bytes);
+            merged.as_slice()
+        } else {
+            bytes
+        };
         if p.is_file() && std::fs::read(&p).map(|b| fnv(&b) == fnv(bytes)).unwrap_or(false) {
             return false;
         }
@@ -1206,9 +1255,100 @@ fn file_arrived(st: &mut EditorState, rel: &str, bytes: &[u8]) {
     }
     if rel == gex_core::project::PROJECT_FILE {
         if let Ok(p) = gex_core::project::Project::open(&st.project.dir) {
+            let remount = p.config.mounts != st.project.config.mounts;
             st.project.config = p.config;
+            if remount {
+                st.remount();
+            }
+        }
+    } else if !rel.ends_with(".jlb") && !rel.ends_with(".jblueprint") {
+        // An image, model, sound... changed: what's shown loads it again.
+        st.previews.forget(&res);
+        if let Some(r) = &mut st.renderer {
+            r.reload_textures();
         }
     }
+}
+
+/// A project file from another computer, keeping this computer's own mounts (where its Half-Life
+/// 2 is, its asset folders): mounts the other has that this one doesn't are left out (their
+/// files are fetched instead), unless the same folder happens to exist here too.
+fn merge_project_file(here: &Path, incoming: &[u8]) -> Vec<u8> {
+    use gex_core::project::{MountKind, ProjectConfig};
+    let Ok(mut cfg) = ron::from_str::<ProjectConfig>(&String::from_utf8_lossy(incoming)) else { return incoming.to_vec() };
+    let local: Vec<gex_core::project::MountConfig> = std::fs::read_to_string(here).ok().and_then(|t| ron::from_str::<ProjectConfig>(&t).ok()).map(|c| c.mounts).unwrap_or_default();
+    let exists = |m: &gex_core::project::MountConfig| match &m.kind {
+        MountKind::Folder(p) => p.is_dir(),
+        MountKind::SourceGame { install, .. } => install.is_dir(),
+    };
+    let mut mounts: Vec<_> = cfg.mounts.iter().filter_map(|m| local.iter().find(|l| l.scheme == m.scheme).cloned().or_else(|| exists(m).then(|| m.clone()))).collect();
+    let extra: Vec<_> = local.iter().filter(|l| !mounts.iter().any(|m| m.scheme == l.scheme)).cloned().collect();
+    mounts.extend(extra);
+    if mounts == cfg.mounts {
+        return incoming.to_vec();
+    }
+    cfg.mounts = mounts;
+    ron::ser::to_string_pretty(&cfg, ron::ser::PrettyConfig::new().struct_names(false)).map(String::into_bytes).unwrap_or_else(|_| incoming.to_vec())
+}
+
+/// Where a fetched copy of a mounted file goes.
+fn remote_file(st: &EditorState, path: &str) -> Option<PathBuf> {
+    let (scheme, rel) = mounted(path)?;
+    st.vfs.remote_path(scheme, rel)
+}
+
+/// "hl2://models/x.mdl" → ("hl2", "models/x.mdl") for a mounted (not project, not built-in) path.
+fn mounted(path: &str) -> Option<(&str, &str)> {
+    let (scheme, rel) = path.split_once("://")?;
+    (scheme != "res" && scheme != "gex" && !rel.is_empty() && path.len() < 1024).then_some((scheme, rel))
+}
+
+/// Every mounted file the project names (in blueprints, scripts, animations, settings, and the
+/// open blueprints' unsaved changes): what others need to see and hear it.
+fn asset_refs(st: &EditorState, schemes: &[String]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if schemes.is_empty() {
+        return out;
+    }
+    let mut scan = |text: &str| {
+        for sch in schemes {
+            let pat = format!("{}://", sch);
+            let mut from = 0;
+            while let Some(i) = text[from..].find(&pat) {
+                let at = from + i;
+                from = at + pat.len();
+                if text[..at].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let end = text[from..].find(|c: char| matches!(c, '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ')' | ',' | ';' | ']' | '}' | '\\')).map(|e| from + e).unwrap_or(text.len());
+                if end > from {
+                    out.insert(text[at..end].to_string());
+                }
+            }
+        }
+    };
+    for (rel, _, _) in walk(&st.project.dir) {
+        if [".jblueprint", ".jlb", ".anim", ".jproj", ".ron", ".json", ".txt", ".vmt"].iter().any(|e| rel.ends_with(e)) {
+            if let Ok(t) = std::fs::read_to_string(st.project.dir.join(&rel)) {
+                scan(&t);
+            }
+        }
+    }
+    for t in std::iter::once(&st.tree).chain(st.docs.iter().map(|d| &d.tree)) {
+        for (_, o) in t.objects.iter() {
+            for v in o.props.values() {
+                if let Ok(j) = serde_json::to_string(v) {
+                    if j.contains("://") {
+                        scan(&j);
+                    }
+                }
+            }
+        }
+    }
+    for sc in st.scripts.values() {
+        scan(&sc.text);
+    }
+    out
 }
 
 /// Undo steps that take in others' changes (so undo takes back only your own). Going through
@@ -1335,6 +1475,7 @@ pub fn tick(ctx: &egui::Context, st: &mut EditorState) {
     s.pump(ctx, Some(st));
     if s.ended.is_none() && s.reconnect.is_none() {
         s.local_changes(st);
+        s.assets(st);
         s.presence(st);
         s.follow(st);
         s.start_play(st);
@@ -1453,6 +1594,7 @@ impl Session {
         // Hosting: send joiners their files, a few at a time.
         if self.host {
             let dir = self.dir.clone();
+            let mut synced = false;
             for p in &mut self.peers {
                 while p.link.backlog() < (8 << 20) {
                     let Some(rel) = p.queue.pop_front() else { break };
@@ -1463,13 +1605,19 @@ impl Session {
                 if p.asked && p.queue.is_empty() && !p.synced_sent && p.stage == Stage::Ready {
                     p.send(&M::Synced);
                     p.synced_sent = true;
+                    synced = true;
                 }
             }
+            if synced {
+                self.refs_dirty = true;
+            }
         }
+
         // What arrived, in the order each peer sent it; a file's bytes follow its header.
         enum Item {
             Msg(M),
             File(String, Vec<u8>),
+            Asset(String, Vec<u8>),
         }
         let mut items: Vec<(usize, Item)> = Vec::new();
         let mut bad: Vec<usize> = Vec::new();
@@ -1519,13 +1667,24 @@ impl Session {
                         let opened = p.inn.as_mut().and_then(|c| c.open(&b));
                         match opened {
                             Some((0, json)) => match serde_json::from_slice::<M>(&json) {
-                                Ok(M::File { path }) => p.incoming = Some(path),
+                                Ok(M::File { path }) => {
+                                    p.incoming = Some(path);
+                                    p.incoming_asset = false;
+                                }
+                                Ok(M::Asset { path }) => {
+                                    p.incoming = Some(path);
+                                    p.incoming_asset = true;
+                                }
                                 Ok(m) => items.push((i, Item::Msg(m))),
                                 Err(_) => {}
                             },
                             Some((1, bytes)) => {
                                 if let Some(path) = p.incoming.take() {
-                                    items.push((i, Item::File(path, bytes)));
+                                    if p.incoming_asset {
+                                        items.push((i, Item::Asset(path, bytes)));
+                                    } else {
+                                        items.push((i, Item::File(path, bytes)));
+                                    }
                                 }
                             }
                             _ => {
@@ -1565,6 +1724,12 @@ impl Session {
             }
             let m = match item {
                 Item::Msg(m) => m,
+                Item::Asset(path, bytes) => {
+                    if let Some(st) = st.as_deref_mut() {
+                        self.asset_arrived(st, &path, &bytes);
+                    }
+                    continue;
+                }
                 Item::File(path, bytes) => {
                     let from = self.peers[i].id;
                     if self.host && (self.peers[i].stage != Stage::Ready || !self.peers[i].editor) {
@@ -1572,6 +1737,9 @@ impl Session {
                     }
                     self.got += bytes.len() as u64;
                     let wrote = self.write_file(&path, &bytes, st.as_deref_mut());
+                    if wrote {
+                        self.refs_dirty = true;
+                    }
                     if self.host && wrote {
                         for p in &mut self.peers {
                             if p.stage == Stage::Ready && p.id != from {
@@ -1654,6 +1822,42 @@ impl Session {
             return;
         }
         match m {
+            M::Schemes { schemes } => {
+                self.peers[i].schemes = schemes.into_iter().filter(|x| x.len() <= 32 && x.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')).take(32).collect();
+                self.refs_dirty = true;
+            }
+            M::NeedAssets { paths } => {
+                let Some(st) = st else { return };
+                for path in paths.into_iter().take(5000) {
+                    if mounted(&path).is_none() || st.vfs.remote_path(mounted(&path).unwrap().0, mounted(&path).unwrap().1).is_none() {
+                        continue;
+                    }
+                    let here = st.vfs.has_locally(&path) || remote_file(st, &path).is_some_and(|p| p.is_file());
+                    let scheme = mounted(&path).unwrap().0.to_string();
+                    if !here {
+                        // Someone else has it mounted: fetch it through here.
+                        if let Some(owner) = self.peers.iter().position(|p| p.id != pid && p.stage == Stage::Ready && p.schemes.contains(&scheme)) {
+                            let w = self.waiting.entry(path.clone()).or_default();
+                            let first = w.is_empty();
+                            if !w.contains(&pid) {
+                                w.push(pid);
+                            }
+                            if first {
+                                self.peers[owner].send(&M::NeedAssets { paths: vec![path] });
+                            }
+                            continue;
+                        }
+                    }
+                    self.peers[i].assets.push_back(path);
+                }
+            }
+            M::NoAsset { path } => {
+                for w in self.waiting.remove(&path).unwrap_or_default() {
+                    if let Some(p) = self.peers.iter_mut().find(|p| p.id == w) {
+                        p.send(&M::NoAsset { path: path.clone() });
+                    }
+                }
+            }
             M::Need { paths } => {
                 let p = &mut self.peers[i];
                 p.queue.extend(paths.into_iter().filter(|x| self.files.contains_key(x)));
@@ -1893,6 +2097,31 @@ impl Session {
                     self.play = Some((bp, port));
                 }
             }
+            M::Offer { items } => {
+                let Some(st) = st else { return };
+                let need: Vec<String> = items
+                    .into_iter()
+                    .filter(|(p, h)| mounted(p).is_some() && !st.vfs.has_locally(p) && remote_file(st, p).is_some_and(|f| std::fs::read(f).map(|b| fnv(&b) != *h).unwrap_or(true)))
+                    .map(|(p, _)| p)
+                    .collect();
+                if !need.is_empty() {
+                    self.asked_assets.extend(need.iter().cloned());
+                    self.send_all(&M::NeedAssets { paths: need });
+                }
+            }
+            M::NeedAssets { paths } => {
+                // The host wants files from this computer's own mounts.
+                let Some(st) = st else { return };
+                if let Some(h) = self.peers.first_mut() {
+                    for path in paths.into_iter().take(5000) {
+                        if mounted(&path).is_some() && st.vfs.has_locally(&path) {
+                            h.assets.push_back(path);
+                        } else {
+                            h.send(&M::NoAsset { path });
+                        }
+                    }
+                }
+            }
             M::Objects { res, from, patches } => {
                 let Some(st) = st else { return };
                 let me = self.me;
@@ -2041,6 +2270,144 @@ impl Session {
         }
     }
 
+    /// Mounted files (Half-Life 2, asset folders) the project uses but a computer doesn't have:
+    /// offered by the host, asked for when a read misses, sent a few MB at a time, and kept in
+    /// the project's hidden .gex/remote folder. Half-Life 2 is never sent whole: only the files
+    /// the project names, and the ones those need (models' textures, maps' materials), as
+    /// they're read.
+    fn assets(&mut self, st: &mut EditorState) {
+        if !self.ready || !self.opened {
+            return;
+        }
+        // The host learns which mounts this computer has (to fetch files only it has).
+        if !self.host {
+            let mine: Vec<String> = st.vfs.mounts.iter().map(|m| m.scheme.clone()).collect();
+            if self.told_schemes.as_ref() != Some(&mine) {
+                self.send_all(&M::Schemes { schemes: mine.clone() });
+                self.told_schemes = Some(mine);
+            }
+        }
+        // What couldn't be read here: ask for it (each once).
+        let misses: Vec<String> = gex_assets::vfs::take_misses(&st.project.dir).into_iter().filter(|p| mounted(p).is_some() && !self.asked_assets.contains(p)).collect();
+        if !misses.is_empty() {
+            self.ask(&misses);
+        }
+        if self.host && self.refs_dirty && self.refs_at.elapsed() > Duration::from_secs(2) {
+            self.offer(st);
+        }
+        // Sending what was asked for.
+        for p in &mut self.peers {
+            while p.link.backlog() < (8 << 20) {
+                let Some(path) = p.assets.pop_front() else { break };
+                match st.vfs.read(&path) {
+                    Ok(b) if b.len() as u64 <= MAX_FILE => p.send_asset(&path, &b),
+                    _ => p.send(&M::NoAsset { path }),
+                }
+                self.busy = true;
+            }
+        }
+        if std::mem::take(&mut self.reload) {
+            if let Some(r) = &mut st.renderer {
+                r.reload_textures();
+            }
+        }
+    }
+
+    /// Asks for mounted files: joined, the host; hosting, whoever has that mount.
+    fn ask(&mut self, paths: &[String]) {
+        self.asked_assets.extend(paths.iter().cloned());
+        if !self.host {
+            self.send_all(&M::NeedAssets { paths: paths.to_vec() });
+            return;
+        }
+        let mut by_peer: HashMap<usize, Vec<String>> = HashMap::new();
+        for path in paths {
+            let Some((scheme, _)) = mounted(path) else { continue };
+            if let Some(i) = self.peers.iter().position(|p| p.stage == Stage::Ready && p.schemes.iter().any(|s| s == scheme)) {
+                self.waiting.entry(path.clone()).or_default().push(self.me);
+                by_peer.entry(i).or_default().push(path.clone());
+            }
+        }
+        for (i, paths) in by_peer {
+            self.peers[i].send(&M::NeedAssets { paths });
+        }
+    }
+
+    /// Hosting: offers everyone the mounted files the project names (they ask for what they lack).
+    fn offer(&mut self, st: &EditorState) {
+        self.refs_dirty = false;
+        self.refs_at = Instant::now();
+        let mut schemes: Vec<String> = st.vfs.mounts.iter().map(|m| m.scheme.clone()).collect();
+        for p in &self.peers {
+            schemes.extend(p.schemes.iter().cloned());
+        }
+        for e in std::fs::read_dir(st.project.dir.join(gex_assets::vfs::REMOTE_DIR)).into_iter().flatten().flatten() {
+            schemes.push(e.file_name().to_string_lossy().into_owned());
+        }
+        schemes.sort();
+        schemes.dedup();
+        let refs = asset_refs(st, &schemes);
+        let mut lacking = Vec::new();
+        let mut items = Vec::new();
+        for r in refs {
+            let h = match self.ref_hashes.get(&r) {
+                Some(h) => *h,
+                None => match st.vfs.read(&r) {
+                    Ok(b) => {
+                        let h = fnv(&b);
+                        self.ref_hashes.insert(r.clone(), h);
+                        h
+                    }
+                    Err(_) => {
+                        if !self.asked_assets.contains(&r) {
+                            lacking.push(r);
+                        }
+                        continue;
+                    }
+                },
+            };
+            items.push((r, h));
+        }
+        // Named but not here either: from whoever has it.
+        if !lacking.is_empty() {
+            self.ask(&lacking);
+        }
+        for p in &mut self.peers {
+            if p.stage != Stage::Ready || !p.synced_sent {
+                continue;
+            }
+            let new: Vec<(String, u64)> = items.iter().filter(|(r, _)| !p.offered.contains(r)).cloned().collect();
+            if !new.is_empty() {
+                p.offered.extend(new.iter().map(|(r, _)| r.clone()));
+                p.send(&M::Offer { items: new });
+            }
+        }
+    }
+
+    /// A mounted file arrived: kept with the project, and whoever waited for it gets it.
+    fn asset_arrived(&mut self, st: &mut EditorState, path: &str, bytes: &[u8]) {
+        if bytes.len() as u64 > MAX_FILE || !(self.asked_assets.contains(path) || self.waiting.contains_key(path)) {
+            return;
+        }
+        let Some(f) = remote_file(st, path) else { return };
+        if let Some(d) = f.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        if std::fs::write(&f, bytes).is_err() {
+            return;
+        }
+        self.reload = true;
+        st.previews.forget(path);
+        if self.host {
+            self.refs_dirty = true;
+            for w in self.waiting.remove(path).unwrap_or_default() {
+                if let Some(p) = self.peers.iter_mut().find(|p| p.id == w) {
+                    p.assets.push_back(path.to_string());
+                }
+            }
+        }
+    }
+
     /// Objects changed here in one blueprint since the last look: sent on (or, view-only,
     /// put back).
     fn blueprint_changes(&mut self, st: &mut EditorState, res: &str) {
@@ -2063,6 +2430,7 @@ impl Session {
             return;
         }
         bp.flat = now;
+        self.refs_dirty = true;
         if !self.host {
             for p in &patches {
                 for f in p.fields() {

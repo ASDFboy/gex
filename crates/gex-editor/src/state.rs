@@ -1800,7 +1800,8 @@ pub fn apply_shared_hl2(p: &mut gex_core::project::Project) -> bool {
     let shared = shared_hl2();
     if shared.is_none() {
         // Never set on this computer: a project that has it mounted sets it for all.
-        if let Some(m) = p.config.mounts.iter().find(|m| m.scheme == "hl2") {
+        // (Only when it's there: a project from another computer names that computer's folder.)
+        if let Some(m) = p.config.mounts.iter().find(|m| m.scheme == "hl2" && matches!(&m.kind, gex_core::project::MountKind::SourceGame { install, .. } if install.is_dir())) {
             set_shared_hl2(Some(m));
         }
     }

@@ -286,3 +286,49 @@ fn joined_editor_reconnects() {
     assert_eq!(flat(&a.tree), flat(&b.tree));
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// The host has a folder of art mounted that the joiner doesn't: what the project names is
+/// offered and arrives, and anything else read later is fetched when it's missed.
+#[test]
+fn mounted_assets_reach_others() {
+    let tmp = std::env::temp_dir().join(format!("gex-collab-assets-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let a_dir = tmp.join("a");
+    crate::templates::create_demo(&a_dir).unwrap();
+    let art = tmp.join("art");
+    std::fs::create_dir_all(art.join("sub")).unwrap();
+    std::fs::write(art.join("hero.png"), b"pretend png").unwrap();
+    std::fs::write(art.join("sub/boom.wav"), b"pretend wav").unwrap();
+    std::fs::write(art.join("unused.png"), b"never named").unwrap();
+    std::fs::write(a_dir.join("scripts/uses_art.jlb"), "DEF on_create() {\n    SET(NULL, \"texture\", \"art://hero.png\")\n}\n").unwrap();
+    let mut p = gex_core::project::Project::open(&a_dir).unwrap();
+    p.config.mounts.push(gex_core::project::MountConfig { scheme: "art".into(), kind: gex_core::project::MountKind::Folder(art.clone()) });
+    p.save().unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let ctx = egui::Context::default();
+    let mut a = EditorState::new(gex_core::project::Project::open(&a_dir).unwrap());
+    a.collab = Some(Session::host(&ctx, &a, "Ann", port).unwrap());
+    let code = a.collab.as_ref().unwrap().code.clone();
+    let mut j = Session::join(&ctx, "Bob", &format!("127.0.0.1:{}", port), &code, &tmp.join("b"));
+    wait_join(&ctx, &mut a, &mut j);
+    let mut b = EditorState::new(gex_core::project::Project::open(&j.dir).unwrap());
+    j.opened = true;
+    b.collab = Some(j);
+    // On another computer that folder isn't there.
+    b.project.config.mounts.clear();
+    b.remount();
+    assert!(b.vfs.read("art://hero.png").is_err() || b.vfs.has_locally("art://hero.png") == false);
+    run(&ctx, &mut a, &mut b, 3500);
+    let cache = b.project.dir.join(gex_assets::vfs::REMOTE_DIR).join("art");
+    assert_eq!(std::fs::read(cache.join("hero.png")).ok().as_deref(), Some(&b"pretend png"[..]), "what the project names arrives");
+    assert!(!cache.join("unused.png").exists(), "what it doesn't name stays");
+    assert_eq!(b.vfs.read("art://hero.png").unwrap(), b"pretend png");
+    // Read something else (a model's texture, a sound a script builds the name of): fetched.
+    assert!(b.vfs.read("art://sub/boom.wav").is_err());
+    run(&ctx, &mut a, &mut b, 800);
+    assert_eq!(b.vfs.read("art://sub/boom.wav").unwrap(), b"pretend wav");
+    // Paths can't leave the cache.
+    assert!(b.vfs.remote_path("art", "../../x").is_none() && b.vfs.remote_path("a:b", "x").is_none());
+    a.collab = None;
+    let _ = std::fs::remove_dir_all(&tmp);
+}
