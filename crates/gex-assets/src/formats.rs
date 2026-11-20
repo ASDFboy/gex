@@ -32,9 +32,14 @@ pub fn extension(path: &str) -> String {
     name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// (Called for every mesh and file every frame: no allocation.)
 fn has(list: &[&str], path: &str) -> bool {
-    let e = extension(path);
-    !e.is_empty() && list.contains(&e.as_str())
+    let base = crate::model::map_base(path);
+    let name = base.rsplit('/').next().unwrap_or(base);
+    match name.rsplit_once('.') {
+        Some((_, e)) if !e.is_empty() => list.iter().any(|x| x.eq_ignore_ascii_case(e)),
+        _ => false,
+    }
 }
 
 pub fn is_image(path: &str) -> bool {

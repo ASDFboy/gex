@@ -199,8 +199,59 @@ impl Source for Opus {
     }
 }
 
+/// A sound that stops (instead of taking the sound thread down) if its decoder panics on a
+/// broken file: some decoders do on damaged data.
+struct Guarded {
+    inner: Option<Box<dyn Source + Send>>,
+    channels: rodio::ChannelCount,
+    rate: rodio::SampleRate,
+}
+
+impl Iterator for Guarded {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        let inner = self.inner.as_mut()?;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inner.next())) {
+            Ok(s) => s,
+            Err(_) => {
+                self.inner = None;
+                None
+            }
+        }
+    }
+}
+
+impl Source for Guarded {
+    fn current_span_len(&self) -> Option<usize> {
+        match &self.inner {
+            Some(i) => i.current_span_len(),
+            None => Some(0),
+        }
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.as_ref().map_or(self.channels, |i| i.channels())
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.as_ref().map_or(self.rate, |i| i.sample_rate())
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
 /// Decodes a sound file (any format the audio decoders know, or tracker music).
 fn decode(bytes: std::sync::Arc<Vec<u8>>, path: &str, looped: bool) -> Result<Box<dyn Source + Send>, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_unguarded(bytes, path, looped))) {
+        Ok(Ok(src)) => {
+            let (channels, rate) = (src.channels(), src.sample_rate());
+            Ok(Box::new(Guarded { inner: Some(src), channels, rate }))
+        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(format!("{}: a damaged sound file", path)),
+    }
+}
+
+fn decode_unguarded(bytes: std::sync::Arc<Vec<u8>>, path: &str, looped: bool) -> Result<Box<dyn Source + Send>, String> {
     if gex_assets::formats::is_tracker(path) {
         return Ok(Box::new(Tracker::new(&bytes, looped).map_err(|e| format!("{}: {}", path, e))?));
     }
@@ -405,5 +456,50 @@ mod format_tests {
                 Err(e) => println!("FAIL {}: {}", name, e),
             }
         }
+    }
+
+    /// Broken sound files give an error or silence, never a crash.
+    #[test]
+    #[ignore]
+    fn audio_fuzz() {
+        let Ok(dir) = std::env::var("GEX_AUDIO") else { return };
+        let mut seed = 99u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let (mut tries, mut panics) = (0, 0);
+        for p in std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()) {
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            if !gex_assets::formats::is_audio(&name) {
+                continue;
+            }
+            let bytes = std::fs::read(&p).unwrap();
+            let mut variants: Vec<Vec<u8>> = [0.0, 0.05, 0.2, 0.5, 0.9].iter().map(|k| bytes[..(bytes.len() as f64 * k) as usize].to_vec()).collect();
+            for _ in 0..15 {
+                let mut b = bytes.clone();
+                for _ in 0..1 + rnd() % 10 {
+                    let i = (rnd() as usize) % b.len();
+                    b[i] = rnd() as u8;
+                }
+                variants.push(b);
+            }
+            for (i, v) in variants.into_iter().enumerate() {
+                tries += 1;
+                let r = std::panic::catch_unwind(|| {
+                    if let Ok(src) = super::decode(std::sync::Arc::new(v), &name, false) {
+                        let _ = src.take(200_000).count();
+                    }
+                });
+                if r.is_err() {
+                    panics += 1;
+                    println!("PANIC {} variant {}", name, i);
+                }
+            }
+        }
+        println!("{} tries, {} panics", tries, panics);
+        assert_eq!(panics, 0);
     }
 }

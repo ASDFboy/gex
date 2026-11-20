@@ -158,3 +158,75 @@ fn one_model() {
     let m = crate::model::load(&vfs, &format!("res://{}", p.file_name().unwrap().to_string_lossy())).unwrap();
     println!("{} parts, min {:?} max {:?}", m.parts.len(), m.min, m.max);
 }
+
+/// Broken files must give an error, never crash: every model and picture under
+/// $GEX_CORPUS, cut short at many lengths and with bytes changed.
+#[test]
+#[ignore]
+fn corpus_fuzz() {
+    let Ok(dir) = std::env::var("GEX_CORPUS") else { return };
+    let root = std::path::PathBuf::from(&dir);
+    let out = std::env::temp_dir().join(format!("gex-fuzz-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let vfs = Vfs::new(&out, &ProjectConfig::default());
+    let mut stack = vec![root];
+    let mut files = Vec::new();
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if crate::formats::is_model(&p.to_string_lossy()) || crate::formats::is_image(&p.to_string_lossy()) {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut seed = 12345u64;
+    let mut rnd = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut panics = 0;
+    let mut tries = 0;
+    for f in files {
+        let bytes = std::fs::read(&f).unwrap();
+        if bytes.len() > 3_000_000 {
+            continue;
+        }
+        let name = f.file_name().unwrap().to_string_lossy().to_string();
+        let mut variants: Vec<Vec<u8>> = [0.0, 0.1, 0.3, 0.5, 0.9, 0.99].iter().map(|k| bytes[..(bytes.len() as f64 * k) as usize].to_vec()).collect();
+        for _ in 0..12 {
+            let mut b = bytes.clone();
+            for _ in 0..1 + rnd() % 8 {
+                if !b.is_empty() {
+                    let i = (rnd() as usize) % b.len();
+                    b[i] = rnd() as u8;
+                }
+            }
+            variants.push(b);
+        }
+        for (i, v) in variants.into_iter().enumerate() {
+            std::fs::write(out.join(&name), &v).unwrap();
+            crate::model::clear_cache();
+            let path = format!("res://{}", name);
+            tries += 1;
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if crate::formats::is_model(&path) {
+                    let _ = crate::model::load(&vfs, &path);
+                } else {
+                    let _ = load_image(&vfs, &path);
+                }
+            }));
+            if r.is_err() {
+                panics += 1;
+                println!("PANIC {} (variant {})", name, i);
+            }
+        }
+    }
+    println!("{} tries, {} panics", tries, panics);
+    assert_eq!(panics, 0);
+}

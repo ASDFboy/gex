@@ -567,11 +567,13 @@ impl Game {
                             Interp::env_set(&env, &k, v);
                         }
                     }
-                    let s = &mut self.scripts.get_mut(&id).unwrap()[i];
-                    s.env = env;
-                    s.handlers = handlers.clone();
-                    s.dead = false;
-                    done += 1;
+                    // (The script's own code may have destroyed its object meanwhile.)
+                    if let Some(s) = self.scripts.get_mut(&id).and_then(|l| l.get_mut(i)) {
+                        s.env = env;
+                        s.handlers = handlers.clone();
+                        s.dead = false;
+                        done += 1;
+                    }
                 }
                 Err(f) => self.report(&f, res),
             }

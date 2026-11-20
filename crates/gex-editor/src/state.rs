@@ -27,6 +27,14 @@ pub struct Script {
     pub find: Option<(String, String)>,
 }
 
+/// The console keeps the newest lines: a game printing every frame mustn't grow it forever.
+fn trim_logs(logs: &mut Vec<LogLine>) {
+    const KEEP: usize = 5000;
+    if logs.len() > KEEP * 2 {
+        logs.drain(..logs.len() - KEEP);
+    }
+}
+
 impl Script {
     pub fn dirty(&self) -> bool {
         self.text != self.saved
@@ -263,7 +271,9 @@ impl EditorState {
 
     pub fn log(&mut self, kind: LogKind, text: impl Into<String>) {
         self.logs.push(LogLine { kind, text: text.into(), file: None, line: 0 });
+        trim_logs(&mut self.logs);
     }
+
 
     pub fn reader(&self) -> impl Fn(&str) -> Result<String, String> + '_ {
         move |p: &str| self.project.read_text(p)
@@ -1479,6 +1489,7 @@ impl EditorState {
             for m in p.handle.poll() {
                 if let FromGame::Stopped { logs } | FromGame::Frame { logs, .. } = m {
                     self.logs.extend(logs);
+                    trim_logs(&mut self.logs);
                 }
             }
             self.status = "stopped".into();
@@ -1503,9 +1514,11 @@ impl EditorState {
                         p.tree = t;
                     }
                     self.logs.extend(logs);
+                    trim_logs(&mut self.logs);
                 }
                 FromGame::Stopped { logs } => {
                     self.logs.extend(logs);
+                    trim_logs(&mut self.logs);
                     stopped = true;
                 }
                 FromGame::Paused(at) => paused_at = Some(at),
