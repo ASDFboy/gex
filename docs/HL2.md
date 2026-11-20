@@ -12,7 +12,9 @@ Two, which ship inside the same install folder) as an asset library at `hl2://`.
    version of a file wins over Episode One's, which wins over Half-Life 2's.
 4. **Apply.** Browse it under Assets → `hl2://`.
 
-The setting is saved in the project's `project.jproj`:
+Mount it once and every project on this computer has it: projects you open later get the same
+mount (and unmounting it turns it off everywhere). Each project also keeps it in its
+`project.jproj`, so Build and exported games find it:
 
 ```
 mounts: [(scheme: "hl2", kind: SourceGame(install: "C:\\...\\Half-Life 2", games: ["ep2", "episodic", "hl2"]))]

@@ -78,14 +78,14 @@ impl ProjectConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MountConfig {
     /// The path prefix it answers to, like "hl2" for hl2://materials/...
     pub scheme: String,
     pub kind: MountKind,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MountKind {
     /// A plain folder.
     Folder(PathBuf),

@@ -1777,6 +1777,46 @@ pub fn config_dir() -> PathBuf {
     base.join("gex")
 }
 
+/// The Half-Life 2 mount set on this computer, for every project: Some(Some(m)) mounted,
+/// Some(None) turned off, None never set (projects keep their own).
+pub fn shared_hl2() -> Option<Option<gex_core::project::MountConfig>> {
+    let text = std::fs::read_to_string(config_dir().join("hl2_mount.ron")).ok()?;
+    ron::from_str(&text).ok()
+}
+
+pub fn set_shared_hl2(m: Option<&gex_core::project::MountConfig>) {
+    let _ = std::fs::create_dir_all(config_dir());
+    if let Ok(text) = ron::to_string(&m) {
+        let _ = std::fs::write(config_dir().join("hl2_mount.ron"), text);
+    }
+}
+
+/// Gives a project this computer's Half-Life 2 mount (or takes it away when it was turned
+/// off), saving the project when that changes it. True if it changed.
+pub fn apply_shared_hl2(p: &mut gex_core::project::Project) -> bool {
+    let shared = shared_hl2();
+    if shared.is_none() {
+        // Never set on this computer: a project that has it mounted sets it for all.
+        if let Some(m) = p.config.mounts.iter().find(|m| m.scheme == "hl2") {
+            set_shared_hl2(Some(m));
+        }
+    }
+    apply_hl2(p, shared)
+}
+
+fn apply_hl2(p: &mut gex_core::project::Project, shared: Option<Option<gex_core::project::MountConfig>>) -> bool {
+    let now: Vec<_> = p.config.mounts.iter().filter(|m| m.scheme == "hl2").cloned().collect();
+    let Some(shared) = shared else { return false };
+    let want: Vec<_> = shared.into_iter().collect();
+    if now == want {
+        return false;
+    }
+    p.config.mounts.retain(|m| m.scheme != "hl2");
+    p.config.mounts.extend(want);
+    let _ = p.save();
+    true
+}
+
 pub fn recent_projects() -> Vec<PathBuf> {
     std::fs::read_to_string(config_dir().join("recent.txt"))
         .unwrap_or_default()
@@ -1833,5 +1873,31 @@ impl Drop for Build {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[cfg(test)]
+mod hl2_mount_tests {
+    use gex_core::project::{MountConfig, MountKind, Project};
+
+    #[test]
+    fn the_computers_hl2_mount_reaches_every_project() {
+        let dir = std::env::temp_dir().join(format!("gex-hl2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut p = crate::templates::create_project(&dir, "Plain").unwrap();
+        let m = MountConfig { scheme: "hl2".into(), kind: MountKind::SourceGame { install: "C:/Steam/Half-Life 2".into(), games: vec!["hl2".into()] } };
+        // Mounted on this computer: a project without it gets it, saved.
+        assert!(super::apply_hl2(&mut p, Some(Some(m.clone()))));
+        assert_eq!(Project::open(&dir).unwrap().config.mounts, vec![m.clone()]);
+        // Already the same: nothing to do.
+        assert!(!super::apply_hl2(&mut p, Some(Some(m.clone()))));
+        // Turned off on this computer: taken away.
+        assert!(super::apply_hl2(&mut p, Some(None)));
+        assert!(Project::open(&dir).unwrap().config.mounts.is_empty());
+        // Never set: the project keeps its own.
+        p.config.mounts.push(m.clone());
+        assert!(!super::apply_hl2(&mut p, None));
+        assert_eq!(p.config.mounts, vec![m]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

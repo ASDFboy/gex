@@ -99,7 +99,9 @@ impl EditorApp {
 
     fn open_project(&mut self, dir: &std::path::Path) {
         match Project::open(dir) {
-            Ok(p) => {
+            Ok(mut p) => {
+                // Half-Life 2, mounted once, is mounted in every project.
+                state::apply_shared_hl2(&mut p);
                 state::remember_project(&p.dir);
                 self.ws = crate::workspace::Layout::load(&p.dir);
                 let mut st = EditorState::new(p);
@@ -598,7 +600,7 @@ impl EditorApp {
             if f.tab == 5 {
             theme::title(ui, "Half-Life 2 assets");
             ui.label(
-                RichText::new("Reads textures, materials and other files straight from your own Steam install (hl2://…). Nothing is copied into the project, and exported games never include these files.")
+                RichText::new("Reads textures, materials and other files straight from your own Steam install (hl2://…). Mounting it here mounts it for every project on this computer (and unmounting unmounts it everywhere). Nothing is copied into the project, and exported games never include these files.")
                     .small()
                     .color(theme::TEXT_DIM),
             );
@@ -637,10 +639,18 @@ impl EditorApp {
                     .map(|(n, k)| (n.trim().to_lowercase().replace(' ', "_"), k.split([',', ' ']).map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty()).collect::<Vec<_>>()))
                     .filter(|(n, k)| !n.is_empty() && !k.is_empty())
                     .collect();
+                let before: Vec<MountConfig> = st.project.config.mounts.iter().filter(|m| m.scheme == "hl2").cloned().collect();
                 st.project.config.mounts.retain(|m| m.scheme != "hl2");
+                let mut hl2 = None;
                 if f.hl2_on && !f.hl2_path.trim().is_empty() {
                     let games = f.hl2_games.split(',').map(|g| g.trim().to_string()).filter(|g| !g.is_empty()).collect();
-                    st.project.config.mounts.push(MountConfig { scheme: "hl2".into(), kind: MountKind::SourceGame { install: PathBuf::from(f.hl2_path.trim()), games } });
+                    let m = MountConfig { scheme: "hl2".into(), kind: MountKind::SourceGame { install: PathBuf::from(f.hl2_path.trim()), games } };
+                    st.project.config.mounts.push(m.clone());
+                    hl2 = Some(m);
+                }
+                // Mounting (or unmounting) Half-Life 2 counts for every project on this computer.
+                if before.first() != hl2.as_ref() || state::shared_hl2().is_none() && hl2.is_some() {
+                    state::set_shared_hl2(hl2.as_ref());
                 }
                 match st.project.save() {
                     Ok(()) => {
