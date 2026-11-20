@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.4:
+- REX, the assistant panel, is gone from the editor.
+
 New in 0.3.3 (Work together, gone over end to end):
 - Joining never copies over another project with the same name; joining again updates your earlier copy (files removed by the sharer go, your new files are shared, and files you changed are kept aside in "Name (your changes)" before being updated).
 - When the sharer stops (or closes GEX), everyone's told at once instead of trying to reconnect for a minute.

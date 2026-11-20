@@ -16,7 +16,6 @@ pub struct EditorApp {
     previews: HashMap<String, egui::TextureHandle>,
     // Launcher fields.
     launcher: crate::launcher::Launcher,
-    rex: crate::rex::Rex,
     // Neovim-style command line.
     cmd: Option<String>,
     settings: SettingsForm,
@@ -82,12 +81,15 @@ impl EditorApp {
     pub fn new(cc: &eframe::CreationContext, project: Option<PathBuf>) -> EditorApp {
         theme::apply(&cc.egui_ctx);
         gex_script::commands::register();
+        // Left over from the assistant GEX used to have.
+        for f in ["rex_context.md", "claude_path.txt"] {
+            let _ = std::fs::remove_file(state::config_dir().join(f));
+        }
         let mut app = EditorApp {
             st: None,
             viewport_tex: None,
             previews: HashMap::new(),
             launcher: Default::default(),
-            rex: Default::default(),
             cmd: None,
             settings: SettingsForm::default(),
             pads: crate::gamepad::Pads::new(),
@@ -425,7 +427,6 @@ impl EditorApp {
                     }
                 }
                 ui.separator();
-                ui.checkbox(&mut self.rex.open, "REX").tip("The assistant: answers questions about GEX and your project, and can make changes for you. It runs Claude Code with your own sign-in.");
                 if theme::menu_item(ui, "Commands", "F1").tip("Every engine command for scripts, explained, with examples; and the events.").clicked() {
                     st.commands_open = true;
                     ui.close();
@@ -1140,12 +1141,6 @@ impl eframe::App for EditorApp {
             return;
         }
         self.command_line(ui);
-        if let Some(st) = &mut self.st {
-            self.rex.show(ui, st);
-            if std::mem::take(&mut self.rex.reload) {
-                st.reload_from_disk();
-            }
-        }
         self.settings_window(&ctx);
         self.export_window(&ctx);
         let rs = frame.wgpu_render_state();

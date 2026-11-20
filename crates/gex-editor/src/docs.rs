@@ -235,7 +235,6 @@ const UI: &[(&str, &str, &str)] = &[
     ("groups", "Groups", "Names this object goes by together with others (\"enemies\"). OBJECTS(\"enemies\") gives them all; colliders can ask whether the other is in a group."),
     ("icon", "Icon", "What stands for this object in lists. Automatic shows a sprite's or mesh's own picture and the kind's icon for the rest. A blueprint's root icon is the blueprint's icon in Assets."),
     ("find", "Find in files", "Searches every script and blueprint in the project (Ctrl+F). Click a result to go there."),
-    ("rex", "REX", "The assistant. Ask it about GEX or your project (\"why doesn't my coin disappear?\"), or tell it what to make.\n\nIt runs Claude Code in the project's folder, using the Claude Code you have installed and are signed in to: GEX holds no key and it counts against your own Claude plan.\n\n- May change files: off, it only reads and answers; on, it can create and change blueprints and scripts\n- New chat: forgets the conversation\n- Stop: ends what it's doing\n\nView > REX shows or hides it."),
     ("status", "Status bar", "The last thing the editor did, and at the right the blueprint and selected object. Click `commands` (or press :) for the command line."),
 ];
 
