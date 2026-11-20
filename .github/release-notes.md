@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.5:
+- Updating no longer keeps old copies of GEX: the replaced version (and any kept by earlier updates) is removed when the new one starts. The "Go back to…" button is gone with it.
+
 New in 0.3.4:
 - REX, the assistant panel, is gone from the editor.
 
@@ -24,6 +27,6 @@ New in 0.3.1:
 
 New in 0.3.0:
 - Work together: invite codes and encrypted sessions; blueprints merge property by property and objects keep who they are through renames; chat, follow someone, play together; view-only and remove for the host; reconnects by itself, keeping changes made meanwhile; a progress bar when joining.
-- Updates: checked against the release's SHA-256 list; install by itself, ask first, or don't check; go back to the version before; checks every 6 hours; download progress.
+- Updates: checked against the release's SHA-256 list; install by itself, ask first, or don't check; checks every 6 hours; download progress.
 
 Website: https://asdfboy.github.io/gex/

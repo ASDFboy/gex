@@ -255,7 +255,6 @@ impl EditorApp {
             return;
         }
         let mut open = true;
-        let mut roll_back = false;
         egui::Window::new("Updates").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
             ui.set_width(420.0);
             let u = &mut self.updater;
@@ -289,11 +288,6 @@ impl EditorApp {
                         u.install();
                     }
                 }
-                if let Some(prev) = u.previous() {
-                    if ui.button(format!("Go back to {}", prev)).tip("Puts the version before this one back (this one is kept instead) and restarts").clicked() {
-                        roll_back = true;
-                    }
-                }
             });
             let notes = match &u.state {
                 State::Available(r) | State::Downloading(r) | State::Ready(r) => Some(r.notes.clone()),
@@ -308,16 +302,6 @@ impl EditorApp {
                 });
             }
         });
-        if roll_back {
-            let dir = self.st.as_mut().map(|st| {
-                st.save_all();
-                self.ws.save(&st.project.dir);
-                st.project.dir.clone()
-            });
-            if let Err(e) = self.updater.roll_back(ctx, dir.as_deref()) {
-                self.updater.state = crate::update::State::Failed(e);
-            }
-        }
         if !open {
             self.updater.window = false;
             self.updater.notes = false;

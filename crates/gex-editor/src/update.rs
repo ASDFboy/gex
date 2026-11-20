@@ -40,8 +40,6 @@ pub struct Settings {
     pub mode: Mode,
     /// A version not to offer again.
     pub skip: Option<String>,
-    /// The version kept beside this one (Updates can go back to it).
-    pub previous: Option<String>,
 }
 
 fn settings_file() -> PathBuf {
@@ -197,35 +195,6 @@ impl Updater {
             _ => None,
         }
     }
-
-    /// The version kept beside this one, if it's still there.
-    pub fn previous(&self) -> Option<String> {
-        let exe = self.exe.as_deref()?;
-        previous_path(exe).is_file().then(|| self.settings.previous.clone().unwrap_or_else(|| "the last version".into()))
-    }
-
-    /// Goes back to the kept version (this one is kept instead), then restarts.
-    pub fn roll_back(&mut self, ctx: &eframe::egui::Context, project: Option<&Path>) -> Result<(), String> {
-        let exe = self.exe.clone().ok_or("can't tell where GEX is")?;
-        let prev = previous_path(&exe);
-        if !prev.is_file() {
-            return Err("there's no earlier version kept".into());
-        }
-        let tmp = exe.with_file_name("gex.rollback.tmp");
-        let _ = std::fs::remove_file(&tmp);
-        std::fs::rename(&exe, &tmp).map_err(|e| format!("couldn't move GEX: {}", e))?;
-        if let Err(e) = std::fs::rename(&prev, &exe) {
-            let _ = std::fs::rename(&tmp, &exe);
-            return Err(format!("couldn't put the earlier version back: {}", e));
-        }
-        let _ = std::fs::rename(&tmp, &prev);
-        // The way back is now this version; don't offer it again straight away.
-        self.settings.previous = Some(VERSION.to_string());
-        self.settings.skip = Some(VERSION.to_string());
-        self.settings.save();
-        restart(ctx, Some(&exe), project);
-        Ok(())
-    }
 }
 
 /// "0.10.1" is newer than "0.9.3".
@@ -264,17 +233,28 @@ fn asset_name() -> &'static str {
     }
 }
 
-fn previous_path(exe: &Path) -> PathBuf {
-    exe.with_file_name(if cfg!(windows) { "gex.previous.exe" } else { "gex.previous" })
+/// Where the running copy steps aside while an update takes its place (removed on the next start).
+fn old_path(exe: &Path) -> PathBuf {
+    exe.with_file_name(if cfg!(windows) { "gex.old.exe" } else { "gex.old" })
 }
 
-/// Leftovers of an interrupted update.
+/// Removes the version an update replaced, and leftovers of an interrupted one. In the
+/// background, trying for a little while: just after an update the old copy may still be closing
+/// (Windows can't remove a program that's running).
 fn cleanup() {
-    if let Ok(exe) = std::env::current_exe() {
-        for f in ["gex.update.part", "gex.rollback.tmp", "gex.old.exe", "gex.old"] {
-            let _ = std::fs::remove_file(exe.with_file_name(f));
-        }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let files: Vec<PathBuf> = ["gex.update.part", "gex.sums.part", "gex.rollback.tmp", "gex.old.exe", "gex.old", "gex.previous.exe", "gex.previous"].iter().map(|f| exe.with_file_name(f)).filter(|f| f.exists()).collect();
+    if files.is_empty() {
+        return;
     }
+    std::thread::spawn(move || {
+        for _ in 0..40 {
+            if files.iter().all(|f| std::fs::remove_file(f).is_ok() || !f.exists()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    });
 }
 
 /// Only this repository's release downloads.
@@ -352,7 +332,7 @@ fn listed_sum(sums: &str, name: &str) -> Option<String> {
     })
 }
 
-/// Downloads, checks and swaps in a release; the running copy is kept as the previous one.
+/// Downloads, checks and swaps in a release; the old copy is removed on the next start.
 fn install(rel: &Release, exe: Option<&Path>) -> Result<(), String> {
     let exe = exe.ok_or("can't tell where GEX is")?;
     let exe = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
@@ -372,17 +352,17 @@ fn install(rel: &Release, exe: Option<&Path>) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755));
     }
-    // Swap: the running copy steps aside (kept, for going back), the new one takes its name.
-    let prev = previous_path(&exe);
-    let _ = std::fs::remove_file(&prev);
-    std::fs::rename(&exe, &prev).map_err(|e| format!("couldn't replace GEX: {}", e))?;
+    // Swap: the running copy steps aside (it can't be removed while running; the new one
+    // removes it when it starts), the new one takes its name.
+    let old = old_path(&exe);
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(&exe, &old).map_err(|e| format!("couldn't replace GEX: {}", e))?;
     if let Err(e) = std::fs::rename(&part, &exe) {
-        let _ = std::fs::rename(&prev, &exe);
+        let _ = std::fs::rename(&old, &exe);
         return Err(format!("couldn't replace GEX: {}", e));
     }
-    let mut s = Settings::load();
-    s.previous = Some(VERSION.to_string());
-    s.save();
+    #[cfg(not(windows))]
+    let _ = std::fs::remove_file(&old);
     // The Linux player Windows exports with, when it's there.
     if let (Some(u), Some(want)) = (&rel.linux_url, listed_sum(&sums, "gex-linux")) {
         let player = exe.with_file_name("players").join("gex-linux");
@@ -414,6 +394,13 @@ pub fn restart(ctx: &eframe::egui::Context, exe: Option<&Path>, project: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_from_older_versions_still_load() {
+        let s: Settings = ron::from_str(r#"(mode: Ask, skip: Some("0.3.0"), previous: Some("0.2.0"))"#).unwrap();
+        assert_eq!(s.mode, Mode::Ask);
+        assert_eq!(s.skip.as_deref(), Some("0.3.0"));
+    }
 
     #[test]
     fn versions_compare_by_number() {

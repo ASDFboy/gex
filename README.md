@@ -33,7 +33,7 @@ to each release as `gex-linux`.
 GEX keeps itself up to date: when the editor starts (and every 6 hours) it checks this
 repository's latest release; a newer one is downloaded, checked against the release's SHA-256
 list, put in place and a restart offered. View → Updates chooses whether it installs by itself,
-asks first or doesn't check, and can go back to the version before. It uses the system's `curl`,
+asks first or doesn't check; the old version is removed once the new one starts. It uses the system's `curl`,
 which Windows 10 and later have.
 
 New releases are built by GitHub: raise the version in `Cargo.toml` and push to `main` (or push the
