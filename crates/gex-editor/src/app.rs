@@ -144,6 +144,9 @@ impl EditorApp {
         if std::mem::take(&mut self.launcher.join) {
             self.collab_panel.open = true;
         }
+        if std::mem::take(&mut self.launcher.updates) {
+            self.updater.window = true;
+        }
     }
 
     /// Working together: the window, joining, and the session itself.
@@ -176,39 +179,142 @@ impl EditorApp {
                 self.collab_panel.open = true;
             }
         }
-        if let Some(j) = crate::collab::window(ctx, &mut self.collab_panel, self.st.as_mut(), &self.joining) {
+        if let Some(j) = crate::collab::window(ctx, &mut self.collab_panel, self.st.as_mut(), &mut self.joining) {
             self.joining = Some(j);
         }
     }
 
-    /// A new GEX was downloaded: say so, with a restart button.
+    /// Updates: a bar when there's a new version (to install, or installed), and the Updates
+    /// window (View → Updates).
     fn update_bar(&mut self, ui: &mut egui::Ui) {
         use crate::update::State;
-        self.updater.poll();
-        if matches!(self.updater.state, State::Checking | State::Downloading(_)) {
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+        let progress = self.updater.poll();
+        match &self.updater.state {
+            State::Checking => ui.ctx().request_repaint_after(std::time::Duration::from_secs(1)),
+            State::Downloading(_) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
+            _ => {}
         }
-        let State::Ready(v) = self.updater.state.clone() else { return };
+        self.updates_window(ui.ctx());
+        let (rel, ready) = match self.updater.state.clone() {
+            State::Available(r) => (r, false),
+            State::Downloading(r) => (r, false),
+            State::Ready(r) => (r, true),
+            _ => return,
+        };
         if self.updater.dismissed {
             return;
         }
         egui::Panel::top("update bar").frame(egui::Frame::NONE.fill(theme::GRAY).inner_margin(egui::Margin::symmetric(8, 4))).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("GEX {} is installed (this is {}). Restart to use it.", v, crate::update::VERSION)).color(theme::TEXT));
-                let label = if self.st.is_some() { "Save all and restart" } else { "Restart" };
-                if ui.button(label).clicked() {
-                    let dir = self.st.as_mut().map(|st| {
-                        st.save_all();
-                        self.ws.save(&st.project.dir);
-                        st.project.dir.clone()
-                    });
-                    crate::update::restart(ui.ctx(), self.updater.exe(), dir.as_deref());
+                if let Some(f) = progress {
+                    ui.label(RichText::new(format!("Downloading GEX {}…", rel.version)).color(theme::TEXT));
+                    ui.add(egui::ProgressBar::new(f).desired_width(200.0).show_percentage());
+                    return;
                 }
-                if ui.button("Later").tip("The new version starts next time you open GEX").clicked() {
+                let what = if ready { format!("GEX {} is installed (this is {}). Restart to use it.", rel.version, crate::update::VERSION) } else { format!("GEX {} is out (this is {}).", rel.version, crate::update::VERSION) };
+                ui.label(RichText::new(what).color(theme::TEXT));
+                if !rel.notes.trim().is_empty() && ui.button("What's new").clicked() {
+                    self.updater.window = true;
+                    self.updater.notes = true;
+                }
+                if ready {
+                    let label = if self.st.is_some() { "Save all and restart" } else { "Restart" };
+                    if ui.button(label).clicked() {
+                        let dir = self.st.as_mut().map(|st| {
+                            st.save_all();
+                            self.ws.save(&st.project.dir);
+                            st.project.dir.clone()
+                        });
+                        crate::update::restart(ui.ctx(), self.updater.exe(), dir.as_deref());
+                    }
+                } else {
+                    if ui.button("Install").tip("Downloads it, checks it and puts it in place; you choose when to restart").clicked() {
+                        self.updater.install();
+                    }
+                    if ui.button("Skip this version").clicked() {
+                        self.updater.skip();
+                    }
+                }
+                if ui.button("Later").tip(if ready { "The new version starts next time you open GEX" } else { "Ask again next time" }).clicked() {
                     self.updater.dismissed = true;
                 }
             });
         });
+    }
+
+    fn updates_window(&mut self, ctx: &egui::Context) {
+        use crate::update::{Mode, State};
+        if !self.updater.window {
+            return;
+        }
+        let mut open = true;
+        let mut roll_back = false;
+        egui::Window::new("Updates").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+            ui.set_width(420.0);
+            let u = &mut self.updater;
+            ui.label(RichText::new(format!("GEX {}", crate::update::VERSION)).strong().color(theme::TEXT));
+            let status = match &u.state {
+                State::Off => "Not checked.".to_string(),
+                State::Checking => "Checking for a new version…".to_string(),
+                State::Available(r) => format!("GEX {} is out.", r.version),
+                State::Downloading(r) => format!("Downloading GEX {}…", r.version),
+                State::Ready(r) => format!("GEX {} is installed: restart to use it.", r.version),
+                State::UpToDate => "Up to date.".to_string(),
+                State::Failed(e) => format!("Couldn't update: {}", e),
+            };
+            ui.label(RichText::new(status).color(theme::TEXT_DIM));
+            ui.separator();
+            let before = u.settings.mode;
+            ui.radio_value(&mut u.settings.mode, Mode::Auto, "Install new versions by itself (then offer a restart)");
+            ui.radio_value(&mut u.settings.mode, Mode::Ask, "Tell me first, and wait for Install");
+            ui.radio_value(&mut u.settings.mode, Mode::Off, "Don't check");
+            if u.settings.mode != before {
+                u.settings.save();
+            }
+            ui.label(RichText::new("GEX checks GitHub (ASDFboy/gex) when it starts and every 6 hours. Downloads are checked against the release's SHA-256 list before they're used. For every project on this computer.").small().color(theme::TEXT_DIM));
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!matches!(u.state, State::Checking | State::Downloading(_) | State::Ready(_)), egui::Button::new("Check now")).clicked() {
+                    u.settings.skip = None;
+                    u.check();
+                }
+                if let State::Available(_) = u.state {
+                    if ui.button("Install").clicked() {
+                        u.install();
+                    }
+                }
+                if let Some(prev) = u.previous() {
+                    if ui.button(format!("Go back to {}", prev)).tip("Puts the version before this one back (this one is kept instead) and restarts").clicked() {
+                        roll_back = true;
+                    }
+                }
+            });
+            let notes = match &u.state {
+                State::Available(r) | State::Downloading(r) | State::Ready(r) => Some(r.notes.clone()),
+                _ => None,
+            };
+            if let Some(n) = notes.filter(|n| !n.trim().is_empty()) {
+                ui.separator();
+                egui::CollapsingHeader::new("What's new").default_open(u.notes).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        ui.label(n);
+                    });
+                });
+            }
+        });
+        if roll_back {
+            let dir = self.st.as_mut().map(|st| {
+                st.save_all();
+                self.ws.save(&st.project.dir);
+                st.project.dir.clone()
+            });
+            if let Err(e) = self.updater.roll_back(ctx, dir.as_deref()) {
+                self.updater.state = crate::update::State::Failed(e);
+            }
+        }
+        if !open {
+            self.updater.window = false;
+            self.updater.notes = false;
+        }
     }
 
     fn menu(&mut self, ui: &mut egui::Ui) {
@@ -303,6 +409,10 @@ impl EditorApp {
                 ui.checkbox(&mut self.ws.show_assets, "Assets").tip("Shows or hides the Assets panel.");
                 ui.checkbox(&mut self.ws.show_console, "Console").tip("Shows or hides the Console panel.");
                 ui.separator();
+                if ui.button("Updates…").tip("Whether GEX updates itself, checking now, and going back to the version before").clicked() {
+                    self.updater.window = true;
+                    ui.close();
+                }
                 for t in ["Timeline", "Profiler"] {
                     if ui.button(t).clicked() {
                         self.ws.open_tool(t);
@@ -657,18 +767,9 @@ impl EditorApp {
                 ui.end_row();
             });
             ui.separator();
-            let mut auto = crate::update::enabled();
-            if ui.checkbox(&mut auto, "Update GEX by itself").tip("When GEX starts it checks GitHub for a newer version, downloads it and offers a restart. For every project on this computer.").changed() {
-                crate::update::set_enabled(auto);
+            if ui.button("Updates…").tip("Whether GEX updates itself, checking now, and going back to the version before").clicked() {
+                self.updater.window = true;
             }
-            ui.label(RichText::new(format!("GEX {} · {}", crate::update::VERSION, match &self.updater.state {
-                crate::update::State::Off => "not checked".to_string(),
-                crate::update::State::Checking => "checking for updates…".to_string(),
-                crate::update::State::Downloading(v) => format!("downloading {}…", v),
-                crate::update::State::Ready(v) => format!("{} is installed, restart to use it", v),
-                crate::update::State::UpToDate => "up to date".to_string(),
-                crate::update::State::Failed(e) => format!("couldn't update: {}", e),
-            })).small().color(theme::TEXT_DIM));
             }
             if f.tab == 4 {
             theme::title(ui, "Input actions");

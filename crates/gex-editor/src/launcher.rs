@@ -36,6 +36,8 @@ pub struct Launcher {
     pub error: String,
     /// "Join someone" was clicked.
     pub join: bool,
+    /// "Updates" was clicked.
+    pub updates: bool,
 }
 
 impl Default for Launcher {
@@ -43,7 +45,7 @@ impl Default for Launcher {
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
         // Where the last project was made, or a "GEX Projects" folder.
         let location = std::fs::read_to_string(state::config_dir().join("projects_dir.txt")).ok().map(|s| s.trim().to_string()).filter(|s| Path::new(s).is_dir()).unwrap_or_else(|| home.join("GEX Projects").to_string_lossy().into_owned());
-        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, demo: false, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false }
+        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, demo: false, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false, updates: false }
     }
 }
 
@@ -315,8 +317,12 @@ impl Launcher {
                     ui.add_space(18.0);
                     theme::title(ui, "Work on someone's project");
                     ui.add_space(6.0);
-                    if ui.button("Join someone…").tip("Someone shares their project (File → Work together); join it with their address to work on it together, live.").clicked() {
+                    if ui.button("Join someone…").tip("Someone shares their project (File → Work together); join it with their address and invite code to work on it together, live.").clicked() {
                         self.join = true;
+                    }
+                    ui.add_space(18.0);
+                    if ui.button("Updates…").tip("Whether GEX updates itself, checking now, and going back to the version before").clicked() {
+                        self.updates = true;
                     }
                     if !self.error.is_empty() {
                         ui.add_space(10.0);

@@ -126,6 +126,9 @@ pub struct Net {
     pub sender: Option<u32>,
     game: String,
     level_loaded: bool,
+    /// Online because the editor started the game playing together: the scripts' own
+    /// HOST_GAME / JOIN_GAME then do nothing.
+    pub auto: bool,
 }
 
 impl Net {
@@ -149,6 +152,7 @@ impl Net {
             sender: None,
             game: game.to_string(),
             level_loaded: true,
+            auto: false,
         }
     }
 
@@ -213,6 +217,9 @@ fn game_name(st: &WorldState) -> String {
 }
 
 pub fn host(st: &mut WorldState, port: u16) -> Result<(), String> {
+    if st.net.as_ref().is_some_and(|n| n.auto) {
+        return Ok(());
+    }
     if st.net.is_some() {
         return Err("already in a multiplayer game (LEAVE_GAME first)".into());
     }
@@ -228,6 +235,9 @@ pub fn host(st: &mut WorldState, port: u16) -> Result<(), String> {
 }
 
 pub fn join(st: &mut WorldState, address: &str, port: u16) -> Result<(), String> {
+    if st.net.as_ref().is_some_and(|n| n.auto) {
+        return Ok(());
+    }
     if st.net.is_some() {
         return Err("already in a multiplayer game (LEAVE_GAME first)".into());
     }

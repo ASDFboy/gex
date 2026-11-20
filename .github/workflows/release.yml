@@ -1,5 +1,6 @@
-# Builds GEX for Windows and Linux and publishes a GitHub release with GEX.zip, gex-windows.exe
-# and gex-linux (the last two are what GEX downloads when it updates itself).
+# Builds GEX for Windows and Linux and publishes a GitHub release with GEX.zip, gex-windows.exe,
+# gex-linux (the last two are what GEX downloads when it updates itself) and SHA256SUMS (which
+# GEX checks those downloads against).
 # Runs when main is pushed with a new version in Cargo.toml (one with no release yet), when the
 # release branch is pushed, or from Actions → Release → Run workflow.
 # The release is named after the version in Cargo.toml; a release with that tag is updated.
@@ -49,6 +50,8 @@ jobs:
           zip -9 dist/GEX.zip GEX.exe
           cp GEX.exe dist/gex-windows.exe
           cp target/release/gex dist/gex-linux
+          # GEX checks what it downloads against this list.
+          (cd dist && sha256sum GEX.zip gex-windows.exe gex-linux > SHA256SUMS)
       - uses: softprops/action-gh-release@v2
         if: steps.v.outputs.skip != 'true'
         with:

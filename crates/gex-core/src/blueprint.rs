@@ -132,6 +132,11 @@ pub fn load(text: &str, read: BlueprintReader) -> Result<BlueprintTree, Blueprin
     let mut tree = BlueprintTree::new();
     let mut stack = Vec::new();
     build(&mut tree, None, &file.root, read, &mut stack)?;
+    // Uids from paths, so every computer that loads this file names its objects alike.
+    for id in tree.walk() {
+        let p = tree.path_of(id);
+        tree.objects[id].uid = crate::object::path_uid(&p);
+    }
     Ok(tree)
 }
 

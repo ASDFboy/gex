@@ -567,6 +567,35 @@ pub struct Object {
     /// True for objects that came from inside an instanced blueprint (saved by reference, not
     /// one by one).
     pub from_instance: bool,
+    /// A number naming this object for as long as it lives, the same in every copy of the
+    /// blueprint (working on a project together matches objects by it). Not saved: loading
+    /// derives it from the object's path, and new objects get a fresh one.
+    pub uid: u64,
+}
+
+/// A fresh object uid (never 0).
+pub fn new_uid() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+    splitmix(t ^ ((std::process::id() as u64) << 32) ^ N.fetch_add(0x9E37_79B9, Ordering::Relaxed)) | 1
+}
+
+/// An object uid from its path (the same on every computer).
+pub fn path_uid(path: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in path.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    splitmix(h) | 1
+}
+
+pub fn splitmix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
 }
 
 impl Object {
@@ -584,6 +613,7 @@ impl Object {
             children: Vec::new(),
             instance_of: None,
             from_instance: false,
+            uid: new_uid(),
         }
     }
     pub fn prop(&self, k: &str) -> Option<&Variant> {

@@ -192,7 +192,10 @@ pub struct Link {
     tx: std::sync::mpsc::Sender<Vec<u8>>,
     rx: Receiver<Frame>,
     queued: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// The reader is done: nothing more can arrive.
     dead: std::sync::Arc<AtomicBool>,
+    /// Closed from this side.
+    closed: bool,
     stream: TcpStream,
 }
 
@@ -209,16 +212,28 @@ impl Link {
         // Writer: sends what's queued, in order.
         {
             let mut s = stream.try_clone()?;
-            let (queued, dead, wake) = (queued.clone(), dead.clone(), wake.clone());
+            let (queued, dead) = (queued.clone(), dead.clone());
             std::thread::Builder::new().name("link-out".into()).spawn(move || {
+                let mut broken = false;
                 while let Ok(b) = wrx.recv() {
                     let n = b.len();
-                    if s.write_all(&b).is_err() {
-                        dead.store(true, Ordering::Relaxed);
-                        wake();
+                    queued.fetch_sub(n, Ordering::Relaxed);
+                    // A failed write ends sending; the reader notices the connection is gone
+                    // after taking in whatever had arrived (a last message isn't lost).
+                    if !broken && s.write_all(&b).is_err() {
+                        broken = true;
+                    }
+                }
+                if !broken {
+                    let _ = s.shutdown(std::net::Shutdown::Write);
+                }
+                // Give the other end a moment to take it all in and close; then close fully, so
+                // the reader stops waiting even if the other end never does.
+                for _ in 0..40 {
+                    if dead.load(Ordering::Relaxed) {
                         break;
                     }
-                    queued.fetch_sub(n, Ordering::Relaxed);
+                    std::thread::sleep(Duration::from_millis(50));
                 }
                 let _ = s.shutdown(std::net::Shutdown::Both);
             })?;
@@ -252,7 +267,7 @@ impl Link {
                 wake();
             })?;
         }
-        Ok(Link { tx, rx, queued, dead, stream })
+        Ok(Link { tx, rx, queued, dead, closed: false, stream })
     }
 
     fn frame(&mut self, kind: u8, body: &[u8]) {
@@ -295,13 +310,18 @@ impl Link {
     /// Nothing to do: the writer thread sends as soon as something is queued.
     pub fn flush(&mut self) {}
 
+    /// The other end's address.
+    pub fn peer_ip(&self) -> Option<std::net::IpAddr> {
+        self.stream.peer_addr().ok().map(|a| a.ip())
+    }
+
     /// Every frame that has arrived.
     pub fn recv(&mut self) -> Vec<Frame> {
         self.rx.try_iter().collect()
     }
 
     pub fn is_closed(&self) -> bool {
-        self.dead.load(Ordering::Relaxed)
+        self.closed || self.dead.load(Ordering::Relaxed)
     }
 
     /// Ends the connection once what's queued has gone.
@@ -309,11 +329,11 @@ impl Link {
         let (tx, _) = channel();
         // Dropping the sender lets the writer finish the queue, then shut the socket.
         drop(std::mem::replace(&mut self.tx, tx));
-        self.dead.store(true, Ordering::Relaxed);
+        self.closed = true;
     }
 
     pub fn close(&mut self) {
-        self.dead.store(true, Ordering::Relaxed);
+        self.closed = true;
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
     }
 }

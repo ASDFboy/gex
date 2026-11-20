@@ -30,13 +30,15 @@ To export games for other systems, put their GEX players in a `players` folder n
 --release -p gex-editor` on, or for, that system and rename it). The Linux player is attached
 to each release as `gex-linux`.
 
-GEX keeps itself up to date: when the editor starts it checks this repository's latest release,
-and if it's newer it downloads it in the background and offers a restart (turn it off under
-File → Project settings → General). It uses the system's `curl`, which Windows 10 and later have.
+GEX keeps itself up to date: when the editor starts (and every 6 hours) it checks this
+repository's latest release; a newer one is downloaded, checked against the release's SHA-256
+list, put in place and a restart offered. View → Updates chooses whether it installs by itself,
+asks first or doesn't check, and can go back to the version before. It uses the system's `curl`,
+which Windows 10 and later have.
 
 New releases are built by GitHub: raise the version in `Cargo.toml` and push to `main` (or push the
 `release` branch, or run Actions → Release) and it builds Windows and Linux, runs the tests, and
-publishes `GEX.zip`, `gex-windows.exe` and `gex-linux` under that version.
+publishes `GEX.zip`, `gex-windows.exe`, `gex-linux` and `SHA256SUMS` under that version.
 
 If the window stays blank or GEX closes straight away, the graphics driver may not like the
 default graphics API: set the `WGPU_BACKEND` environment variable to `vulkan`, `dx12` or `gl`
@@ -85,9 +87,10 @@ and start it again.
   (`NET_SPAWN`, `NET_SYNC`) stay in step between players' games, and `NET_EMIT` runs events in
   everyone's. See [Multiplayer](docs/SCRIPTING.md#multiplayer).
 - **Work together, live:** File → Work together shares the open project; others join with your
-  address and get a copy. Blueprints sync object by object, scripts letter by letter (two people
-  can type in one script), saved files sync, and everyone sees the others' tabs, mouse pointers,
-  selections and text cursors. See [docs/COLLABORATION.md](docs/COLLABORATION.md).
+  address and invite code and get a copy. Blueprints sync property by property, scripts letter
+  by letter (two people can type in one script), saved files sync; everyone sees the others'
+  tabs, pointers, selections and text cursors, and can chat, follow someone and play together.
+  Encrypted, with view-only and remove for the host. See [docs/COLLABORATION.md](docs/COLLABORATION.md).
 - **Half-Life 2 assets**, read in place from your own Steam install (`hl2://`): VPK archives,
   VTF textures, VMT materials, models, maps and sounds. They are never copied into exports.
   See [docs/HL2.md](docs/HL2.md).

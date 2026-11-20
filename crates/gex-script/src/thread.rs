@@ -19,7 +19,16 @@ pub enum ToGame {
     Frame(FrameInput),
     /// A script file changed: load it again in the running game.
     Reload(String),
+    /// Go online before the scripts start (playing together from the editor).
+    Net(NetStart),
     Stop,
+}
+
+/// How a game started from the editor goes online by itself.
+#[derive(Clone, Debug)]
+pub enum NetStart {
+    Host(u16),
+    Join(String, u16),
 }
 
 pub enum FromGame {
@@ -85,6 +94,11 @@ impl GameHandle {
             .spawn(move || run(project, tree, blueprint, c2, game_rx, game_tx, bp, debug_rx))
             .expect("couldn't start the game thread");
         GameHandle { tx, debug, breakpoints, paused: None, rx, cancel, thread: Some(thread), waiting: false }
+    }
+
+    /// Hosts or joins a multiplayer game as it starts (see `NetStart`).
+    pub fn go_online(&self, how: NetStart) {
+        let _ = self.tx.send(ToGame::Net(how));
     }
 
     pub fn reload(&self, res: &str) {
@@ -189,6 +203,21 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
             ToGame::Stop => break,
             ToGame::Reload(res) => {
                 game.reload_script(&res);
+            }
+            ToGame::Net(how) => {
+                let mut st = game.st.borrow_mut();
+                let r = match &how {
+                    NetStart::Host(port) => crate::net::host(&mut st, *port),
+                    NetStart::Join(addr, port) => crate::net::join(&mut st, addr, *port),
+                };
+                match r {
+                    Ok(()) => {
+                        if let Some(n) = st.net.as_mut() {
+                            n.auto = true;
+                        }
+                    }
+                    Err(e) => st.log(LogKind::Error, format!("playing together: {}", e)),
+                }
             }
             ToGame::Frame(input) => {
                 let started = std::time::Instant::now();
