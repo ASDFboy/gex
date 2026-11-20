@@ -111,6 +111,10 @@ fn paths_from_others_stay_in_the_project() {
 fn run(ctx: &egui::Context, a: &mut EditorState, b: &mut EditorState, ms: u64) {
     let t = Instant::now();
     while t.elapsed() < Duration::from_millis(ms) {
+        // Both are working (as if typing and clicking): changes go out right away.
+        for s in [&mut a.collab, &mut b.collab].into_iter().flatten() {
+            s.last_input = Instant::now();
+        }
         tick(ctx, a);
         tick(ctx, b);
         std::thread::sleep(Duration::from_millis(3));
@@ -327,8 +331,112 @@ fn mounted_assets_reach_others() {
     assert!(b.vfs.read("art://sub/boom.wav").is_err());
     run(&ctx, &mut a, &mut b, 800);
     assert_eq!(b.vfs.read("art://sub/boom.wav").unwrap(), b"pretend wav");
+    assert!(b.collab.as_ref().unwrap().fetching.is_empty(), "nothing left waiting");
     // Paths can't leave the cache.
     assert!(b.vfs.remote_path("art", "../../x").is_none() && b.vfs.remote_path("a:b", "x").is_none());
     a.collab = None;
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Joining puts the copy beside another project of the same name, never over it; joining again
+/// later updates that copy: files the host removed go, files changed here meanwhile are kept
+/// aside before the host's replace them, and files made here are shared.
+#[test]
+fn joining_again_updates_the_copy_safely() {
+    let tmp = std::env::temp_dir().join(format!("gex-collab-copy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let a_dir = tmp.join("a");
+    crate::templates::create_demo(&a_dir).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let ctx = egui::Context::default();
+    let mut a = EditorState::new(gex_core::project::Project::open(&a_dir).unwrap());
+    a.collab = Some(Session::host(&ctx, &a, "Ann", port).unwrap());
+    let code = a.collab.as_ref().unwrap().code.clone();
+    let name = sanitize(&a.project.config.name);
+    // Bob already has a project of his own with that name.
+    let base = tmp.join("b");
+    std::fs::create_dir_all(base.join(&name)).unwrap();
+    std::fs::write(base.join(&name).join("mine.txt"), "Bob's own").unwrap();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut j = Session::join(&ctx, "Bob", &addr, &code, &base);
+    wait_join(&ctx, &mut a, &mut j);
+    assert_ne!(j.dir, base.join(&name), "not over Bob's own project");
+    assert_eq!(std::fs::read_to_string(base.join(&name).join("mine.txt")).unwrap(), "Bob's own");
+    assert!(!base.join(&name).join(gex_core::project::PROJECT_FILE).exists());
+    let copy = j.dir.clone();
+    drop(j);
+    // Meanwhile: Ann removes one file and changes another; Bob changes that one too, and makes one.
+    let files: Vec<String> = walk(&a_dir).into_iter().map(|f| f.0).filter(|f| f.ends_with(".jlb")).collect();
+    let (gone, both, mine) = (&files[0], &files[1], &files[2]);
+    std::fs::write(copy.join(mine), "// only Bob changed this\n").unwrap();
+    std::fs::remove_file(a_dir.join(gone)).unwrap();
+    std::fs::write(a_dir.join(both), "// Ann's\n").unwrap();
+    std::fs::write(copy.join(both), "// Bob's\n").unwrap();
+    std::fs::write(copy.join("scripts/new_by_bob.jlb"), "// new\n").unwrap();
+    run(&ctx, &mut a, &mut EditorState::new(gex_core::project::Project::open(&a_dir).unwrap()), 1700);
+    let mut j = Session::join(&ctx, "Bob", &addr, &code, &base);
+    wait_join(&ctx, &mut a, &mut j);
+    assert_eq!(j.dir, copy, "the same copy again");
+    assert!(!copy.join(gone).exists(), "removed at the host: removed here");
+    assert_eq!(std::fs::read_to_string(copy.join(both)).unwrap(), "// Ann's\n");
+    let aside = PathBuf::from(format!("{} (your changes)", copy.display()));
+    assert_eq!(std::fs::read_to_string(aside.join(both)).unwrap(), "// Bob's\n", "Bob's version is kept aside");
+    let mut b = EditorState::new(gex_core::project::Project::open(&copy).unwrap());
+    j.opened = true;
+    b.collab = Some(j);
+    run(&ctx, &mut a, &mut b, 2500);
+    assert_eq!(std::fs::read_to_string(a_dir.join("scripts/new_by_bob.jlb")).unwrap(), "// new\n", "made by Bob: shared");
+    assert_eq!(std::fs::read_to_string(a_dir.join(mine)).unwrap(), "// only Bob changed this\n", "changed only by Bob: shared");
+    // A script open at Bob's (not at Ann's) is changed on Ann's computer by another program.
+    let res = "res://scripts/new_by_bob.jlb";
+    b.open_script(res, None);
+    run(&ctx, &mut a, &mut b, 400);
+    std::fs::write(a_dir.join("scripts/new_by_bob.jlb"), "// changed outside\n").unwrap();
+    run(&ctx, &mut a, &mut b, 2200);
+    assert_eq!(b.scripts[res].text, "// changed outside\n");
+    // Ann stops sharing: Bob is told (rather than trying to get back in).
+    a.collab = None;
+    let t0 = Instant::now();
+    while b.collab.as_ref().unwrap().ended.is_none() {
+        assert!(t0.elapsed() < Duration::from_secs(5), "{}", b.collab.as_ref().unwrap().status);
+        tick(&ctx, &mut b);
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    assert!(b.collab.as_ref().unwrap().ended.as_deref().unwrap().contains("stopped sharing"));
+    // Joining from the computer that shares it: a copy beside it, not onto itself.
+    a.collab = Some(Session::host(&ctx, &a, "Ann", port).unwrap());
+    let code = a.collab.as_ref().unwrap().code.clone();
+    let mut me = Session::join(&ctx, "Ann again", &addr, &code, &tmp);
+    wait_join(&ctx, &mut a, &mut me);
+    assert_ne!(me.dir, a_dir);
+    drop(me);
+    a.collab = None;
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Mounted paths found in text, and paths that would leave a mount.
+#[test]
+fn mounted_paths_are_found_and_kept_inside() {
+    let mut r = Vec::new();
+    find_refs(r#"SET(NULL, "model", "hl2://models/a.mdl") x art://b/c.png, res://x.png https://e.com gex://y"#, &mut r);
+    assert_eq!(r, vec!["hl2://models/a.mdl".to_string(), "art://b/c.png".to_string()]);
+    let mut r = Vec::new();
+    variant_refs(&Variant::List(vec![Variant::Res("hl2://m.mdl".into()), Variant::Num(1.0)]), &mut r);
+    assert_eq!(r, vec!["hl2://m.mdl".to_string()]);
+    let tmp = std::env::temp_dir().join(format!("gex-collab-mnt-{}", std::process::id()));
+    std::fs::create_dir_all(tmp.join("hl2")).unwrap();
+    let mut v = gex_assets::Vfs::new(&tmp, &Default::default());
+    v.mounts.clear();
+    let cfg = gex_core::project::ProjectConfig { mounts: vec![gex_core::project::MountConfig { scheme: "art".into(), kind: gex_core::project::MountKind::Folder(tmp.join("hl2")) }], ..Default::default() };
+    let v2 = gex_assets::Vfs::new(&tmp, &cfg);
+    for bad in ["art://../x", "art://C:/Windows/win.ini", "art://\\\\server\\x", "art://a\\..\\..\\x"] {
+        assert!(v2.folder_file(bad).is_none() && !v2.has_locally(bad), "{}", bad);
+    }
+    // Others' folder mounts are never taken on (they'd let them read any folder named here).
+    let incoming = ron::ser::to_string(&cfg).unwrap();
+    let here = tmp.join("p.jproj");
+    let merged: gex_core::project::ProjectConfig = ron::from_str(&String::from_utf8(merge_project_file(&here, incoming.as_bytes())).unwrap()).unwrap();
+    assert!(merged.mounts.is_empty());
+    let _ = std::fs::remove_dir_all(&tmp);
+    drop(v);
 }

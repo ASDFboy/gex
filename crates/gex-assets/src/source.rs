@@ -28,6 +28,10 @@ impl SourceGame {
             return g;
         }
         for game in games {
+            // A folder name inside the install, nothing that leads out of it.
+            if game.is_empty() || game.contains(['/', '\\', ':']) || game == "." || game == ".." {
+                continue;
+            }
             let dir = install.join(&game);
             if !dir.is_dir() {
                 continue;
@@ -54,11 +58,21 @@ impl SourceGame {
         g
     }
 
-    pub fn read(&self, path: &str) -> Option<Result<Vec<u8>, String>> {
+    /// A path inside the game folders, or None when it would lead out of them.
+    fn clean(path: &str) -> Option<&str> {
         let rel = path.trim_start_matches('/');
-        if rel.split('/').any(|p| p == "..") {
-            return None;
-        }
+        (!rel.is_empty() && !rel.contains(':') && !rel.starts_with('\\') && !rel.split(['/', '\\']).any(|p| p == "..")).then_some(rel)
+    }
+
+    /// Whether a file is there (without reading it).
+    pub fn has(&self, path: &str) -> bool {
+        let Some(rel) = Self::clean(path) else { return false };
+        let key = rel.to_ascii_lowercase().replace('\\', "/");
+        self.dirs.iter().any(|d| d.join(rel).is_file()) || self.vpks.iter().any(|v| v.entries.contains_key(&key))
+    }
+
+    pub fn read(&self, path: &str) -> Option<Result<Vec<u8>, String>> {
+        let rel = Self::clean(path)?;
         for d in &self.dirs {
             let p = d.join(rel);
             if p.is_file() {

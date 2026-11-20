@@ -47,6 +47,12 @@ const MAX_PEOPLE: usize = 16;
 const MAX_FAILS: u32 = 5;
 /// Joined: how long to keep trying to get back in after the connection drops.
 const RECONNECT_FOR: Duration = Duration::from_secs(60);
+/// Connections that haven't proved the code (or, joining, been welcomed) by then are dropped.
+const HANDSHAKE_FOR: Duration = Duration::from_secs(20);
+/// Hosting: connections still saying hello at once (more are turned away).
+const MAX_PENDING: usize = 32;
+/// At most this often everything shown loads again while fetched files arrive.
+const RELOAD_EVERY: Duration = Duration::from_millis(500);
 
 // ------------------------------------------------------------------ security
 
@@ -156,6 +162,8 @@ enum M {
     Asset { path: String },
     NoAsset { path: String },
     Refused { reason: String },
+    /// `token`: the shared project's id (the same each time it's shared), so a joiner can
+    /// tell its earlier copy of it from another project with the same name.
     Welcome { id: u32, project: String, people: Vec<Person>, files: Vec<(String, u64, u64)>, token: String },
     Need { paths: Vec<String> },
     /// A file; its bytes come in the next message.
@@ -175,6 +183,8 @@ enum M {
     Role { id: u32, editor: bool },
     Kicked,
     Play { bp: String, port: u16 },
+    /// The host stopped the game played together.
+    StopPlay,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -883,14 +893,16 @@ struct Peer {
     schemes: Vec<String>,
     /// Mounted files to send them.
     assets: VecDeque<String>,
-    /// Hosting: mounted files already offered to them.
-    offered: HashSet<String>,
+    /// Hosting: mounted files already offered to them (and the version offered).
+    offered: HashMap<String, u64>,
+    /// When the connection came (to drop ones that never finish saying hello).
+    since: Instant,
 }
 
 impl Peer {
     fn new(link: Link) -> Peer {
         let ip = link.peer_ip();
-        Peer { id: 0, link, ip, stage: Stage::Hi, out: None, inn: None, nonce: Vec::new(), queue: VecDeque::new(), synced_sent: false, asked: false, incoming: None, incoming_asset: false, editor: true, schemes: Vec::new(), assets: VecDeque::new(), offered: HashSet::new() }
+        Peer { id: 0, link, ip, stage: Stage::Hi, out: None, inn: None, nonce: Vec::new(), queue: VecDeque::new(), synced_sent: false, asked: false, incoming: None, incoming_asset: false, editor: true, schemes: Vec::new(), assets: VecDeque::new(), offered: HashMap::new(), since: Instant::now() }
     }
     fn hi(&mut self, m: &Hi) {
         if let Ok(b) = serde_json::to_vec(m) {
@@ -959,9 +971,10 @@ pub struct Session {
     /// Joining: bytes to get and got.
     pub total: u64,
     pub got: u64,
-    /// Hosting: a mark in the project's .gex folder, so joining from this same computer doesn't
-    /// copy the project onto itself.
+    /// The shared project's id (hosting: kept in its .gex folder; joined: the host's).
     token: String,
+    /// Joined: welcomed yet on this connection (or when the connection came).
+    hello_at: Option<Instant>,
     files: HashMap<String, FileInfo>,
     scan_at: Instant,
     bps: HashMap<String, Bp>,
@@ -985,14 +998,25 @@ pub struct Session {
     pub addrs: Vec<(String, &'static str)>,
     /// Mounted files asked for (each once a session).
     asked_assets: HashSet<String>,
-    /// Hosting: mounted files being fetched from someone, and who's waiting for them.
-    waiting: HashMap<String, Vec<u32>>,
+    /// Mounted files asked for and still on their way.
+    pub fetching: HashSet<String>,
+    /// Hosting: mounted files being fetched from someone (who), and who's waiting for them.
+    waiting: HashMap<String, (u32, Vec<u32>)>,
     /// Hosting: the project's mounted files may have changed (new references): offer again.
     refs_dirty: bool,
     refs_at: Instant,
-    ref_hashes: HashMap<String, u64>,
-    /// Fetched files arrived: textures and models load again.
+    /// Hosting: each named mounted file's version: (modified, for files in mounted folders; hash).
+    ref_hashes: HashMap<String, (u128, u64)>,
+    /// Hosting: the mounted files each project file names, by (length, modified), so files
+    /// that haven't changed aren't read again.
+    file_refs: HashMap<String, (u64, u128, Vec<String>)>,
+    /// Files arrived (fetched, or images and models changed by others): what's shown loads
+    /// them again (at most every RELOAD_EVERY).
     reload: bool,
+    reload_at: Instant,
+    /// When something was last typed or clicked here (the open blueprint is compared with the
+    /// shared one often only while it's being worked on).
+    last_input: Instant,
     /// The mounts told to the host.
     told_schemes: Option<Vec<String>>,
     pub chat: Vec<ChatLine>,
@@ -1002,6 +1026,10 @@ pub struct Session {
     followed_script: String,
     /// The host started playing together: (blueprint, port).
     play: Option<(String, u16)>,
+    /// Hosting: playing together (the blueprint), for people who join meanwhile. Joined: the
+    /// game here was started by the host's.
+    playing_together: Option<String>,
+    stop_play: bool,
     /// Joined: the host's address as this computer sees it (for playing together).
     host_ip: Option<IpAddr>,
 }
@@ -1025,6 +1053,84 @@ fn sanitize(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' }).take(64).collect();
     let s = s.trim().to_string();
     if s.is_empty() { "project".into() } else { s }
+}
+
+/// The project's id for sharing: made the first time it's shared, the same after.
+fn share_id(dir: &Path) -> String {
+    let f = dir.join(".gex").join("share_id");
+    if let Some(t) = std::fs::read_to_string(&f).ok().map(|t| t.trim().to_string()).filter(|t| t.len() == 16 && t.chars().all(|c| c.is_ascii_hexdigit())) {
+        return t;
+    }
+    let t: String = random::<8>().iter().map(|b| format!("{:02x}", b)).collect();
+    let _ = std::fs::create_dir_all(dir.join(".gex"));
+    let _ = std::fs::write(&f, &t);
+    t
+}
+
+/// Joined: what a copy of someone's project last had from them (their project's id and each
+/// file's hash), in the copy's .gex folder. Tells an earlier copy from another project with the
+/// same name, and which files were changed here while not working together.
+#[derive(Serialize, Deserialize, Default)]
+struct Copy {
+    id: String,
+    files: HashMap<String, u64>,
+}
+
+fn copy_file(dir: &Path) -> PathBuf {
+    dir.join(".gex").join("joined.json")
+}
+
+fn read_copy(dir: &Path) -> Option<Copy> {
+    serde_json::from_slice(&std::fs::read(copy_file(dir)).ok()?).ok()
+}
+
+/// Where a joined project goes: its own folder, or the copy made of it before; never over
+/// another project of the same name (or the shared one itself, joining from the same computer).
+fn copy_dir(base: &Path, project: &str, id: &str) -> PathBuf {
+    let name = sanitize(project);
+    let free = |d: &Path| std::fs::read_dir(d).map(|mut r| r.next().is_none()).unwrap_or(true) || read_copy(d).is_some_and(|c| !id.is_empty() && c.id == id);
+    for n in 0..100 {
+        let d = base.join(match n {
+            0 => name.clone(),
+            1 => format!("{} (joined)", name),
+            n => format!("{} (joined {})", name, n),
+        });
+        if free(&d) {
+            return d;
+        }
+    }
+    base.join(format!("{} (joined {})", name, std::process::id()))
+}
+
+/// Mounted paths named in a text: "scheme://..." up to a quote, space or bracket (project and
+/// built-in assets and web addresses left out).
+fn find_refs(text: &str, out: &mut Vec<String>) {
+    let b = text.as_bytes();
+    let mut from = 0;
+    while let Some(i) = text[from..].find("://") {
+        let at = from + i;
+        from = at + 3;
+        let mut st = at;
+        while st > 0 && (b[st - 1].is_ascii_alphanumeric() || b[st - 1] == b'_' || b[st - 1] == b'-') {
+            st -= 1;
+        }
+        let scheme = &text[st..at];
+        if scheme.is_empty() || scheme.len() > 32 || matches!(scheme, "res" | "gex" | "http" | "https") {
+            continue;
+        }
+        let end = text[from..].find(|c: char| matches!(c, '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ')' | ',' | ';' | ']' | '}' | '\\')).map(|e| from + e).unwrap_or(text.len());
+        if end > from && end - st < 1024 {
+            out.push(text[st..end].to_string());
+        }
+    }
+}
+
+fn variant_refs(v: &Variant, out: &mut Vec<String>) {
+    match v {
+        Variant::Text(t) | Variant::Res(t) if t.contains("://") => find_refs(t, out),
+        Variant::List(l) => l.iter().for_each(|x| variant_refs(x, out)),
+        _ => {}
+    }
 }
 
 fn clean_name(name: &str, id: u32) -> String {
@@ -1067,6 +1173,7 @@ impl Session {
             total: 0,
             got: 0,
             token: String::new(),
+            hello_at: None,
             files: HashMap::new(),
             scan_at: now,
             bps: HashMap::new(),
@@ -1086,17 +1193,23 @@ impl Session {
             busy: false,
             addrs: Vec::new(),
             asked_assets: HashSet::new(),
+            fetching: HashSet::new(),
             waiting: HashMap::new(),
             refs_dirty: true,
             refs_at: now,
             ref_hashes: HashMap::new(),
+            file_refs: HashMap::new(),
             reload: false,
+            reload_at: now,
+            last_input: now,
             told_schemes: None,
             chat: Vec::new(),
             unread: 0,
             following: None,
             followed_script: String::new(),
             play: None,
+            playing_together: None,
+            stop_play: false,
             host_ip: None,
         }
     }
@@ -1113,9 +1226,7 @@ impl Session {
         s.port = port;
         s.code = new_code();
         s.project = st.project.config.name.clone();
-        s.token = random::<8>().iter().map(|b| format!("{:02x}", b)).collect();
-        let _ = std::fs::create_dir_all(st.project.dir.join(".gex"));
-        let _ = std::fs::write(st.project.dir.join(".gex").join("sharing"), &s.token);
+        s.token = share_id(&st.project.dir);
         s.addrs = gex_script::wire::addresses();
         s.scan(true);
         s.status = format!("Sharing {}", s.project);
@@ -1154,7 +1265,8 @@ impl Session {
     }
 
     /// Looks for files changed on this computer and sends them (`quiet`: only take note).
-    fn scan(&mut self, quiet: bool) {
+    /// Gives the ones sent.
+    fn scan(&mut self, quiet: bool) -> Vec<String> {
         self.scan_at = Instant::now();
         let mut seen = HashSet::new();
         let mut changed = Vec::new();
@@ -1180,17 +1292,48 @@ impl Session {
         }
         // View-only: changes here aren't shared.
         if quiet || self.me == 0 || !self.editor {
-            return;
+            return Vec::new();
         }
+        let mut sent = Vec::with_capacity(changed.len());
         for (rel, bytes) in changed {
             for p in &mut self.peers {
                 if p.stage == Stage::Ready {
                     p.send_file(&rel, &bytes);
                 }
             }
+            sent.push(rel);
         }
         for g in gone {
             self.send_all(&M::Gone { path: g });
+        }
+        sent
+    }
+
+    /// Hosting: scripts and blueprints changed on disk here by something else (another
+    /// program, a git pull) while not open here: everyone who has them open gets them as they
+    /// are now.
+    fn changed_outside(&mut self, st: &EditorState, rels: &[String]) {
+        for rel in rels {
+            let res = format!("res://{}", rel);
+            if rel.ends_with(".jlb") && !st.scripts.contains_key(&res) {
+                let Some(d) = self.scripts.get_mut(&res) else { continue };
+                let Ok(text) = std::fs::read_to_string(self.dir.join(rel)) else { continue };
+                if text != d.text {
+                    d.text = text.clone();
+                    d.rev += 1;
+                    d.log.clear();
+                    let m = M::ScriptState { res, rev: d.rev, text };
+                    self.send_all(&m);
+                }
+            } else if rel.ends_with(".jblueprint") && open_tree(st, &res).is_none() && self.bps.contains_key(&res) {
+                let f = read_bp_flat(st, &res);
+                let bp = self.bps.get_mut(&res).unwrap();
+                if f != bp.flat {
+                    let patches = f.iter().map(|(u, e)| Patch::full(*u, e)).collect();
+                    bp.flat = f;
+                    self.send_all(&M::BpState { res, patches });
+                }
+            }
         }
     }
 
@@ -1217,9 +1360,28 @@ impl Session {
             self.files.insert(rel.to_string(), FileInfo { len: m.len(), modified: modified(&m), hash: fnv(bytes) });
         }
         if let Some(st) = st {
-            file_arrived(st, rel, bytes);
+            self.reload |= file_arrived(st, rel, bytes);
         }
         true
+    }
+
+    /// Joined: a file changed here that's about to be replaced by the host's version: a copy
+    /// goes beside the project, in "<project> (your changes)".
+    fn back_up(&self, rel: &str, bytes: &[u8]) -> bool {
+        let Some(p) = safe_path(Path::new(&format!("{} (your changes)", self.dir.display())), rel) else { return false };
+        p.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && std::fs::write(p, bytes).is_ok()
+    }
+
+    /// Joined: notes what this copy has of the project, for next time.
+    fn save_copy(&self) {
+        if self.host || !self.ready || self.token.is_empty() {
+            return;
+        }
+        let c = Copy { id: self.token.clone(), files: self.files.iter().map(|(k, f)| (k.clone(), f.hash)).collect() };
+        if let Ok(b) = serde_json::to_vec(&c) {
+            let _ = std::fs::create_dir_all(self.dir.join(".gex"));
+            let _ = std::fs::write(copy_file(&self.dir), b);
+        }
     }
 
     fn remove_file(&mut self, rel: &str) {
@@ -1238,8 +1400,9 @@ impl Session {
     }
 }
 
-/// A file arrived for an open project: open scripts and blueprints now match the disk.
-fn file_arrived(st: &mut EditorState, rel: &str, bytes: &[u8]) {
+/// A file arrived for an open project: open scripts and blueprints now match the disk. True
+/// when what's shown should load again (an image, model, sound...).
+fn file_arrived(st: &mut EditorState, rel: &str, bytes: &[u8]) -> bool {
     let res = format!("res://{}", rel);
     let text = String::from_utf8_lossy(bytes).into_owned();
     if let Some(s) = st.scripts.get_mut(&res) {
@@ -1259,14 +1422,15 @@ fn file_arrived(st: &mut EditorState, rel: &str, bytes: &[u8]) {
             st.project.config = p.config;
             if remount {
                 st.remount();
+                return true;
             }
         }
+        false
     } else if !rel.ends_with(".jlb") && !rel.ends_with(".jblueprint") {
-        // An image, model, sound... changed: what's shown loads it again.
         st.previews.forget(&res);
-        if let Some(r) = &mut st.renderer {
-            r.reload_textures();
-        }
+        true
+    } else {
+        false
     }
 }
 
@@ -1277,9 +1441,11 @@ fn merge_project_file(here: &Path, incoming: &[u8]) -> Vec<u8> {
     use gex_core::project::{MountKind, ProjectConfig};
     let Ok(mut cfg) = ron::from_str::<ProjectConfig>(&String::from_utf8_lossy(incoming)) else { return incoming.to_vec() };
     let local: Vec<gex_core::project::MountConfig> = std::fs::read_to_string(here).ok().and_then(|t| ron::from_str::<ProjectConfig>(&t).ok()).map(|c| c.mounts).unwrap_or_default();
+    // Another computer's mounts are only taken where it's Half-Life 2 at a place this computer
+    // has it too; never a folder (that would let others read any folder here they name).
     let exists = |m: &gex_core::project::MountConfig| match &m.kind {
-        MountKind::Folder(p) => p.is_dir(),
-        MountKind::SourceGame { install, .. } => install.is_dir(),
+        MountKind::Folder(_) => false,
+        MountKind::SourceGame { install, games } => install.is_dir() && games.iter().all(|g| gex_assets::source::HL2_GAMES.contains(&g.as_str())),
     };
     let mut mounts: Vec<_> = cfg.mounts.iter().filter_map(|m| local.iter().find(|l| l.scheme == m.scheme).cloned().or_else(|| exists(m).then(|| m.clone()))).collect();
     let extra: Vec<_> = local.iter().filter(|l| !mounts.iter().any(|m| m.scheme == l.scheme)).cloned().collect();
@@ -1301,54 +1467,6 @@ fn remote_file(st: &EditorState, path: &str) -> Option<PathBuf> {
 fn mounted(path: &str) -> Option<(&str, &str)> {
     let (scheme, rel) = path.split_once("://")?;
     (scheme != "res" && scheme != "gex" && !rel.is_empty() && path.len() < 1024).then_some((scheme, rel))
-}
-
-/// Every mounted file the project names (in blueprints, scripts, animations, settings, and the
-/// open blueprints' unsaved changes): what others need to see and hear it.
-fn asset_refs(st: &EditorState, schemes: &[String]) -> HashSet<String> {
-    let mut out = HashSet::new();
-    if schemes.is_empty() {
-        return out;
-    }
-    let mut scan = |text: &str| {
-        for sch in schemes {
-            let pat = format!("{}://", sch);
-            let mut from = 0;
-            while let Some(i) = text[from..].find(&pat) {
-                let at = from + i;
-                from = at + pat.len();
-                if text[..at].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
-                    continue;
-                }
-                let end = text[from..].find(|c: char| matches!(c, '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ')' | ',' | ';' | ']' | '}' | '\\')).map(|e| from + e).unwrap_or(text.len());
-                if end > from {
-                    out.insert(text[at..end].to_string());
-                }
-            }
-        }
-    };
-    for (rel, _, _) in walk(&st.project.dir) {
-        if [".jblueprint", ".jlb", ".anim", ".jproj", ".ron", ".json", ".txt", ".vmt"].iter().any(|e| rel.ends_with(e)) {
-            if let Ok(t) = std::fs::read_to_string(st.project.dir.join(&rel)) {
-                scan(&t);
-            }
-        }
-    }
-    for t in std::iter::once(&st.tree).chain(st.docs.iter().map(|d| &d.tree)) {
-        for (_, o) in t.objects.iter() {
-            for v in o.props.values() {
-                if let Ok(j) = serde_json::to_string(v) {
-                    if j.contains("://") {
-                        scan(&j);
-                    }
-                }
-            }
-        }
-    }
-    for sc in st.scripts.values() {
-        scan(&sc.text);
-    }
-    out
 }
 
 /// Undo steps that take in others' changes (so undo takes back only your own). Going through
@@ -1472,6 +1590,9 @@ fn read_bp_flat(st: &EditorState, res: &str) -> Flat {
 pub fn tick(ctx: &egui::Context, st: &mut EditorState) {
     let Some(mut s) = st.collab.take() else { return };
     s.frame = ctx.cumulative_frame_nr();
+    if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+        s.last_input = Instant::now();
+    }
     s.pump(ctx, Some(st));
     if s.ended.is_none() && s.reconnect.is_none() {
         s.local_changes(st);
@@ -1499,6 +1620,8 @@ impl Session {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else if self.connecting.is_some() || self.reconnect.is_some() {
             ctx.request_repaint_after(Duration::from_millis(100));
+        } else if self.reload {
+            ctx.request_repaint_after(RELOAD_EVERY);
         } else {
             ctx.request_repaint_after(Duration::from_secs(2));
         }
@@ -1514,7 +1637,9 @@ impl Session {
         self.peers.clear();
         self.people.clear();
         self.following = None;
-        self.reconnect = Some((now + RECONNECT_FOR, now));
+        // Already trying: the minute counts from the first drop.
+        let until = self.reconnect.map(|r| r.0).unwrap_or(now + RECONNECT_FOR);
+        self.reconnect = Some((until, now + Duration::from_secs(1)));
         self.status = format!("{}: getting back in…", why);
         for bp in self.bps.values_mut() {
             bp.ready = false;
@@ -1554,6 +1679,7 @@ impl Session {
                             p.nonce = random::<16>().to_vec();
                             p.hi(&Hi::Hi { v: PROTOCOL, nonce: p.nonce.clone() });
                             self.host_ip = p.ip;
+                            self.hello_at = Some(Instant::now());
                             self.peers.push(p);
                             if self.reconnect.is_none() {
                                 self.status = "Connected, checking the invite code…".into();
@@ -1581,6 +1707,10 @@ impl Session {
         }
         if let Some(l) = &self.listener {
             while let Ok(sock) = l.rx.try_recv() {
+                // Too many connections that haven't proved the code: turned away.
+                if self.peers.iter().filter(|p| p.stage != Stage::Ready).count() >= MAX_PENDING {
+                    continue;
+                }
                 let Ok(link) = Link::new(sock, self.waker.clone()) else { continue };
                 let mut p = Peer::new(link);
                 if p.ip.is_some_and(|ip| self.banned.contains(&ip)) {
@@ -1589,6 +1719,23 @@ impl Session {
                     continue;
                 }
                 self.peers.push(p);
+            }
+        }
+        // Connections that never finish saying hello.
+        if self.host {
+            for p in &mut self.peers {
+                if p.stage != Stage::Ready && p.since.elapsed() > HANDSHAKE_FOR && !p.link.is_closed() {
+                    p.link.close();
+                }
+            }
+        } else if self.hello_at.is_some_and(|t| t.elapsed() > HANDSHAKE_FOR) {
+            self.hello_at = None;
+            if !self.opened {
+                self.ended = Some(format!("no answer from {}:{} (is that the right address and port, and is it sharing?)", self.address.0, self.address.1));
+                return;
+            }
+            for p in &mut self.peers {
+                p.link.close();
             }
         }
         // Hosting: send joiners their files, a few at a time.
@@ -1606,6 +1753,10 @@ impl Session {
                     p.send(&M::Synced);
                     p.synced_sent = true;
                     synced = true;
+                    // Playing together already: their game joins too.
+                    if let Some(bp) = &self.playing_together {
+                        p.send(&M::Play { bp: bp.clone(), port: GAME_PORT });
+                    }
                 }
             }
             if synced {
@@ -1775,6 +1926,20 @@ impl Session {
                     }
                     self.people.retain(|x| x.id != p.id);
                     self.send_all(&M::Left { id: p.id });
+                    // Files they were fetching for others won't come.
+                    let lost: Vec<String> = self.waiting.iter().filter(|(_, w)| w.0 == p.id).map(|(k, _)| k.clone()).collect();
+                    for path in lost {
+                        for w in self.waiting.remove(&path).map(|w| w.1).unwrap_or_default() {
+                            if let Some(x) = self.peers.iter_mut().find(|x| x.id == w) {
+                                x.send(&M::NoAsset { path: path.clone() });
+                            }
+                        }
+                        self.asked_assets.remove(&path);
+                        self.fetching.remove(&path);
+                    }
+                    for w in self.waiting.values_mut() {
+                        w.1.retain(|x| *x != p.id);
+                    }
                     if self.following == Some(p.id) {
                         self.following = None;
                     }
@@ -1785,8 +1950,12 @@ impl Session {
             }
         }
         // Files changed here.
-        if self.ready && self.opened && self.scan_at.elapsed() > Duration::from_millis(1500) {
-            self.scan(false);
+        // (Not while getting back in: what changed here meanwhile is worked out on the way in.)
+        if self.ready && self.opened && self.reconnect.is_none() && self.scan_at.elapsed() > Duration::from_millis(1500) {
+            let sent = self.scan(false);
+            if let (true, false, Some(st)) = (self.host, sent.is_empty(), st.as_deref()) {
+                self.changed_outside(st, &sent);
+            }
         }
     }
 
@@ -1829,18 +1998,19 @@ impl Session {
             M::NeedAssets { paths } => {
                 let Some(st) = st else { return };
                 for path in paths.into_iter().take(5000) {
-                    if mounted(&path).is_none() || st.vfs.remote_path(mounted(&path).unwrap().0, mounted(&path).unwrap().1).is_none() {
+                    let Some(scheme) = mounted(&path).filter(|(sc, rel)| st.vfs.remote_path(sc, rel).is_some()).map(|(sc, _)| sc.to_string()) else {
+                        self.peers[i].send(&M::NoAsset { path: path.clone() });
                         continue;
-                    }
+                    };
                     let here = st.vfs.has_locally(&path) || remote_file(st, &path).is_some_and(|p| p.is_file());
-                    let scheme = mounted(&path).unwrap().0.to_string();
                     if !here {
                         // Someone else has it mounted: fetch it through here.
                         if let Some(owner) = self.peers.iter().position(|p| p.id != pid && p.stage == Stage::Ready && p.schemes.contains(&scheme)) {
-                            let w = self.waiting.entry(path.clone()).or_default();
-                            let first = w.is_empty();
-                            if !w.contains(&pid) {
-                                w.push(pid);
+                            let oid = self.peers[owner].id;
+                            let w = self.waiting.entry(path.clone()).or_insert((oid, Vec::new()));
+                            let first = w.1.is_empty();
+                            if !w.1.contains(&pid) {
+                                w.1.push(pid);
                             }
                             if first {
                                 self.peers[owner].send(&M::NeedAssets { paths: vec![path] });
@@ -1852,7 +2022,8 @@ impl Session {
                 }
             }
             M::NoAsset { path } => {
-                for w in self.waiting.remove(&path).unwrap_or_default() {
+                self.fetching.remove(&path);
+                for w in self.waiting.remove(&path).map(|w| w.1).unwrap_or_default() {
                     if let Some(p) = self.peers.iter_mut().find(|p| p.id == w) {
                         p.send(&M::NoAsset { path: path.clone() });
                     }
@@ -1919,6 +2090,7 @@ impl Session {
                         }
                     }
                 }
+                self.refs_dirty = true;
                 // Everyone, the sender too: that's how it knows its change got here.
                 self.send_all(&M::Objects { res, from: pid, patches: took });
             }
@@ -1979,6 +2151,9 @@ impl Session {
                 }
                 let rev = d.rev;
                 edit_open_script(ctx, st, &res, &op);
+                if op.t.contains("://") {
+                    self.refs_dirty = true;
+                }
                 self.send_all(&M::Edit { res, from: pid, rev, op });
             }
             _ => {}
@@ -2007,30 +2182,65 @@ impl Session {
                 self.me = id;
                 self.editor = true;
                 self.people = people;
+                self.hello_at = None;
                 if !self.opened {
                     self.project = project.clone();
-                    self.dir = self.base_dir.join(sanitize(&project));
-                    // Joining from the computer that shares it, into its own folder: a copy beside it.
-                    let mark = |d: &Path| std::fs::read_to_string(d.join(".gex").join("sharing")).is_ok_and(|t| !token.is_empty() && t == token);
-                    if mark(&self.dir) {
-                        self.dir = self.base_dir.join(format!("{} (joined)", sanitize(&project)));
-                    }
+                    self.dir = copy_dir(&self.base_dir, &project, &token);
                     let _ = std::fs::create_dir_all(&self.dir);
                 }
+                self.token = token;
+                // What this copy had in step with the host: before the connection dropped, or
+                // the last time.
+                let known: HashMap<String, u64> = if !self.files.is_empty() {
+                    self.files.iter().map(|(k, f)| (k.clone(), f.hash)).collect()
+                } else {
+                    read_copy(&self.dir).filter(|c| c.id == self.token).map(|c| c.files).unwrap_or_default()
+                };
+                self.files.clear();
+                let theirs: HashSet<String> = files.iter().map(|f| f.0.clone()).collect();
                 let mut need = Vec::new();
+                let mut backed = 0;
                 self.total = 0;
                 self.got = 0;
                 for (rel, len, hash) in files {
                     let Some(p) = safe_path(&self.dir, &rel) else { continue };
-                    let same = std::fs::metadata(&p).is_ok_and(|m| m.len() == len) && std::fs::read(&p).is_ok_and(|b| fnv(&b) == hash);
-                    if same {
+                    let here = std::fs::read(&p).ok();
+                    let h = here.as_deref().map(fnv);
+                    if h == Some(hash) {
                         if let Ok(m) = std::fs::metadata(&p) {
                             self.files.insert(rel.clone(), FileInfo { len, modified: modified(&m), hash });
                         }
-                    } else {
-                        self.total += len;
-                        need.push(rel);
+                        continue;
                     }
+                    // Changed here while not in step: if the host's is as it was, this one is
+                    // shared once in step; if both changed, this one's kept beside the project
+                    // and the host's replaces it.
+                    if let (Some(b), Some(h)) = (&here, h) {
+                        let was = known.get(&rel).copied();
+                        if was != Some(h) {
+                            if was == Some(hash) {
+                                continue;
+                            }
+                            if self.back_up(&rel, b) {
+                                backed += 1;
+                            }
+                        }
+                    }
+                    self.total += len;
+                    need.push(rel);
+                }
+                // Gone at the host meanwhile: gone here too (unless changed here: then it's
+                // shared again once in step).
+                if !known.is_empty() {
+                    for (rel, _, _) in walk(&self.dir) {
+                        if !theirs.contains(&rel) && known.get(&rel).is_some_and(|k| std::fs::read(self.dir.join(&rel)).is_ok_and(|b| fnv(&b) == *k)) {
+                            self.remove_file(&rel);
+                        }
+                    }
+                }
+                if backed > 0 {
+                    let line = format!("{} file{} you changed while not connected {} replaced by the host's; yours are in \"{} (your changes)\".", backed, if backed == 1 { "" } else { "s" }, if backed == 1 { "was" } else { "were" }, self.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+                    self.chat.push(ChatLine { from: 0, name: String::new(), text: line });
                 }
                 if self.reconnect.is_none() {
                     self.status = format!("Getting {} ({} files)…", project, need.len());
@@ -2043,9 +2253,13 @@ impl Session {
                 let back = self.reconnect.take().is_some();
                 self.ready = true;
                 self.status = format!("Working on {} together", self.project);
-                // Files that were already here count as seen.
-                self.scan(true);
+                // Files here the host doesn't have (made here while not connected) are shared.
+                self.scan(false);
+                self.save_copy();
                 if back {
+                    self.asked_assets.clear();
+                    self.fetching.clear();
+                    self.told_schemes = None;
                     // Back in: ask for everything open again (changes made meanwhile are kept
                     // and sent on top).
                     self.open_bps.clear();
@@ -2097,6 +2311,10 @@ impl Session {
                     self.play = Some((bp, port));
                 }
             }
+            M::StopPlay => self.stop_play = true,
+            M::NoAsset { path } => {
+                self.fetching.remove(&path);
+            }
             M::Offer { items } => {
                 let Some(st) = st else { return };
                 let need: Vec<String> = items
@@ -2105,8 +2323,7 @@ impl Session {
                     .map(|(p, _)| p)
                     .collect();
                 if !need.is_empty() {
-                    self.asked_assets.extend(need.iter().cloned());
-                    self.send_all(&M::NeedAssets { paths: need });
+                    self.ask(&need);
                 }
             }
             M::NeedAssets { paths } => {
@@ -2114,7 +2331,7 @@ impl Session {
                 let Some(st) = st else { return };
                 if let Some(h) = self.peers.first_mut() {
                     for path in paths.into_iter().take(5000) {
-                        if mounted(&path).is_some() && st.vfs.has_locally(&path) {
+                        if mounted(&path).is_some_and(|(sc, rel)| st.vfs.remote_path(sc, rel).is_some()) && st.vfs.has_locally(&path) {
                             h.assets.push_back(path);
                         } else {
                             h.send(&M::NoAsset { path });
@@ -2292,7 +2509,10 @@ impl Session {
         if !misses.is_empty() {
             self.ask(&misses);
         }
-        if self.host && self.refs_dirty && self.refs_at.elapsed() > Duration::from_secs(2) {
+        // Hosting: offer soon after the project changes, and now and then (files in mounted
+        // folders changed outside GEX), while someone's here.
+        let since = self.refs_at.elapsed();
+        if self.host && (since > Duration::from_secs(5) || (self.refs_dirty && since > Duration::from_secs(1))) && self.peers.iter().any(|p| p.stage == Stage::Ready && p.synced_sent) {
             self.offer(st);
         }
         // Sending what was asked for.
@@ -2306,7 +2526,10 @@ impl Session {
                 self.busy = true;
             }
         }
-        if std::mem::take(&mut self.reload) {
+        // Everything shown loads again, but not for every file of a batch.
+        if self.reload && self.reload_at.elapsed() >= RELOAD_EVERY {
+            self.reload = false;
+            self.reload_at = Instant::now();
             if let Some(r) = &mut st.renderer {
                 r.reload_textures();
             }
@@ -2316,6 +2539,7 @@ impl Session {
     /// Asks for mounted files: joined, the host; hosting, whoever has that mount.
     fn ask(&mut self, paths: &[String]) {
         self.asked_assets.extend(paths.iter().cloned());
+        self.fetching.extend(paths.iter().cloned());
         if !self.host {
             self.send_all(&M::NeedAssets { paths: paths.to_vec() });
             return;
@@ -2324,8 +2548,14 @@ impl Session {
         for path in paths {
             let Some((scheme, _)) = mounted(path) else { continue };
             if let Some(i) = self.peers.iter().position(|p| p.stage == Stage::Ready && p.schemes.iter().any(|s| s == scheme)) {
-                self.waiting.entry(path.clone()).or_default().push(self.me);
+                let owner = self.peers[i].id;
+                let w = self.waiting.entry(path.clone()).or_insert((owner, Vec::new()));
+                if !w.1.contains(&self.me) {
+                    w.1.push(self.me);
+                }
                 by_peer.entry(i).or_default().push(path.clone());
+            } else {
+                self.fetching.remove(path);
             }
         }
         for (i, paths) in by_peer {
@@ -2333,7 +2563,47 @@ impl Session {
         }
     }
 
-    /// Hosting: offers everyone the mounted files the project names (they ask for what they lack).
+    /// Every mounted file the project names (in blueprints, scripts, animations, settings, and
+    /// the open blueprints' and scripts' unsaved changes): what others need to see and hear it.
+    /// Project files are only read again when they change.
+    fn asset_refs(&mut self, st: &EditorState, schemes: &[String]) -> HashSet<String> {
+        let mut all = Vec::new();
+        let mut seen = HashSet::new();
+        for (rel, len, m) in walk(&st.project.dir) {
+            if ![".jblueprint", ".jlb", ".anim", ".jproj", ".ron", ".json", ".txt", ".vmt"].iter().any(|e| rel.ends_with(e)) {
+                continue;
+            }
+            seen.insert(rel.clone());
+            match self.file_refs.get(&rel) {
+                Some((l, mm, r)) if *l == len && *mm == m => all.extend(r.iter().cloned()),
+                _ => {
+                    let mut r = Vec::new();
+                    if let Ok(t) = std::fs::read_to_string(st.project.dir.join(&rel)) {
+                        find_refs(&t, &mut r);
+                    }
+                    r.sort();
+                    r.dedup();
+                    all.extend(r.iter().cloned());
+                    self.file_refs.insert(rel, (len, m, r));
+                }
+            }
+        }
+        self.file_refs.retain(|k, _| seen.contains(k));
+        for t in std::iter::once(&st.tree).chain(st.docs.iter().map(|d| &d.tree)) {
+            for (_, o) in t.objects.iter() {
+                for v in o.props.values() {
+                    variant_refs(v, &mut all);
+                }
+            }
+        }
+        for sc in st.scripts.values() {
+            find_refs(&sc.text, &mut all);
+        }
+        all.into_iter().filter(|r| mounted(r).is_some_and(|(sch, _)| schemes.iter().any(|x| x == sch))).collect()
+    }
+
+    /// Hosting: offers everyone the mounted files the project names (they ask for what they
+    /// lack), and again when one changes (a picture redrawn in a mounted folder).
     fn offer(&mut self, st: &EditorState) {
         self.refs_dirty = false;
         self.refs_at = Instant::now();
@@ -2346,16 +2616,18 @@ impl Session {
         }
         schemes.sort();
         schemes.dedup();
-        let refs = asset_refs(st, &schemes);
+        let refs = self.asset_refs(st, &schemes);
         let mut lacking = Vec::new();
         let mut items = Vec::new();
         for r in refs {
+            // Files in mounted folders can change; a game's files don't.
+            let m = st.vfs.folder_file(&r).and_then(|f| std::fs::metadata(f).ok()).map(|m| modified(&m)).unwrap_or(0);
             let h = match self.ref_hashes.get(&r) {
-                Some(h) => *h,
-                None => match st.vfs.read(&r) {
+                Some((mm, h)) if *mm == m => *h,
+                _ => match st.vfs.read(&r) {
                     Ok(b) => {
                         let h = fnv(&b);
-                        self.ref_hashes.insert(r.clone(), h);
+                        self.ref_hashes.insert(r.clone(), (m, h));
                         h
                     }
                     Err(_) => {
@@ -2376,9 +2648,9 @@ impl Session {
             if p.stage != Stage::Ready || !p.synced_sent {
                 continue;
             }
-            let new: Vec<(String, u64)> = items.iter().filter(|(r, _)| !p.offered.contains(r)).cloned().collect();
+            let new: Vec<(String, u64)> = items.iter().filter(|(r, h)| p.offered.get(r) != Some(h)).cloned().collect();
             if !new.is_empty() {
-                p.offered.extend(new.iter().map(|(r, _)| r.clone()));
+                p.offered.extend(new.iter().cloned());
                 p.send(&M::Offer { items: new });
             }
         }
@@ -2389,6 +2661,7 @@ impl Session {
         if bytes.len() as u64 > MAX_FILE || !(self.asked_assets.contains(path) || self.waiting.contains_key(path)) {
             return;
         }
+        self.fetching.remove(path);
         let Some(f) = remote_file(st, path) else { return };
         if let Some(d) = f.parent() {
             let _ = std::fs::create_dir_all(d);
@@ -2400,7 +2673,7 @@ impl Session {
         st.previews.forget(path);
         if self.host {
             self.refs_dirty = true;
-            for w in self.waiting.remove(path).unwrap_or_default() {
+            for w in self.waiting.remove(path).map(|w| w.1).unwrap_or_default() {
                 if let Some(p) = self.peers.iter_mut().find(|p| p.id == w) {
                     p.assets.push_back(path.to_string());
                 }
@@ -2550,9 +2823,12 @@ impl Session {
         for r in tracked {
             self.script_changes(st, &r);
         }
-        // Objects: the blueprint being edited 10 times a second, the others once a second.
+        // Objects: the blueprint being edited 10 times a second while it's worked on, otherwise
+        // (others' changes arriving, nothing done here) once a second; the others once a second.
         let big = st.tree.objects.len() > 3000;
-        if self.objects_at.elapsed() > Duration::from_millis(if big { 250 } else { 100 }) {
+        let since = self.objects_at.elapsed();
+        let working = self.last_input.elapsed() < Duration::from_millis(600);
+        if since > Duration::from_secs(1) || (working && since > Duration::from_millis(if big { 250 } else { 100 })) {
             self.objects_at = Instant::now();
             if let Some(res) = st.blueprint_res.clone() {
                 self.blueprint_changes(st, &res);
@@ -2629,9 +2905,22 @@ impl Session {
 
     /// The host started playing together: play too, and join the host's game.
     fn start_play(&mut self, st: &mut EditorState) {
-        let Some((bp, port)) = self.play.take() else { return };
-        if st.playing.is_some() {
+        if self.host {
+            // The host's game ended: everyone's ends too.
+            if self.playing_together.is_some() && st.playing.is_none() {
+                self.playing_together = None;
+                self.send_all(&M::StopPlay);
+            }
             return;
+        }
+        if std::mem::take(&mut self.stop_play) && self.playing_together.take().is_some() && st.playing.is_some() {
+            st.stop();
+            self.chat.push(ChatLine { from: 0, name: String::new(), text: "The host stopped the game.".into() });
+        }
+        let Some((bp, port)) = self.play.take() else { return };
+        // A game of its own running here gives way to the one played together.
+        if st.playing.is_some() {
+            st.stop();
         }
         if st.blueprint_res.as_deref() != Some(bp.as_str()) {
             st.open_blueprint(&bp);
@@ -2640,6 +2929,7 @@ impl Session {
         let ip = self.host_ip.map(|ip| ip.to_string()).unwrap_or_else(|| self.address.0.clone());
         if let Some(p) = &st.playing {
             p.handle.go_online(gex_script::thread::NetStart::Join(ip, port));
+            self.playing_together = Some(bp);
             self.chat.push(ChatLine { from: 0, name: String::new(), text: "Playing together: your game joined the host's.".into() });
         }
     }
@@ -2655,6 +2945,7 @@ impl Session {
         let Some(p) = &st.playing else { return };
         p.handle.go_online(gex_script::thread::NetStart::Host(GAME_PORT));
         let bp = st.blueprint_res.clone().unwrap_or_default();
+        self.playing_together = Some(bp.clone());
         self.send_all(&M::Play { bp, port: GAME_PORT });
         self.chat.push(ChatLine { from: 0, name: String::new(), text: "Playing together: everyone's game joins this one.".into() });
     }
@@ -2713,7 +3004,10 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         if self.host {
-            let _ = std::fs::remove_file(self.dir.join(".gex").join("sharing"));
+            // Everyone's told, rather than trying to get back in.
+            self.send_all(&M::Refused { reason: "the host stopped sharing".into() });
+        } else {
+            self.save_copy();
         }
     }
 }
@@ -2845,11 +3139,13 @@ pub struct Panel {
     /// Windows Firewall: whether GEX's rule is there (checked once), and the rule being added.
     firewall: Option<Option<bool>>,
     firewall_job: Option<Receiver<Result<(), String>>>,
+    /// Hosting, with people here: "Stop sharing" asks first.
+    confirm_stop: bool,
 }
 
 impl Default for Panel {
     fn default() -> Panel {
-        Panel { open: false, name: default_name(), address: String::new(), code: String::new(), folder: default_folder().to_string_lossy().into_owned(), port: DEFAULT_PORT, message: String::new(), say: String::new(), firewall: None, firewall_job: None }
+        Panel { open: false, name: default_name(), address: String::new(), code: String::new(), folder: default_folder().to_string_lossy().into_owned(), port: DEFAULT_PORT, message: String::new(), say: String::new(), firewall: None, firewall_job: None, confirm_stop: false }
     }
 }
 
@@ -3020,6 +3316,12 @@ fn session_ui(ui: &mut egui::Ui, panel: &mut Panel, st: &mut EditorState) {
     } else if !s.editor {
         ui.label(RichText::new("View only: the host decides who can make changes.").color(theme::WARN));
     }
+    if !s.fetching.is_empty() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(RichText::new(format!("Getting {} file{} from others' Half-Life 2 or asset folders…", s.fetching.len(), if s.fetching.len() == 1 { "" } else { "s" })).small().color(theme::TEXT_DIM));
+        });
+    }
     ui.separator();
     ui.horizontal(|ui| {
         swatch(ui, color(s.me.max(1)));
@@ -3086,8 +3388,20 @@ fn session_ui(ui: &mut egui::Ui, panel: &mut Panel, st: &mut EditorState) {
         if s.host && ui.button("Play together").tip("Plays this blueprint, and everyone's GEX joins the game (hosted on port 7777; scripts see IS_HOST, on_player_joined...)").clicked() {
             play = true;
         }
-        if ui.button(if s.host { "Stop sharing" } else { "Leave" }).clicked() {
-            stop = true;
+        if panel.confirm_stop && s.host && !s.people.is_empty() {
+            ui.label(RichText::new("End it for everyone?").color(theme::WARN));
+            if ui.button("Stop sharing").clicked() {
+                stop = true;
+            }
+            if ui.button("Keep sharing").clicked() {
+                panel.confirm_stop = false;
+            }
+        } else if ui.button(if s.host { "Stop sharing" } else { "Leave" }).tip(if s.host { "Ends working together for everyone; each keeps their copy" } else { "Your copy of the project stays here" }).clicked() {
+            if s.host && !s.people.is_empty() {
+                panel.confirm_stop = true;
+            } else {
+                stop = true;
+            }
         }
     });
     if play {
@@ -3097,6 +3411,7 @@ fn session_ui(ui: &mut egui::Ui, panel: &mut Panel, st: &mut EditorState) {
     }
     if stop {
         st.collab = None;
+        panel.confirm_stop = false;
         panel.message = "Stopped.".into();
     }
 }

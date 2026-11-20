@@ -11,9 +11,16 @@ shows the **address** (like `192.168.1.20:7778`) and an **invite code** (like `7
 
 **Everyone else:** on the project library, **Join someone…** (or File → Work together in the
 editor). Paste the invite into Address (it fills in the code too), and **Join**. The project is
-copied into a folder named after it, inside the folder shown (the one new projects go in); files
-already there that match aren't sent again, so joining the same project later is quick. A bar
-shows the copy's progress, and the project opens when it's all there.
+copied into a folder named after it, inside the folder shown (the one new projects go in). A bar
+shows the copy's progress, and the project opens when it's all there (the project open until then
+is saved first).
+
+- **Never over another project:** if a different project of yours already has that name, the copy
+  goes beside it ("Name (joined)"). The same happens when joining from the computer that shares.
+- **Joining the same project again** updates the copy you made before: only what changed comes
+  over, files the sharer removed are removed, and files you made in the copy meanwhile are
+  shared. Files you *changed* in the copy meanwhile are replaced by the sharer's, but yours are
+  kept beside the project in "Name (your changes)", and the chat says so.
 
 The window lists every address of the computer sharing, labelled by network, with the
 **ZeroTier** one first: friends on your ZeroTier network use that one (each address has its own
@@ -41,7 +48,9 @@ was cancelled. Only the person sharing needs it (and whoever hosts when playing 
   (within two seconds). Project settings follow when they're saved. Files over 256 MB, hidden
   folders (like the editor's own `.gex`) and `target` folders stay on each computer.
 
-Unsaved changes are shared too; saving writes them to everyone's disk.
+Unsaved changes are shared too; saving writes them to everyone's disk. Scripts and blueprints
+changed on the sharer's computer by another program (or a `git pull`) reach everyone who has
+them open.
 
 ### Assets from outside the project (Half-Life 2, mounted folders)
 
@@ -59,6 +68,10 @@ fetches them instead, so everyone sees and hears the same thing:
   their own copy and fetches nothing.
 - Files can come from anyone in the session, not only the one sharing: if a joiner has a folder
   mounted that others don't, its files reach them through the host.
+- Files in a mounted folder that change (a picture redrawn) are offered again, within a few
+  seconds.
+- While files are on their way, the Work together window says how many; textures and models
+  show as they arrive.
 - Fetched files are kept in the project's hidden `.gex/remote` folder, so joining again is
   quick; they're never shared on or put into exported games.
 - Each computer keeps its own mounts in the project settings: someone else's Half-Life 2
@@ -85,7 +98,9 @@ The one sharing can press **Play together**: their game starts and hosts a multi
 and everyone else's GEX starts playing the same blueprint and joins it. Scripts see it like any
 multiplayer game (`IS_HOST()`, `MY_ID()`, `on_player_joined`...; see
 [Multiplayer](SCRIPTING.md#multiplayer)), and their own `HOST_GAME` / `JOIN_GAME` calls are
-skipped. Each person stops their own game.
+skipped. Anyone who joins the session while the game runs joins the game too, and a game someone
+was playing on their own gives way to it. Each person can stop their own game; when the one
+sharing stops theirs, everyone's stops.
 
 ## Who can do what
 
@@ -98,8 +113,9 @@ The one sharing sees everyone in the Work together window:
 ## If the connection drops
 
 A joined GEX tries to get back in by itself for a minute ("reconnecting…" at the top right).
-Changes made meanwhile are kept and shared once it's back. After that, the session ends and
-your copy of the project stays as it is.
+Changes made meanwhile in open blueprints and scripts are kept and shared once it's back
+(files saved meanwhile that the sharer changed too are kept aside, as when joining again). After
+a minute, the session ends and your copy of the project stays as it is.
 
 ## Security
 
@@ -109,12 +125,16 @@ your copy of the project stays as it is.
   (ChaCha20-Poly1305, with keys made from the code and fresh random numbers on both sides), so
   nobody else on the network can read it or slip changes in, and nothing can be replayed.
 - Paths sent by others are checked to stay inside the project, so a joined GEX only ever writes
-  in the project's folder.
+  in the project's folder; files from mounts are only read from inside the mount.
+- Others never get to read a folder on your computer they name: their project settings can't
+  mount folders here (only Half-Life 2, where you have it at the same place).
+- Connections that don't prove the code within 20 seconds are dropped, and only a few may try
+  at once.
 - Anyone you let edit can change every file in the project, scripts included, and scripts run
   when you play. Share the code only with people you trust, and make others view-only.
 
 ## Ending
 
-**Leave** (or **Stop sharing**) in the Work together window. When the one sharing stops, the
-others are told and keep working on their own copy. Closing GEX also ends it. Everyone needs
+**Leave** (or **Stop sharing**, which asks first while others are there) in the Work together
+window. When the one sharing stops, the others are told and keep working on their own copy. Closing GEX also ends it. Everyone needs
 the same version of GEX (it updates itself when it starts).

@@ -283,11 +283,16 @@ impl Link {
                     if len == 0 || len > MAX_FRAME {
                         break;
                     }
-                    let mut body = vec![0u8; len];
-                    if s.read_exact(&mut body).is_err() {
+                    let mut kind = [0u8; 1];
+                    if s.read_exact(&mut kind).is_err() {
                         break;
                     }
-                    let kind = body.remove(0);
+                    // Memory grows with what actually arrives (a length alone reserves little).
+                    let mut body = Vec::with_capacity((len - 1).min(1 << 20));
+                    if (&mut s).take(len as u64 - 1).read_to_end(&mut body).map_or(true, |n| n != len - 1) {
+                        break;
+                    }
+                    let kind = kind[0];
                     let f = if kind == 1 { Frame::Bytes(body) } else { Frame::Json(body) };
                     if ftx.send(f).is_err() {
                         break;

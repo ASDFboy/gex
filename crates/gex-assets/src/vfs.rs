@@ -57,11 +57,13 @@ fn split(path: &str) -> Option<(&str, &str)> {
     path.split_once("://")
 }
 
+/// A path under `base` (never outside it: no "..", drive letters or absolute paths).
 fn safe_join(base: &Path, rel: &str) -> Option<PathBuf> {
-    if rel.split(['/', '\\']).any(|p| p == "..") {
+    let rel = rel.trim_start_matches('/');
+    if rel.contains(':') || rel.starts_with('\\') || rel.split(['/', '\\']).any(|p| p == "..") {
         return None;
     }
-    Some(base.join(rel.trim_start_matches('/')))
+    Some(base.join(rel))
 }
 
 impl Vfs {
@@ -129,13 +131,22 @@ impl Vfs {
         Some(self.project_dir.join(REMOTE_DIR).join(scheme).join(rel))
     }
 
+    /// The file on disk behind a path in a mounted folder (not a game's archives).
+    pub fn folder_file(&self, path: &str) -> Option<PathBuf> {
+        let (scheme, rel) = split(path)?;
+        match &self.mounts.iter().find(|m| m.scheme == scheme)?.imp {
+            MountImpl::Folder(base) => safe_join(base, rel),
+            MountImpl::Source(_) => None,
+        }
+    }
+
     /// Whether this computer can read a path itself (its own mounts, not fetched copies).
     pub fn has_locally(&self, path: &str) -> bool {
         let Some((scheme, rel)) = split(path) else { return false };
         let Some(m) = self.mounts.iter().find(|m| m.scheme == scheme) else { return false };
         match &m.imp {
             MountImpl::Folder(base) => safe_join(base, rel).is_some_and(|p| p.is_file()),
-            MountImpl::Source(g) => g.read(rel).is_some_and(|r| r.is_ok()),
+            MountImpl::Source(g) => g.has(rel),
         }
     }
 

@@ -2,6 +2,16 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.3 (Work together, gone over end to end):
+- Joining never copies over another project with the same name; joining again updates your earlier copy (files removed by the sharer go, your new files are shared, and files you changed are kept aside in "Name (your changes)" before being updated).
+- When the sharer stops (or closes GEX), everyone's told at once instead of trying to reconnect for a minute.
+- Play together: people who join mid-game join the game, and when the sharer stops their game everyone's stops.
+- Scripts and blueprints changed on the sharer's computer by another program reach everyone.
+- Mounted-folder files that change are sent again; the window shows files still on their way; textures reload once per batch instead of per file.
+- Security: others' project settings can't mount folders on your computer; paths can't leave a mount (drive letters, backslashes); connections that never prove the code are dropped after 20 s, and only a few may try at once; incoming messages only take memory as their data arrives.
+- Faster with big blueprints: your blueprint is compared with the shared one often only while you're working on it.
+- "Stop sharing" asks first while others are there; joining saves the project you had open.
+
 New in 0.3.2:
 - Working together shares mounted assets: files from Half-Life 2 or mounted folders that the project uses reach everyone (only what's used, never all of Half-Life 2), fetched as soon as anyone's GEX needs one. Each computer keeps its own mounts.
 - Images, models and sounds changed by others show the new version at once.

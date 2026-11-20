@@ -160,6 +160,11 @@ impl EditorApp {
             } else if j.ready {
                 let mut s = self.joining.take().unwrap();
                 let dir = s.dir.clone();
+                // The project open until now is saved, not lost, as the joined one takes its place.
+                if let Some(st) = &mut self.st {
+                    st.save_all();
+                    self.ws.save(&st.project.dir);
+                }
                 self.open_project(&dir);
                 match &mut self.st {
                     Some(st) if st.project.dir == dir => {
@@ -1158,6 +1163,10 @@ impl eframe::App for EditorApp {
         if let Some(st) = &mut self.st {
             self.ws.save(&st.project.dir);
             st.stop();
+            // Working together: others are told it ended (a moment for that to go out).
+            if st.collab.take().is_some() {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
         }
     }
 }
