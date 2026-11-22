@@ -68,6 +68,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("DRAW_TEXT", "(x, y, text, size, color, [options])", "draws text this frame (tags like [color=red] work); options: [layer:, font:, align:, valign:, wrap:, outline:, outline_color:, rotation:, scale:]"),
     ("DRAW_IMAGE", "(file, x, y, w, h, [options])", "draws an image this frame; options as DRAW_SPRITE"),
     ("DRAW_SPRITE", "(file, x, y, [options])", "draws a picture this frame at its own size: options [frame:, hframes:, vframes:, region: [x, y, w, h], w:, h:, scale:, scale_x:, scale_y:, rotation:, pivot_x:, pivot_y:, color:, alpha:, layer:, blend:, flip_h:, flip_v:, brightness:, hue:, saturation:, invert:, shader:, values: [a, b, c, d], filter:, lit:]"),
+    ("PRELOAD", "(files...)", "gets pictures ready in the background so they show without a pause the first time: files, a table of them, or a folder (every picture in it)"),
     ("IMAGE_SIZE", "(file)", "a picture's size in pixels: [w:, h:] (NULL if it can't be read)"),
     ("POINT_ON", "(object, x, y, precise)", "TRUE when a 2D world point is on an object: a Sprite2D's picture (precise: only its visible pixels), a Collider2D's or Body2D's shape, a Label2D's text"),
     ("KEY_DOWN", "(key)", "TRUE while a key is held (mouse buttons: \"mouse_left\", \"mouse_right\", \"mouse_middle\")"),
@@ -324,10 +325,9 @@ pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
             Draw::Line { a, b, color } => list.lines_2d.push((*a, *b, *color)),
         }
     }
-    // (Stable: the same layer keeps the order things were made / drawn in.)
-    if sprites {
-        list.sprites.sort_by(|a, b| a.layer.total_cmp(&b.layer));
-    }
+    // (Sprites are put in layer order with the rest by render_list. Stable: the same layer
+    // keeps the order things were made / drawn in.)
+    let _ = sprites;
     if labels {
         list.labels.sort_by(|a, b| a.layer.total_cmp(&b.layer));
     }
@@ -912,8 +912,12 @@ impl Host for EngineHost {
                             _ => Region::Whole,
                         };
                         // Its own size (of one frame / the region) unless given.
+                        let given = (opt(o, "w").as_ref().and_then(as_f64), opt(o, "h").as_ref().and_then(as_f64));
                         let (w, h) = if name == "DRAW_IMAGE" {
                             (num_arg(a, 3, 64.0) as f32, num_arg(a, 4, 64.0) as f32)
+                        } else if let (Some(w), Some(h)) = given {
+                            // Sized by the script: no need to look at the picture.
+                            (w as f32, h as f32)
                         } else {
                             let own = match region {
                                 Region::Rect { w, h, .. } => Some([w, h]),
@@ -935,6 +939,49 @@ impl Host for EngineHost {
                 }
                 if st.draws.len() < 100_000 {
                     st.draws.extend(out);
+                }
+                Ok(Value::Null)
+            }
+            "PRELOAD" => {
+                let mut files = Vec::new();
+                let add = |v: &Value, files: &mut Vec<String>| {
+                    if let Value::Text(t) = v {
+                        files.push(t.to_string());
+                    }
+                };
+                for v in &a {
+                    match v {
+                        Value::Table(t, _) => {
+                            for s in &t.items {
+                                add(&s.borrow(), &mut files);
+                            }
+                        }
+                        v => add(v, &mut files),
+                    }
+                }
+                for f in files {
+                    // A folder: every picture in it (and its folders).
+                    match st.project.res_to_path(&f).filter(|p| p.is_dir()) {
+                        Some(dir) => {
+                            let base = f.trim_end_matches('/').to_string();
+                            let mut stack = vec![(dir, base)];
+                            while let Some((d, res)) = stack.pop() {
+                                let Ok(rd) = std::fs::read_dir(&d) else { continue };
+                                let mut names: Vec<_> = rd.flatten().collect();
+                                names.sort_by_key(|e| e.file_name());
+                                for e in names {
+                                    let name = e.file_name().to_string_lossy().to_string();
+                                    let r = format!("{}/{}", res, name);
+                                    if e.path().is_dir() {
+                                        stack.push((e.path(), r));
+                                    } else if gex_assets::image_load::is_image(&r) {
+                                        st.preload.push(r);
+                                    }
+                                }
+                            }
+                        }
+                        None => st.preload.push(f),
+                    }
                 }
                 Ok(Value::Null)
             }

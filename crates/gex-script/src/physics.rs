@@ -1125,7 +1125,7 @@ impl Physics {
     pub fn sync(&mut self, tree: &BlueprintTree) {
         let mut b2 = Vec::new();
         let mut b3 = Vec::new();
-        for id in tree.walk() {
+        for &id in tree.of_kinds(&[ObjectKind::Body2D, ObjectKind::Body3D]).iter() {
             match tree.objects[id].kind {
                 ObjectKind::Body2D => b2.push(id),
                 ObjectKind::Body3D => b3.push(id),

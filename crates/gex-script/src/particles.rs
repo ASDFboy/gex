@@ -103,7 +103,7 @@ impl Emitter {
 /// `amount` (0 to 1, the particles graphics setting) scales every emitter's rate.
 pub fn update(tree: &BlueprintTree, emitters: &mut HashMap<ObjectId, Emitter>, dt: f32, frozen: &[ObjectId], amount: f64) {
     emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.objects[*id].kind == ObjectKind::Particles2D));
-    for id in tree.walk() {
+    for &id in tree.of_kinds(&[ObjectKind::Particles2D]).iter() {
         let n = &tree.objects[id];
         if n.kind != ObjectKind::Particles2D || frozen.contains(&id) {
             continue;
@@ -275,7 +275,7 @@ impl Emitter3 {
 
 pub fn update_3d(tree: &BlueprintTree, emitters: &mut HashMap<ObjectId, Emitter3>, dt: f32, frozen: &[ObjectId], amount: f64) {
     emitters.retain(|id, e| tree.contains(*id) && (!e.parts.is_empty() || tree.objects[*id].kind == ObjectKind::Particles3D));
-    for id in tree.walk() {
+    for &id in tree.of_kinds(&[ObjectKind::Particles3D]).iter() {
         let n = &tree.objects[id];
         if n.kind != ObjectKind::Particles3D || frozen.contains(&id) {
             continue;

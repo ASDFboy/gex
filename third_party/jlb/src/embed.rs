@@ -87,6 +87,15 @@ impl Interp {
     }
 
     /// The names and values of a loaded file's outside variables, in the order they were made.
+    /// Takes over another interpreter's parsed files, so files it read already aren't read
+    /// and parsed again (a game moving to its next level).
+    pub fn take_parsed_from(&mut self, other: &mut Interp) {
+        let old = std::mem::take(&mut other.parsed);
+        for (k, v) in old {
+            self.parsed.entry(k).or_insert(v);
+        }
+    }
+
     /// The names of a loaded file's functions (its own and those it IMPORTed).
     pub fn env_funcs(env: &Env) -> Vec<Rc<str>> {
         env.borrow().iter().filter(|(_, s)| s.borrow().is_func()).map(|(k, _)| k.clone()).collect()

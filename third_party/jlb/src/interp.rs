@@ -64,7 +64,7 @@ pub struct Interp {
     imported: HashMap<(usize, PathBuf), std::rc::Weak<RefCell<OrdMap>>>,
     loaded: HashMap<PathBuf, Value>,
     /// Files already read and parsed, with their size and change time when they were.
-    parsed: HashMap<PathBuf, (Option<SystemTime>, u64, Rc<Vec<Stmt>>, Rc<Source>)>,
+    pub(crate) parsed: HashMap<PathBuf, (Option<SystemTime>, u64, Rc<Vec<Stmt>>, Rc<Source>)>,
     /// Tasks (see tasks.rs): empty until the first START. Task 0 is the program itself.
     pub tasks: Vec<crate::tasks::TaskRec>,
     pub baton: Option<std::sync::Arc<crate::tasks::Baton>>,

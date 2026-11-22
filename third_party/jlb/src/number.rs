@@ -50,6 +50,39 @@ fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
     a
 }
 
+fn gcd_u128(mut a: u128, mut b: u128) -> u128 {
+    // Down to 64 bits as soon as both fit: much quicker division.
+    while b != 0 {
+        if a <= u64::MAX as u128 && b <= u64::MAX as u128 {
+            return gcd_u64(a as u64, b as u64) as u128;
+        }
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// Whether a bottom number is made only of 2s and 5s (so the fraction is a plain decimal).
+fn plain_u128(mut d: u128) -> bool {
+    if d == 0 {
+        return false;
+    }
+    d >>= d.trailing_zeros();
+    while d % 5 == 0 {
+        d /= 5;
+    }
+    d == 1
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests turn the quick path off to check it against the full one.
+    static NO_FAST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Values small enough for the quick path: both parts below 2^63, so products of two
+/// fit in 126 bits and sums of those in 127.
+const SMALL: u128 = 1 << 63;
+
 impl Nat {
     pub fn zero() -> Nat {
         Nat(Vec::new())
@@ -488,6 +521,10 @@ fn cut(a: &Nat, g: &Nat) -> Nat {
 pub enum Number {
     /// Exact whole numbers that fit in 64 bits (the fast, common case).
     Int(i64),
+    /// Exact fractions whose top and bottom fit in 63 bits (2.5, 0.75, 1/3: most of a
+    /// game's numbers that aren't whole), kept without allocating. In lowest terms; the
+    /// bottom is at least 2 and the top isn't 0.
+    Frac(i64, u64),
     /// Exact: bigger whole numbers, and fractions.
     Big(Rc<Ratio>),
     /// Approximate (always has a fractional part; whole results become exact).
@@ -509,6 +546,12 @@ use Number::*;
 fn finish(neg: bool, num: Nat, den: Nat, plain: Option<bool>) -> R<Number> {
     if num.is_zero() {
         return Ok(Int(0));
+    }
+    // Small enough for the quick form (Int or Frac).
+    if let (Some(n), Some(d)) = (num.to_u64(), den.to_u64()) {
+        if (n as u128) < SMALL && (d as u128) < SMALL {
+            return finish_small(neg, n as u128, d as u128, plain);
+        }
     }
     if num.digits() > MAX_DIGITS || den.digits() > MAX_DIGITS {
         return too_big();
@@ -540,6 +583,36 @@ fn make(neg: bool, num: Nat, den: Nat, plain: Option<bool>) -> R<Number> {
     }
     let g = Nat::gcd(&num, &den);
     finish(neg, cut(&num, &g), cut(&den, &g), plain)
+}
+
+/// `finish` for a fraction (in lowest terms) whose parts fit in 128 bits: the same result,
+/// without the big-number work. Its bottom number has under 50 digits, so it's never rounded.
+fn finish_small(neg: bool, num: u128, den: u128, plain: Option<bool>) -> R<Number> {
+    if num == 0 {
+        return Ok(Int(0));
+    }
+    if den == 1 {
+        if num <= i64::MAX as u128 {
+            return Ok(Int(if neg { -(num as i64) } else { num as i64 }));
+        }
+        if neg && num == 1 << 63 {
+            return Ok(Int(i64::MIN));
+        }
+    }
+    if den != 1 && num < SMALL && den < SMALL {
+        return Ok(Frac(if neg { -(num as i64) } else { num as i64 }, den as u64));
+    }
+    let plain = den == 1 || plain.unwrap_or_else(|| plain_u128(den));
+    Ok(Big(ratio(neg, nat_u128(num), nat_u128(den), plain)))
+}
+
+fn nat_u128(mut x: u128) -> Nat {
+    let mut v = Vec::with_capacity(5);
+    while x > 0 {
+        v.push((x % BASE as u128) as u32);
+        x /= BASE as u128;
+    }
+    Nat(v)
 }
 
 /// Position of the first non-zero digit after the decimal point (1 = tenths).
@@ -659,9 +732,42 @@ impl Number {
         }
     }
 
+    /// The exact value as (negative, top, bottom) when both are small (see SMALL); None for
+    /// big numbers and approximate ones.
+    fn small_parts(&self) -> Option<(bool, u128, u128)> {
+        #[cfg(test)]
+        if NO_FAST.with(|f| f.get()) {
+            return None;
+        }
+        match self {
+            Int(i) => {
+                let u = i.unsigned_abs() as u128;
+                (u < SMALL).then_some((*i < 0, u, 1))
+            }
+            Frac(n, d) => Some((*n < 0, n.unsigned_abs() as u128, *d as u128)),
+            Big(r) => {
+                let (a, b) = (r.num.to_u64()? as u128, r.den.to_u64()? as u128);
+                (a < SMALL && b < SMALL).then_some((r.neg, a, b))
+            }
+            Float(_) => None,
+        }
+    }
+
+    /// A Frac as the big form (for the rarely used paths that work on that).
+    fn big_form(&self) -> Number {
+        match self {
+            Frac(n, d) => {
+                let (n, d) = (n.unsigned_abs() as u128, *d as u128);
+                Big(ratio(self.is_neg(), nat_u128(n), nat_u128(d), plain_u128(d)))
+            }
+            o => o.clone(),
+        }
+    }
+
     fn exact_parts(&self) -> (bool, Nat, Nat) {
         match self {
             Int(i) => (*i < 0, Nat::from_u64(i.unsigned_abs()), Nat::one()),
+            Frac(n, d) => (*n < 0, Nat::from_u64(n.unsigned_abs()), Nat::from_u64(*d)),
             Big(r) => (r.neg, r.num.clone(), r.den.clone()),
             Float(x) => exact_of_f64(*x),
         }
@@ -671,6 +777,7 @@ impl Number {
     fn plain(&self) -> bool {
         match self {
             Big(r) => r.plain,
+            Frac(_, d) => plain_u128(*d as u128),
             _ => true,
         }
     }
@@ -682,7 +789,7 @@ impl Number {
         match self {
             Int(_) => true,
             Big(r) => r.den.is_one(),
-            Float(_) => false,
+            Frac(..) | Float(_) => false,
         }
     }
     pub fn is_zero(&self) -> bool {
@@ -691,6 +798,7 @@ impl Number {
     pub fn is_neg(&self) -> bool {
         match self {
             Int(i) => *i < 0,
+            Frac(n, _) => *n < 0,
             Big(r) => r.neg,
             Float(x) => *x < 0.0,
         }
@@ -704,6 +812,8 @@ impl Number {
             Int(i) => *i,
             Big(r) if r.neg => i64::MIN,
             Big(_) => i64::MAX,
+            Frac(n, _) if *n < 0 => i64::MIN,
+            Frac(..) => i64::MAX,
             Float(x) => *x as i64,
         }
     }
@@ -712,6 +822,8 @@ impl Number {
         match self {
             Int(i) => *i as f64,
             Float(x) => *x,
+            Frac(n, d) if n.unsigned_abs() < 1 << 53 && *d < 1 << 53 => *n as f64 / *d as f64,
+            Frac(..) => self.big_form().to_f64(),
             Big(r) => {
                 let v = match (r.num.to_u64(), r.den.to_u64()) {
                     (Some(a), Some(b)) if a < 1 << 53 && b < 1 << 53 => a as f64 / b as f64,
@@ -743,6 +855,15 @@ impl Number {
             (Int(a), Float(b)) if a.unsigned_abs() <= 1 << 53 => (*a as f64).partial_cmp(b).unwrap_or(Ordering::Equal),
             (Float(a), Int(b)) if b.unsigned_abs() <= 1 << 53 => a.partial_cmp(&(*b as f64)).unwrap_or(Ordering::Equal),
             _ => {
+                if let (Some((an, a, ad)), Some((bn, b, bd))) = (self.small_parts(), o.small_parts()) {
+                    let sa = if a == 0 { 0 } else if an { -1 } else { 1 };
+                    let sb = if b == 0 { 0 } else if bn { -1 } else { 1 };
+                    if sa != sb || sa == 0 {
+                        return sa.cmp(&sb);
+                    }
+                    let m = (a * bd).cmp(&(b * ad));
+                    return if an { m.reverse() } else { m };
+                }
                 let (an, a, ad) = self.exact_parts();
                 let (bn, b, bd) = o.exact_parts();
                 let (az, bz) = (a.is_zero(), b.is_zero());
@@ -771,6 +892,7 @@ impl Number {
                 None => Big(ratio(false, Nat::from_u64(1 << 63), Nat::one(), true)),
             },
             Float(x) => Float(-x),
+            Frac(n, d) => Frac(-n, *d),
             Big(r) => {
                 if !r.neg && r.den.is_one() && r.num.to_u64() == Some(1 << 63) {
                     return Int(i64::MIN);
@@ -799,6 +921,16 @@ impl Number {
             _ => {}
         }
         let plain = if self.plain() && o.plain() { Some(true) } else { None };
+        if let (Some((an, a, ad)), Some((bn, b, bd))) = (self.small_parts(), o.small_parts()) {
+            let (x, y) = (a * bd, b * ad);
+            let (neg, n) = if an == bn { (an, x + y) } else if x >= y { (an, x - y) } else { (bn, y - x) };
+            let d = ad * bd;
+            if n == 0 {
+                return Ok(Int(0));
+            }
+            let g = gcd_u128(n, d);
+            return finish_small(neg, n / g, d / g, plain);
+        }
         let (an, a, ad) = self.exact_parts();
         let (bn, b, bd) = o.exact_parts();
         // Knuth's method: only small common factors ever need working out.
@@ -826,6 +958,14 @@ impl Number {
             (Float(_), _) | (_, Float(_)) => return float_result(self.to_f64() * o.to_f64()),
             _ => {}
         }
+        if let (Some((an, a, ad)), Some((bn, b, bd))) = (self.small_parts(), o.small_parts()) {
+            if a == 0 || b == 0 {
+                return Ok(Int(0));
+            }
+            let (g1, g2) = (gcd_u128(a, bd), gcd_u128(b, ad));
+            let plain = if self.plain() && o.plain() { Some(true) } else { None };
+            return finish_small(an != bn, (a / g1) * (b / g2), (ad / g2) * (bd / g1), plain);
+        }
         let (an, a, ad) = self.exact_parts();
         let (bn, b, bd) = o.exact_parts();
         if a.digits() + b.digits() > MAX_DIGITS + 2 || ad.digits() + bd.digits() > MAX_DIGITS + 2 {
@@ -851,6 +991,13 @@ impl Number {
             }
             (Float(_), _) | (_, Float(_)) => return float_result(self.to_f64() / o.to_f64()),
             _ => {}
+        }
+        if let (Some((an, a, ad)), Some((bn, b, bd))) = (self.small_parts(), o.small_parts()) {
+            if a == 0 {
+                return Ok(Int(0));
+            }
+            let (g1, g2) = (gcd_u128(a, b), gcd_u128(ad, bd));
+            return finish_small(an != bn, (a / g1) * (bd / g2), (ad / g2) * (b / g1), None);
         }
         let (an, a, ad) = self.exact_parts();
         let (bn, b, bd) = o.exact_parts();
@@ -895,6 +1042,7 @@ impl Number {
     pub fn round(&self, d: usize, mode: Rounding) -> R<Number> {
         match self {
             Int(_) => Ok(self.clone()),
+            Frac(..) => self.big_form().round(d, mode),
             Big(r) if r.den.is_one() => Ok(self.clone()),
             Big(r) => round_ratio(r, d, mode),
             Float(x) => {
@@ -983,7 +1131,7 @@ impl Number {
         let odd_whole = match n {
             Int(i) => i % 2 != 0,
             Big(r) => r.den.is_one() && r.num.is_odd(),
-            Float(_) => false,
+            Frac(..) | Float(_) => false,
         };
         if self.is_neg() && !odd_whole {
             return err("an even root of a negative number has no real answer");
@@ -1111,6 +1259,7 @@ impl fmt::Display for Number {
         match self {
             Int(i) => write!(f, "{}", i),
             Float(x) => write!(f, "{}", fmt_float(*x)),
+            Frac(..) => write!(f, "{}", self.big_form()),
             Big(r) => write!(f, "{}", fmt_ratio(r)),
         }
     }
@@ -1140,5 +1289,68 @@ mod tests {
         assert_eq!(r("0.25", 2), "0.5");
         assert_eq!(r("1267650600228229401496703205376", 100), "2");
         assert_eq!(r("2", 2), "1.4142135623730951");
+    }
+}
+
+#[cfg(test)]
+mod fast_path_tests {
+    use super::*;
+
+    fn same(a: &Number, b: &Number) -> bool {
+        match (a, b) {
+            (Int(x), Int(y)) => x == y,
+            (Float(x), Float(y)) => x.to_bits() == y.to_bits(),
+            (Big(x), Big(y)) => x.neg == y.neg && x.num == y.num && x.den == y.den && x.plain == y.plain,
+            (Frac(..), _) | (_, Frac(..)) => same(&a.big_form(), &b.big_form()),
+            _ => false,
+        }
+    }
+
+    /// The quick 128-bit path gives exactly what the big-number path gives.
+    #[test]
+    fn quick_path_matches_the_full_one() {
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut vals: Vec<Number> = Vec::new();
+        for _ in 0..300 {
+            let kind = rnd() % 6;
+            let n = match kind {
+                0 => Int((rnd() % 2000) as i64 - 1000),
+                1 => Int(rnd() as i64 >> (rnd() % 60)),
+                2 => Number::parse_literal(&format!("{}.{}", rnd() % 100000, rnd() % 1000)).unwrap(),
+                3 => Number::int((rnd() % 97) as i64 + 1).div(&Number::int((rnd() % 89) as i64 + 1)).unwrap(),
+                4 => Number::parse_literal(&format!("{}", rnd())).unwrap().mul(&Number::parse_literal("0.001").unwrap()).unwrap(),
+                _ => Number::parse_literal("1.15").unwrap().pow(&Int((rnd() % 30) as i64)).unwrap_or(Int(1)),
+            };
+            vals.push(if rnd() % 3 == 0 { n.neg() } else { n });
+        }
+        let mut checked = 0;
+        for i in 0..vals.len() {
+            for j in 0..vals.len() {
+                if (i * 31 + j * 7) % 5 != 0 {
+                    continue;
+                }
+                let (a, b) = (&vals[i], &vals[j]);
+                let fast = (a.add(b), a.mul(b), if b.is_zero() { Ok(Int(0)) } else { a.div(b) }, a.compare(b));
+                NO_FAST.with(|f| f.set(true));
+                let slow = (a.add(b), a.mul(b), if b.is_zero() { Ok(Int(0)) } else { a.div(b) }, a.compare(b));
+                NO_FAST.with(|f| f.set(false));
+                for (x, y) in [(&fast.0, &slow.0), (&fast.1, &slow.1), (&fast.2, &slow.2)] {
+                    match (x, y) {
+                        (Ok(x), Ok(y)) => assert!(same(x, y), "{:?} vs {:?} for {:?}, {:?}", x, y, a, b),
+                        (Err(_), Err(_)) => {}
+                        _ => panic!("one failed: {:?} {:?}", a, b),
+                    }
+                }
+                assert_eq!(fast.3, slow.3, "{:?} vs {:?}", a, b);
+                checked += 1;
+            }
+        }
+        assert!(checked > 10_000);
     }
 }

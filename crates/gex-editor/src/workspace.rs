@@ -282,7 +282,6 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
         let label = if r == COMMANDS_TAB { "Commands" } else { r.rsplit('/').next().unwrap_or(r).trim_end_matches(".jblueprint") };
         let out = theme::tab(ui, label, i == l.active, true, r != COMMANDS_TAB && st.is_dirty(r));
         crate::docs::mark(ui, out.resp.rect, "ui:tabs");
-        crate::collab::tab_marks(ui, st, r, out.resp.rect);
         rects.push(out.resp.rect);
         if out.close || out.resp.middle_clicked() {
             close = Some(i);
@@ -293,7 +292,12 @@ pub fn tab_strip(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState) {
             started = Some(i);
         }
     }
-    if let Some((a, b)) = theme::tab_reorder(ui, "top", &rects, started) {
+    let moved = theme::tab_reorder(ui, "top", &rects, started);
+    // Who's on which tab (working together): on top of the tabs, the showing one too.
+    for (r, rect) in l.tabs.iter().zip(&rects) {
+        crate::collab::tab_marks(ui, st, r, *rect);
+    }
+    if let Some((a, b)) = moved {
         l.tabs.swap(a, b);
         l.active = if l.active == a { b } else if l.active == b { a } else { l.active };
         activate = None;
@@ -565,7 +569,6 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
                             let dirty = st.scripts.get(res).is_some_and(|s| s.dirty());
                             let out = theme::tab(ui, short(res).trim_end_matches(".jlb"), *res == showing, true, dirty);
                             let out = crate::theme::TabOut { resp: out.resp.on_hover_text(res.trim_start_matches("res://")), close: out.close };
-                            crate::collab::tab_marks(ui, st, res, out.resp.rect);
                             rects.push(out.resp.rect);
                             if out.close || out.resp.middle_clicked() {
                                 close = Some(*i);
@@ -576,7 +579,11 @@ fn script_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, tab: 
                                 started = Some(n);
                             }
                         }
-                        if let Some((a, b)) = theme::tab_reorder(ui, key.as_str(), &rects, started) {
+                        let moved = theme::tab_reorder(ui, key.as_str(), &rects, started);
+                        for (i, rect) in members.iter().zip(&rects) {
+                            crate::collab::tab_marks(ui, st, &list[*i], *rect);
+                        }
+                        if let Some((a, b)) = moved {
                             swap = Some((members[a], members[b]));
                         }
                     });

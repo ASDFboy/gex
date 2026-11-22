@@ -208,6 +208,11 @@ pub struct WorldState {
     pub net: Option<crate::net::Net>,
     /// Pictures' sizes and see-through parts (DRAW_SPRITE, precise mouse hits).
     pub(crate) images: crate::hit::Images,
+    /// Pictures to get ready in the background (handed to the next render list).
+    pub(crate) preload: Vec<String>,
+    /// Goes up when an object loses a property (objects otherwise only gain them), so a
+    /// script's `self` only needs its names checked one by one after that.
+    pub(crate) props_gen: u64,
 }
 
 impl WorldState {
@@ -245,6 +250,8 @@ struct ScriptInst {
     /// What this script's `self` holds, entry by entry, as of the last event: kept so the
     /// next event only updates what changed on the object meanwhile.
     sync: SelfSnap,
+    /// props_gen when `sync` was last checked name by name.
+    sync_gen: u64,
 }
 
 pub struct Game {
@@ -259,6 +266,12 @@ pub struct Game {
     script_info: HashMap<PathBuf, ScriptInfoEntry>,
     /// Objects the mouse is over (for on_mouse_enter / on_mouse_leave).
     hovered: HashSet<ObjectId>,
+    /// Which objects have each event, in tree order (made when first asked, again after the
+    /// tree or the scripts change: see `with_handler`).
+    handler_index: HashMap<String, Rc<Vec<ObjectId>>>,
+    index_key: (u64, u64),
+    /// Goes up whenever a script is attached, reloaded or turned off.
+    scripts_rev: u64,
 }
 
 type ScriptInfoEntry = ((Option<std::time::SystemTime>, u64), Rc<(HashSet<String>, Vec<String>)>);
@@ -332,13 +345,15 @@ impl Game {
             blueprint: String::new(),
             net: None,
             images: Default::default(),
+            preload: Vec::new(),
+            props_gen: 0,
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
         it.host = Some(Box::new(EngineHost { st: st.clone() }));
         it.cancel = cancel;
         Game { stats: FrameStats::default(), it, st, scripts: HashMap::new(), physics_acc: 0.0,
-            script_info: HashMap::new(), started: false, hovered: HashSet::new() }
+            script_info: HashMap::new(), started: false, hovered: HashSet::new(), handler_index: HashMap::new(), index_key: (u64::MAX, 0), scripts_rev: 0 }
     }
 
     /// Moving to the next blueprint (CHANGE_BLUEPRINT): what lasts for the whole run comes
@@ -347,6 +362,12 @@ impl Game {
     pub fn carry_over(&mut self, old: &mut Game) {
         let shared = std::mem::take(&mut old.st.borrow_mut().shared);
         self.st.borrow_mut().shared = shared;
+        self.it.take_parsed_from(&mut old.it);
+        // Pictures' sizes, scripts' events: the same files, already looked at.
+        self.st.borrow_mut().images = std::mem::take(&mut old.st.borrow_mut().images);
+        for (k, v) in old.script_info.drain() {
+            self.script_info.entry(k).or_insert(v);
+        }
         for (k, s) in old.it.shared.drain() {
             if !matches!(&*s.borrow(), jlb::Value::Func(_) | jlb::Value::Builtin(_) | jlb::Value::Task(_)) {
                 self.it.shared.insert(k, s);
@@ -388,6 +409,24 @@ impl Game {
             }
         }
         let ids = self.st.borrow().tree.walk();
+        {
+            // Every picture placed in the blueprint, shown yet or not, is got ready.
+            let mut st = self.st.borrow_mut();
+            let mut seen = HashSet::new();
+            let mut pre = Vec::new();
+            for id in &ids {
+                let n = &st.tree.objects[*id];
+                let t = match n.kind {
+                    ObjectKind::Sprite2D | ObjectKind::Particles2D => n.text("texture"),
+                    ObjectKind::TileMap2D => n.text("tileset"),
+                    _ => "",
+                };
+                if !t.is_empty() && seen.insert(t.to_string()) {
+                    pre.push(t.to_string());
+                }
+            }
+            st.preload.extend(pre);
+        }
         self.attach_all(&ids);
         self.autoplay(&ids);
         for id in &ids {
@@ -567,7 +606,9 @@ impl Game {
                     when_was: HashMap::new(),
                     dead: false,
                     sync: Vec::new(),
-                })
+                    sync_gen: 0,
+                });
+                self.scripts_rev += 1
             }
             Err(f) => self.report(&f, res),
         }
@@ -605,6 +646,7 @@ impl Game {
                     if let Some(s) = self.scripts.get_mut(&id).and_then(|l| l.get_mut(i)) {
                         s.handlers = with_imported_handlers(&env, handlers.clone());
                         s.env = env;
+                        self.scripts_rev += 1;
                         s.dead = false;
                         done += 1;
                     }
@@ -709,7 +751,7 @@ impl Game {
     /// whose property changed since the last event (moved by physics, SET by another
     /// object...) are written; with nothing changed this makes nothing. (A new property, or
     /// a table that isn't this script's any more, makes `self` afresh.)
-    fn self_in(&self, id: ObjectId, env: &Env, sync: &mut SelfSnap) {
+    fn self_in(&self, id: ObjectId, env: &Env, sync: &mut SelfSnap, sync_gen: &mut u64) {
         let st = self.st.borrow();
         let Some(n) = st.tree.get(id) else { return };
         let t = &n.transform;
@@ -730,22 +772,27 @@ impl Game {
             Some(Value::Table(rc, _)) if rc.named.len() == count + 2 && sync.len() == count => {
                 let e = rc.named.iter().as_slice();
                 // The same entries in the same order (names are shared, so pointers compare).
+                // Objects only gain properties (which changes the count) unless props_gen
+                // moved, so the names themselves only need comparing then.
                 e[2..].iter().zip(sync.iter()).all(|(a, b)| Rc::ptr_eq(&a.0, &b.0))
-                    && &*sync[0].0 == "name"
+                    && (*sync_gen == st.props_gen || &*sync[0].0 == "name"
                     && sync[1..1 + base.len()].iter().zip(&base).all(|(a, b)| &*a.0 == b.0)
                     && &*sync[1 + base.len()].0 == "visible"
-                    && sync[2 + base.len()..].iter().zip(n.props.keys()).all(|(a, k)| &*a.0 == k.as_str())
+                    && sync[2 + base.len()..].iter().zip(n.props.keys()).all(|(a, k)| &*a.0 == k.as_str()))
             }
             _ => false,
         };
+        let gen = st.props_gen;
         if !fits {
             drop(table);
             drop(st);
             let (me, snap) = self.self_table(id);
             Interp::env_set(env, "self", me);
             *sync = snap;
+            *sync_gen = gen;
             return;
         }
+        *sync_gen = gen;
         let Some(Value::Table(rc, _)) = &table else { return };
         let e = rc.named.iter().as_slice();
         fn put(e: &[(Rc<str>, jlb::value::Slot)], sync: &mut SelfSnap, i: usize, v: Value, last: Option<Variant>) {
@@ -788,6 +835,36 @@ impl Game {
     /// After an event: what the script changed in `self` goes to the object, and the record
     /// of what `self` holds is brought up to date.
     fn self_out(&mut self, id: ObjectId, env: &Env, sync: &mut SelfSnap) {
+        // The usual case, in one pass: `self` has the entries the record has, in the same
+        // order (the names are the same shared pieces of text), so each entry is checked
+        // against what went in, and only those the script changed go to the object.
+        if let Some(Value::Table(rc, _)) = Interp::env_get(env, "self") {
+            let e = rc.named.iter().as_slice();
+            if e.len() == sync.len() + 2 && e[2..].iter().zip(sync.iter()).all(|(a, b)| Rc::ptr_eq(&a.0, &b.0)) {
+                let mut st = self.st.borrow_mut();
+                let Some(n) = st.tree.get_mut(id) else { return };
+                for (i, s) in sync.iter_mut().enumerate() {
+                    let now = e[i + 2].1.borrow();
+                    let v = match &s.2 {
+                        None if same_value(&now, &s.1) => continue,
+                        Some(keep) => match to_variant(&now, Some(keep)) {
+                            Some(v) if v == *keep => continue,
+                            v => v,
+                        },
+                        None => to_variant(&now, n.props.get(&*s.0)),
+                    };
+                    drop(now);
+                    // (A value an object can't hold isn't put on it; `self` is still made afresh.)
+                    if let Some(v) = v {
+                        apply_prop(n, &s.0, v);
+                    }
+                    // The next event takes it afresh from the object.
+                    s.1 = Value::Builtin(STALE);
+                    s.2 = None;
+                }
+                return;
+            }
+        }
         self.read_self_back(id, env, sync);
         // Entries the script changed now hold what the object has: remember them as such.
         let Some(Value::Table(rc, _)) = Interp::env_get(env, "self") else { return };
@@ -838,24 +915,7 @@ impl Game {
                 },
             };
             drop(now);
-            let f = v.as_f64().unwrap_or(0.0) as f32;
-            let tr = &mut n.transform;
-            match k {
-                "name" => n.name = v.as_str().unwrap_or(&n.name).to_string(),
-                "x" => tr.position.x = f,
-                "y" => tr.position.y = f,
-                "z" => tr.position.z = f,
-                "rotation" | "rotation_z" => tr.rotation.z = f,
-                "rotation_x" => tr.rotation.x = f,
-                "rotation_y" => tr.rotation.y = f,
-                "scale_x" => tr.scale.x = f,
-                "scale_y" => tr.scale.y = f,
-                "scale_z" => tr.scale.z = f,
-                "visible" => n.visible = v.as_bool(),
-                _ => {
-                    n.props.insert(k.to_string(), v);
-                }
-            }
+            apply_prop(n, k, v);
         }
     }
 
@@ -883,8 +943,8 @@ impl Game {
         if !f.is_func() {
             return None;
         }
-        let mut sync = self.scripts.get_mut(&id).and_then(|v| v.get_mut(i)).map(|s| std::mem::take(&mut s.sync)).unwrap_or_default();
-        self.self_in(id, &env, &mut sync);
+        let (mut sync, mut sync_gen) = self.scripts.get_mut(&id).and_then(|v| v.get_mut(i)).map(|s| (std::mem::take(&mut s.sync), s.sync_gen)).unwrap_or_default();
+        self.self_in(id, &env, &mut sync, &mut sync_gen);
         self.st.borrow_mut().current = Some(id);
         // Tasks this event STARTs belong to this object.
         self.it.event_tag = object_tag(id);
@@ -901,6 +961,7 @@ impl Game {
         self.self_out(id, &env, &mut sync);
         if let Some(s) = self.scripts.get_mut(&id).and_then(|v| v.get_mut(i)) {
             s.sync = sync;
+            s.sync_gen = sync_gen;
         }
         match r {
             Ok(v) => Some(v),
@@ -910,6 +971,7 @@ impl Game {
                 if !matches!(f, Fault::End) {
                     if let Some(s) = self.scripts.get_mut(&id).and_then(|v| v.get_mut(i)) {
                         s.dead = true;
+                        self.scripts_rev += 1;
                     }
                 }
                 None
@@ -919,12 +981,35 @@ impl Game {
 
     /// Runs `handler` on every object that has it, parents first.
     pub fn broadcast(&mut self, handler: &str, args: Vec<Value>) {
-        let ids: Vec<ObjectId> = self.st.borrow().tree.walk();
-        for id in ids {
-            if self.scripts.get(&id).is_some_and(|s| s.iter().any(|s| s.handlers.contains(handler))) {
-                self.run(id, handler, args.clone());
-            }
+        let ids = self.with_handler(handler);
+        for id in ids.iter() {
+            self.run(*id, handler, args.clone());
         }
+    }
+
+    /// The objects with a script that has this event, in tree order (parents first). Kept
+    /// from frame to frame until the tree or the scripts change, so an event that most
+    /// objects don't have costs nothing.
+    fn with_handler(&mut self, handler: &str) -> Rc<Vec<ObjectId>> {
+        let key = (self.st.borrow().tree.rev, self.scripts_rev);
+        if key != self.index_key {
+            self.handler_index.clear();
+            self.index_key = key;
+        }
+        if let Some(v) = self.handler_index.get(handler) {
+            return v.clone();
+        }
+        let ids: Vec<ObjectId> = self
+            .st
+            .borrow()
+            .tree
+            .walk()
+            .into_iter()
+            .filter(|id| self.scripts.get(id).is_some_and(|s| s.iter().any(|s| !s.dead && s.handlers.contains(handler))))
+            .collect();
+        let v = Rc::new(ids);
+        self.handler_index.insert(handler.to_string(), v.clone());
+        v
     }
 
     /// One frame of the game (the simple form, for tools and tests).
@@ -1058,9 +1143,9 @@ impl Game {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
             st.audio.tidy();
-            let playing: Vec<(ObjectId, bool)> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Sound).map(|i| (i, st.audio.by_object.contains_key(&i))).collect();
+            let playing: Vec<(ObjectId, bool)> = st.tree.of_kinds(&[ObjectKind::Sound]).iter().map(|&i| (i, st.audio.by_object.contains_key(&i))).collect();
             // Where the "ears" are: the 3D camera, else the 2D camera (or the screen's middle).
-            let cam3 = st.tree.walk().into_iter().find(|i| st.tree.objects[*i].kind == ObjectKind::Camera3D && st.tree.objects[*i].prop("current").is_none_or(|v| v.as_bool()));
+            let cam3 = st.tree.of_kinds(&[ObjectKind::Camera3D]).iter().copied().find(|i| st.tree.objects[*i].prop("current").is_none_or(|v| v.as_bool()));
             // ...and which way is right, for the balance.
             let (ear, right) = match cam3 {
                 Some(c) => {
@@ -1180,17 +1265,20 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let ids: Vec<ObjectId> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Sprite2D).collect();
-            for id in ids {
+            let ids = st.tree.of_kinds(&[ObjectKind::Sprite2D]);
+            for &id in ids.iter() {
                 if st.frozen(id) {
                     continue;
                 }
                 let n = &st.tree.objects[id];
-                let name = n.text("animation").to_string();
-                if name.is_empty() {
-                    st.anims.remove(&id);
+                // Most sprites have no animation: skip them without making anything.
+                if n.text("animation").is_empty() {
+                    if !st.anims.is_empty() {
+                        st.anims.remove(&id);
+                    }
                     continue;
                 }
+                let name = n.text("animation").to_string();
                 let Some(frames) = gex_core::tiles::animation_frames(n.text("animations"), &name) else { continue };
                 if frames.is_empty() {
                     continue;
@@ -1222,7 +1310,7 @@ impl Game {
         {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
-            let ids: Vec<ObjectId> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Mesh3D && !st.frozen(*i)).collect();
+            let ids: Vec<ObjectId> = st.tree.of_kinds(&[ObjectKind::Mesh3D]).iter().copied().filter(|i| !st.frozen(*i)).collect();
             for id in ids {
                 let n = &st.tree.objects[id];
                 let name = n.text("animation").to_string();
@@ -1279,7 +1367,7 @@ impl Game {
         let st = &mut *st;
         let mut boxes = Vec::new();
         let mut keep = HashSet::new();
-        for id in st.tree.walk() {
+        for &id in st.tree.of_kinds(&[ObjectKind::TileMap2D]).iter() {
             let n = &st.tree.objects[id];
             if n.kind != ObjectKind::TileMap2D || !n.prop("solid").is_none_or(|v| v.as_bool()) {
                 continue;
@@ -1319,7 +1407,7 @@ impl Game {
         }
         st.tile_boxes.retain(|k, _| keep.contains(k));
         // Sprites switched to solid are walls their own size.
-        for id in st.tree.walk() {
+        for &id in st.tree.of_kinds(&[ObjectKind::Sprite2D]).iter() {
             let n = &st.tree.objects[id];
             if n.kind != ObjectKind::Sprite2D || !n.prop("solid").is_some_and(|v| v.as_bool()) || !st.tree.visible_in_tree(id) {
                 continue;
@@ -1342,7 +1430,7 @@ impl Game {
         // Mesh3D objects with collision on become static triangle meshes.
         let mut meshes = Vec::new();
         let mut keep = HashSet::new();
-        for id in st.tree.walk() {
+        for &id in st.tree.of_kinds(&[ObjectKind::Mesh3D]).iter() {
             let n = &st.tree.objects[id];
             if n.kind != ObjectKind::Mesh3D || !n.prop("collision").is_some_and(|v| v.as_bool()) {
                 continue;
@@ -1380,7 +1468,7 @@ impl Game {
         st.physics.meshes_3d = meshes;
         // Body3D with shape "hull": the outline of its first Mesh3D child's model.
         let mut keep = HashSet::new();
-        for id in st.tree.walk() {
+        for &id in st.tree.of_kinds(&[ObjectKind::Body3D]).iter() {
             let n = &st.tree.objects[id];
             if n.kind != ObjectKind::Body3D || !matches!(n.text("shape"), "hull" | "model") {
                 continue;
@@ -1474,7 +1562,7 @@ impl Game {
             }
         }
         st.shake.0 = (st.shake.0 - st.shake.1 * dt).max(0.0);
-        let cam = st.tree.walk().into_iter().find(|i| {
+        let cam = st.tree.of_kinds(&[ObjectKind::Camera2D]).iter().copied().find(|i| {
             let n = &st.tree.objects[*i];
             n.kind == ObjectKind::Camera2D && n.prop("current").is_none_or(|v| v.as_bool())
         });
@@ -1517,6 +1605,8 @@ impl Game {
     pub fn render_list(&self) -> gex_core::render::RenderList {
         let st = self.st.borrow();
         let mut list = gex_core::render::extract(&st.tree);
+        // Sprites in layer order so far (particles and drawings are added after).
+        let drawn = list.sprites.len();
         list.graphics = st.project.config.graphics.clone();
         crate::particles::draw(&st.tree, &st.particles, &mut list);
         crate::particles::draw_3d(&st.tree, &st.particles_3d, &mut list);
@@ -1550,7 +1640,15 @@ impl Game {
             list.fade = c;
         }
         crate::commands::append_draws(&st.draws, &mut list);
-        list.sprites.sort_by(|a, b| a.layer.total_cmp(&b.layer));
+        // (Stable: the same layer keeps tree order, then drawing order.)
+        if list.sprites.len() != drawn {
+            gex_core::render::sort_by_layer(&mut list.sprites);
+        }
+        drop(st);
+        // (Someone may be looking at the tree right now: then the preloads go with a later list.)
+        if let Ok(mut st) = self.st.try_borrow_mut() {
+            list.preload = std::mem::take(&mut st.preload);
+        }
         list
     }
 
@@ -1732,15 +1830,14 @@ impl Game {
     /// go. Every object under the mouse gets them (not just the top one), like GameMaker.
     fn object_mouse(&mut self) {
         const EVENTS: [&str; 5] = ["on_mouse_enter", "on_mouse_leave", "on_clicked", "on_click_held", "on_click_released"];
-        let ids: HashSet<ObjectId> = self
-            .scripts
-            .iter()
-            .filter(|(_, l)| l.iter().any(|s| !s.dead && EVENTS.iter().any(|e| s.handlers.contains(*e))))
-            .map(|(id, _)| *id)
-            .collect();
+        let mut ids: HashSet<ObjectId> = HashSet::new();
+        for e in EVENTS {
+            ids.extend(self.with_handler(e).iter().copied());
+        }
         if ids.is_empty() && self.hovered.is_empty() {
             return;
         }
+        let was_hovered = self.hovered.clone();
         let (order, now, pressed, down, released) = {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
@@ -1757,7 +1854,9 @@ impl Game {
                 v.sort();
                 v
             };
-            (st.tree.walk(), now, sorted(&st.input.mouse_pressed), sorted(&st.input.mouse_down), sorted(&st.input.mouse_released))
+            // The objects that can have the mouse on them, in tree order.
+            let order: Vec<ObjectId> = st.tree.of_kinds(&[ObjectKind::Sprite2D, ObjectKind::Collider2D, ObjectKind::Body2D, ObjectKind::Label2D]).iter().copied().filter(|i| ids.contains(i) || was_hovered.contains(i)).collect();
+            (order, now, sorted(&st.input.mouse_pressed), sorted(&st.input.mouse_down), sorted(&st.input.mouse_released))
         };
         let was = std::mem::take(&mut self.hovered);
         for id in order {
@@ -1862,7 +1961,7 @@ impl AreaShape {
 
 fn collect_areas(tree: &BlueprintTree, layers: &crate::physics::Layers, has_scripts: impl Fn(ObjectId) -> bool) -> Vec<Area> {
     let mut out = Vec::new();
-    for id in tree.walk() {
+    for &id in tree.of_kinds(&[ObjectKind::Collider2D, ObjectKind::Collider3D, ObjectKind::Body2D, ObjectKind::Body3D]).iter() {
         let n = &tree.objects[id];
         if !matches!(n.kind, ObjectKind::Collider2D | ObjectKind::Collider3D | ObjectKind::Body2D | ObjectKind::Body3D) || !tree.visible_in_tree(id) {
             continue;
@@ -1953,6 +2052,32 @@ pub fn scan_handlers_text(text: &str) -> HashSet<String> {
 /// Where project files live, for tests and tools.
 pub fn project_at(dir: PathBuf) -> Result<Project, String> {
     Project::open(&dir)
+}
+
+/// A value from a script's `self` put on the object: the transform shortcuts, name and
+/// visible, or a property.
+fn apply_prop(n: &mut gex_core::Object, k: &str, v: Variant) {
+    let f = v.as_f64().unwrap_or(0.0) as f32;
+    let tr = &mut n.transform;
+    match k {
+        "name" => n.name = v.as_str().unwrap_or(&n.name).to_string(),
+        "x" => tr.position.x = f,
+        "y" => tr.position.y = f,
+        "z" => tr.position.z = f,
+        "rotation" | "rotation_z" => tr.rotation.z = f,
+        "rotation_x" => tr.rotation.x = f,
+        "rotation_y" => tr.rotation.y = f,
+        "scale_x" => tr.scale.x = f,
+        "scale_y" => tr.scale.y = f,
+        "scale_z" => tr.scale.z = f,
+        "visible" => n.visible = v.as_bool(),
+        _ => match n.props.get_mut(k) {
+            Some(slot) => *slot = v,
+            None => {
+                n.props.insert(k.to_string(), v);
+            }
+        },
+    }
 }
 
 /// What went into an object's `self` table: each name, the value put in, and for tables

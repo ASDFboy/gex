@@ -9,6 +9,20 @@ use crate::object::{Object, ObjectId};
 pub struct BlueprintTree {
     pub objects: SlotMap<ObjectId, Object>,
     pub root: Option<ObjectId>,
+    /// Goes up whenever objects are added, removed or moved (so lists made from the tree,
+    /// like which objects get an event, know when to be made again).
+    pub rev: u64,
+    kinds: KindCache,
+}
+
+/// Objects of some kinds, in tree order, kept until the tree changes (see `of_kinds`).
+#[derive(Default)]
+struct KindCache(std::sync::Mutex<(u64, std::collections::HashMap<u64, std::sync::Arc<Vec<ObjectId>>>)>);
+
+impl Clone for KindCache {
+    fn clone(&self) -> Self {
+        KindCache::default()
+    }
 }
 
 impl BlueprintTree {
@@ -32,6 +46,7 @@ impl BlueprintTree {
         object.parent = parent;
         object.children.clear();
         let id = self.objects.insert(object);
+        self.rev += 1;
         match parent {
             Some(p) => {
                 let name = self.unique_name(p, id);
@@ -46,12 +61,23 @@ impl BlueprintTree {
     /// A sibling-unique version of the object's name ("Enemy", "Enemy2", ...).
     fn unique_name(&self, parent: ObjectId, id: ObjectId) -> String {
         let base = self.objects[id].name.clone();
-        let taken = |n: &str| self.objects[parent].children.iter().any(|c| *c != id && self.objects[*c].name == n);
-        if !taken(&base) {
+        let siblings = &self.objects[parent].children;
+        if !siblings.iter().any(|c| *c != id && self.objects[*c].name == base) {
             return base;
         }
+        // Taken: the first free "<stem>N". The numbers in use are gathered in one look at the
+        // siblings (trying each number in turn against every sibling slows right down when a
+        // game spawns hundreds of the same thing).
         let stem = base.trim_end_matches(|c: char| c.is_ascii_digit()).to_string();
-        (2..).map(|i| format!("{}{}", stem, i)).find(|n| !taken(n)).unwrap()
+        let used: std::collections::HashSet<u64> = siblings
+            .iter()
+            .filter(|c| **c != id)
+            .filter_map(|c| self.objects[*c].name.strip_prefix(stem.as_str()))
+            .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) && !rest.starts_with('0'))
+            .filter_map(|rest| rest.parse().ok())
+            .collect();
+        let n = (2..).find(|i| !used.contains(i)).unwrap();
+        format!("{}{}", stem, n)
     }
 
     /// Removes an object and everything under it. Gives back the removed ids.
@@ -60,6 +86,7 @@ impl BlueprintTree {
         if !self.contains(id) {
             return gone;
         }
+        self.rev += 1;
         if let Some(p) = self.objects[id].parent {
             if let Some(pn) = self.objects.get_mut(p) {
                 pn.children.retain(|c| *c != id);
@@ -87,6 +114,7 @@ impl BlueprintTree {
         if let Some(p) = self.objects[id].parent {
             self.objects[p].children.retain(|c| *c != id);
         }
+        self.rev += 1;
         let kids = &mut self.objects[new_parent].children;
         let at = index.unwrap_or(kids.len()).min(kids.len());
         kids.insert(at, id);
@@ -109,6 +137,24 @@ impl BlueprintTree {
     }
 
     /// Every object, parents before children, in sibling order.
+    /// The objects of these kinds, in tree order (as `walk` gives them). Kept until objects
+    /// are added, removed or moved, so systems that look for one kind every frame (particles,
+    /// animations, cameras, sounds) don't walk the whole tree each time.
+    pub fn of_kinds(&self, kinds: &[crate::object::ObjectKind]) -> std::sync::Arc<Vec<ObjectId>> {
+        let mask = kinds.iter().fold(0u64, |m, k| m | 1 << (*k as u32));
+        let mut c = self.kinds.0.lock().unwrap();
+        if c.0 != self.rev {
+            c.1.clear();
+            c.0 = self.rev;
+        }
+        if let Some(v) = c.1.get(&mask) {
+            return v.clone();
+        }
+        let v = std::sync::Arc::new(self.walk().into_iter().filter(|id| kinds.contains(&self.objects[*id].kind)).collect::<Vec<_>>());
+        c.1.insert(mask, v.clone());
+        v
+    }
+
     pub fn walk(&self) -> Vec<ObjectId> {
         let mut out = Vec::with_capacity(self.objects.len());
         if let Some(r) = self.root {

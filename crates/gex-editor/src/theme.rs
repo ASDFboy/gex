@@ -268,7 +268,9 @@ pub fn tab(ui: &mut egui::Ui, label: &str, active: bool, closeable: bool, dirty:
     let (rect, r) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click_and_drag());
     let lit = ui.ctx().animate_bool_with_time(r.id, active, 0.12);
     let hover = ui.ctx().animate_bool_with_time(r.id.with("h"), r.hovered(), 0.1);
-    let p = ui.painter();
+    // The tab showing is drawn after the rest of its row (see flush_active_tab), so it's in
+    // front where neighbours' slanted edges overlap it.
+    let mut shapes: Vec<Shape> = Vec::new();
     // The tab showing is the darker one (it joins the dark page under it); the others are
     // lighter, and lighter still when pointed at.
     let base = mix(Color32::from_rgb(0x2c, 0x2c, 0x2c), Color32::from_rgb(0x36, 0x36, 0x36), hover);
@@ -276,21 +278,26 @@ pub fn tab(ui: &mut egui::Ui, label: &str, active: bool, closeable: bool, dirty:
     let slant = 9.0;
     let (top, bottom) = (rect.top() + if active { 0.0 } else { 2.0 }, rect.bottom());
     let shape = vec![Pos2::new(rect.left() - slant / 2.0, bottom), Pos2::new(rect.left() + slant / 2.0, top), Pos2::new(rect.right() - slant / 2.0, top), Pos2::new(rect.right() + slant / 2.0, bottom)];
-    p.add(Shape::convex_polygon(shape.clone(), mix(base, Color32::from_rgb(0x12, 0x12, 0x12), lit), Stroke::NONE));
-    p.add(Shape::line(shape, Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34))));
-    p.galley(Pos2::new(rect.left() + 12.0, (top + bottom) / 2.0 - galley.size().y / 2.0), galley, if active { TEXT } else { TEXT_DIM });
+    shapes.push(Shape::convex_polygon(shape.clone(), mix(base, Color32::from_rgb(0x12, 0x12, 0x12), lit), Stroke::NONE));
+    shapes.push(Shape::line(shape, Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34))));
+    shapes.push(Shape::galley(Pos2::new(rect.left() + 12.0, (top + bottom) / 2.0 - galley.size().y / 2.0), galley, if active { TEXT } else { TEXT_DIM }));
     let x = Rect::from_center_size(Pos2::new(rect.right() - 16.0, rect.center().y + 1.0), egui::vec2(16.0, 16.0));
     let over_x = closeable && ui.rect_contains_pointer(x);
     if closeable && (r.hovered() || !dirty) && (r.hovered() || active) {
         let c = if over_x { TEXT } else { TEXT_DIM };
         if over_x {
-            p.rect_filled(x, 0.0, GRAY_LIGHT);
+            shapes.push(Shape::rect_filled(x, 0.0, GRAY_LIGHT));
         }
         let (c0, d) = (x.center(), 3.5);
-        p.line_segment([c0 + egui::vec2(-d, -d), c0 + egui::vec2(d, d)], Stroke::new(1.2, c));
-        p.line_segment([c0 + egui::vec2(-d, d), c0 + egui::vec2(d, -d)], Stroke::new(1.2, c));
+        shapes.push(Shape::line_segment([c0 + egui::vec2(-d, -d), c0 + egui::vec2(d, d)], Stroke::new(1.2, c)));
+        shapes.push(Shape::line_segment([c0 + egui::vec2(-d, d), c0 + egui::vec2(d, -d)], Stroke::new(1.2, c)));
     } else if dirty {
-        p.circle_filled(x.center(), 3.5, WARN);
+        shapes.push(Shape::circle_filled(x.center(), 3.5, WARN));
+    }
+    if active {
+        ui.data_mut(|d| d.insert_temp(active_tab_id(ui), shapes));
+    } else {
+        ui.painter().extend(shapes);
     }
     let close = over_x && r.clicked();
     TabOut { resp: r, close }
@@ -319,6 +326,18 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, off_label: &str, on_label: &str,
     r.union(label)
 }
 
+fn active_tab_id(ui: &egui::Ui) -> egui::Id {
+    egui::Id::new(("gex active tab", ui.layer_id()))
+}
+
+/// Draws the row's showing tab, held back by `tab` so it goes in front of the others: call
+/// after a row of tabs (tab_row and tab_reorder do).
+pub fn flush_active_tab(ui: &egui::Ui) {
+    if let Some(shapes) = ui.data_mut(|d| d.remove_temp::<Vec<Shape>>(active_tab_id(ui))) {
+        ui.painter().extend(shapes);
+    }
+}
+
 /// A row of tabs that only switch between pages (no closing): gives the page picked.
 pub fn tab_row(ui: &mut egui::Ui, labels: &[&str], current: &mut usize) {
     let row = ui.horizontal(|ui| {
@@ -329,6 +348,7 @@ pub fn tab_row(ui: &mut egui::Ui, labels: &[&str], current: &mut usize) {
                 *current = i;
             }
         }
+        flush_active_tab(ui);
     });
     // The line the tabs sit on.
     let y = row.response.rect.bottom();
@@ -395,6 +415,7 @@ pub fn tinted(ui: &mut egui::Ui, color: Option<Color32>, row: impl FnOnce(&mut e
 /// held is remembered by place, so it's followed through swaps, and a swap only happens once
 /// the pointer would still be over the tab afterwards (no trading back and forth).
 pub fn tab_reorder(ui: &egui::Ui, salt: &str, rects: &[Rect], started: Option<usize>) -> Option<(usize, usize)> {
+    flush_active_tab(ui);
     let id = egui::Id::new(("tab reorder", salt));
     if let Some(i) = started {
         ui.data_mut(|d| d.insert_temp(id, i));

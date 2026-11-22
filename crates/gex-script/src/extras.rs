@@ -152,16 +152,79 @@ pub(crate) fn from_json(j: &serde_json::Value) -> Value {
     }
 }
 
+/// Saves written so far but maybe not on disk yet, by file: the newest text of each
+/// (None: deleted). Reading a save checks here first, so a load right after a save sees it.
+static PENDING: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, Option<String>>>> = std::sync::Mutex::new(None);
+
+/// The thread that writes saves, so a game never waits on the disk (or a virus scanner
+/// looking at each new file) in the middle of a frame.
+fn writer() -> &'static std::sync::mpsc::Sender<PathBuf> {
+    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<PathBuf>> = std::sync::OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
+        let _ = std::thread::Builder::new().name("saves".into()).spawn(move || {
+            while let Ok(p) = rx.recv() {
+                // The newest text for this file (later saves of it replace earlier ones).
+                let text = PENDING.lock().unwrap().as_ref().and_then(|m| m.get(&p).cloned());
+                let Some(text) = text else { continue };
+                match &text {
+                    Some(t) => {
+                        if let Some(dir) = p.parent() {
+                            let _ = std::fs::create_dir_all(dir);
+                        }
+                        // Written beside it, then swapped in: a crash mid-write can't damage a save.
+                        let tmp = p.with_extension("json.tmp");
+                        if std::fs::write(&tmp, t).is_ok() && std::fs::rename(&tmp, &p).is_err() {
+                            let _ = std::fs::write(&p, t);
+                        }
+                    }
+                    None => {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                }
+                let mut g = PENDING.lock().unwrap();
+                if let Some(m) = g.as_mut() {
+                    if m.get(&p) == Some(&text) {
+                        m.remove(&p);
+                    }
+                }
+            }
+        });
+        tx
+    })
+}
+
+fn queue_write(p: PathBuf, text: Option<String>) {
+    PENDING.lock().unwrap().get_or_insert_with(Default::default).insert(p.clone(), text);
+    let _ = writer().send(p);
+}
+
+/// Waits (up to a few seconds) until every save is on disk: when a game stops.
+pub fn flush_saves() {
+    for _ in 0..300 {
+        if PENDING.lock().unwrap().as_ref().is_none_or(|m| m.is_empty()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 pub fn save(game: &str, name: &str, v: &Value) -> Result<(), String> {
     let p = slot_path(game, name)?;
     let j = to_json(v, 0)?;
-    std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(&p, serde_json::to_string_pretty(&j).unwrap()).map_err(|e| format!("couldn't save {}: {}", name, e))
+    queue_write(p, Some(serde_json::to_string_pretty(&j).unwrap()));
+    Ok(())
 }
 
 pub fn load(game: &str, name: &str) -> Result<Value, String> {
     let p = slot_path(game, name)?;
-    match std::fs::read_to_string(&p) {
+    let pending = PENDING.lock().unwrap().as_ref().and_then(|m| m.get(&p).cloned());
+    let text = match pending {
+        Some(Some(t)) => Ok(t),
+        Some(None) => return Ok(Value::Null),
+        None => std::fs::read_to_string(&p),
+    };
+    match text {
         Ok(t) => serde_json::from_str(&t).map(|j| from_json(&j)).map_err(|e| format!("save {} is damaged: {}", name, e)),
         Err(_) => Ok(Value::Null),
     }
@@ -169,7 +232,7 @@ pub fn load(game: &str, name: &str) -> Result<Value, String> {
 
 pub fn delete(game: &str, name: &str) -> Result<(), String> {
     let p = slot_path(game, name)?;
-    let _ = std::fs::remove_file(p);
+    queue_write(p, None);
     Ok(())
 }
 

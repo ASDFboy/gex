@@ -379,7 +379,11 @@ fn restore(n: &mut Net, st: &mut WorldState, id: ObjectId) {
             for (k, v) in saved {
                 match v {
                     Some(v) => o.props.insert(k, v),
-                    None => o.props.remove(&k),
+                    None => {
+                        // A property gone: scripts' `self` tables are checked name by name again.
+                        st.props_gen += 1;
+                        o.props.remove(&k)
+                    }
                 };
             }
         }

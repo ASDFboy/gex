@@ -81,6 +81,123 @@ pub fn inherited_modulate(tree: &BlueprintTree, id: ObjectId) -> [f32; 4] {
     c
 }
 
+/// Puts sprites in layer order, keeping the order they came in within a layer. Sprites are
+/// big, so the order is worked out on their positions and each is moved once.
+pub fn sort_by_layer(sprites: &mut Vec<Sprite>) {
+    if sprites.windows(2).all(|w| w[0].layer <= w[1].layer) {
+        return;
+    }
+    let mut order: Vec<u32> = (0..sprites.len() as u32).collect();
+    order.sort_by(|a, b| sprites[*a as usize].layer.total_cmp(&sprites[*b as usize].layer));
+    let mut old: Vec<Option<Sprite>> = std::mem::take(sprites).into_iter().map(Some).collect();
+    sprites.extend(order.into_iter().map(|i| old[i as usize].take().unwrap()));
+}
+
+/// A Sprite2D as drawn: its properties read in one pass over them (one look-up each, by
+/// name, costs a lot when there are thousands of sprites).
+#[allow(clippy::too_many_arguments)]
+fn sprite_2d(id: ObjectId, n: &crate::Object, model: Mat4, z: f32, tint_down: [f32; 4], blend: Blend, pixel: Option<bool>, lit: bool) -> Sprite {
+    use crate::Variant;
+    let (mut w, mut h, mut color, mut centered, mut pivot) = (32.0f64, 32.0f64, [1.0f32; 4], true, [0.5f64, 0.5f64]);
+    let (mut texture, mut layer, mut hf, mut vf, mut frame) = ("", 0.0f64, 1.0f64, 1.0f64, 0.0f64);
+    let (mut flip, mut parallax, mut repeat) = ([false; 2], [1.0f64, 1.0f64], [false; 2]);
+    let (mut fx, mut shader, mut values, mut opacity) = ([0.0f64, 0.0, 1.0, 0.0], "", [0.0f32; 4], 1.0f64);
+    let num = |v: &Variant, d: f64| v.as_f64().unwrap_or(d);
+    for (k, v) in &n.props {
+        match k.as_str() {
+            "width" => w = num(v, 32.0),
+            "height" => h = num(v, 32.0),
+            "color" => color = v.as_color(),
+            "centered" => centered = v.as_bool(),
+            "pivot_x" => pivot[0] = num(v, 0.5),
+            "pivot_y" => pivot[1] = num(v, 0.5),
+            "texture" => texture = v.as_str().unwrap_or(""),
+            "layer" => layer = num(v, 0.0),
+            "hframes" => hf = num(v, 1.0),
+            "vframes" => vf = num(v, 1.0),
+            "frame" => frame = num(v, 0.0),
+            "flip_h" => flip[0] = v.as_bool(),
+            "flip_v" => flip[1] = v.as_bool(),
+            "parallax_x" => parallax[0] = num(v, 1.0),
+            "parallax_y" => parallax[1] = num(v, 1.0),
+            "repeat_x" => repeat[0] = v.as_bool(),
+            "repeat_y" => repeat[1] = v.as_bool(),
+            "brightness" => fx[0] = num(v, 0.0),
+            "hue" => fx[1] = num(v, 0.0),
+            "saturation" => fx[2] = num(v, 1.0),
+            "invert" => fx[3] = match v { Variant::Bool(b) => *b as u8 as f64, v => num(v, 0.0) },
+            "shader" => shader = v.as_str().unwrap_or(""),
+            "value_1" => values[0] = num(v, 0.0) as f32,
+            "value_2" => values[1] = num(v, 0.0) as f32,
+            "value_3" => values[2] = num(v, 0.0) as f32,
+            "value_4" => values[3] = num(v, 0.0) as f32,
+            "opacity" => opacity = num(v, 1.0),
+            _ => {}
+        }
+    }
+    let (hf, vf) = (hf.max(1.0) as u32, vf.max(1.0) as u32);
+    let o = opacity.clamp(0.0, 1.0) as f32;
+    let m = tint_down;
+    Sprite {
+        object: id,
+        model,
+        size: Vec2::new(w as f32, h as f32),
+        pivot: if centered { Vec2::new(pivot[0] as f32, pivot[1] as f32) } else { Vec2::ZERO },
+        color: [color[0] * m[0], color[1] * m[1], color[2] * m[2], color[3] * m[3] * o],
+        blend,
+        pixel,
+        lit,
+        texture: texture.to_string(),
+        layer: layer as f32 + z,
+        region: if hf * vf > 1 { Region::Frame { h: hf, v: vf, frame: frame.max(0.0) as u32 } } else { Region::Whole },
+        flip,
+        parallax: Vec2::new(parallax[0] as f32, parallax[1] as f32),
+        repeat,
+        effects: [fx[0] as f32, (fx[1] / 360.0) as f32, (1.0 - fx[2]).clamp(-4.0, 1.0) as f32, fx[3].clamp(0.0, 1.0) as f32],
+        shader: shader.to_string(),
+        values,
+    }
+}
+
+/// A TileMap2D's tiles, parsed once and kept while the text stays the same (a big map's
+/// text is long; parsing it every frame was most of the work of drawing one).
+fn parsed_tiles(text: &str) -> std::rc::Rc<Vec<Vec<i32>>> {
+    use std::hash::{Hash, Hasher};
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<u64, (String, std::rc::Rc<Vec<Vec<i32>>>, u64)>> = Default::default();
+        static TICK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    let key = h.finish();
+    let tick = TICK.with(|t| {
+        t.set(t.get() + 1);
+        t.get()
+    });
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some((t, g, used)) = c.get_mut(&key) {
+            if t == text {
+                *used = tick;
+                return g.clone();
+            }
+        }
+        let g = std::rc::Rc::new(crate::tiles::parse(text));
+        // Maps not drawn for a while are forgotten.
+        if c.len() > 64 {
+            c.retain(|_, v| tick - v.2 < 1000);
+        }
+        c.insert(key, (text.to_string(), g.clone(), tick));
+        g
+    })
+}
+
+/// `tinted` with the modulate already worked out (its own times its parents').
+fn tint(n: &crate::Object, m: [f32; 4], color: [f32; 4]) -> [f32; 4] {
+    let o = n.num("opacity", 1.0).clamp(0.0, 1.0) as f32;
+    [color[0] * m[0], color[1] * m[1], color[2] * m[2], color[3] * m[3] * o]
+}
+
 /// An object's own color: its color times its opacity, its own modulate and its parents'.
 pub fn tinted(tree: &BlueprintTree, id: ObjectId, color: [f32; 4]) -> [f32; 4] {
     let n = &tree.objects[id];
@@ -441,6 +558,9 @@ pub struct Rect2D {
 #[derive(Clone, Debug, Default)]
 pub struct RenderList {
     pub sprites: Vec<Sprite>,
+    /// Pictures the game will want soon (PRELOAD, and those placed in the blueprint):
+    /// the renderer gets them ready in the background.
+    pub preload: Vec<String>,
     pub labels: Vec<Label>,
     pub meshes: Vec<MeshDraw>,
     pub lights: Vec<LightDraw>,
@@ -505,12 +625,27 @@ pub fn anchor_fraction(a: &str) -> Vec2 {
 
 pub fn extract(tree: &BlueprintTree) -> RenderList {
     let mut out = RenderList { clear: [0.08, 0.08, 0.1, 1.0], ambient_2d: [1.0; 4], ..Default::default() };
+    // One pass down the tree works out each object's world transform, whether it shows and
+    // the color its parents pass down, from its parent's (instead of climbing up the tree from
+    // every object, three times over).
+    let mut info: slotmap::SecondaryMap<ObjectId, (Mat4, bool, [f32; 4])> = slotmap::SecondaryMap::with_capacity(tree.objects.len());
     for id in tree.walk() {
-        if !tree.visible_in_tree(id) {
+        let n = &tree.objects[id];
+        let (pm, pvis, pmod) = n.parent.and_then(|p| info.get(p).copied()).unwrap_or((Mat4::IDENTITY, true, [1.0; 4]));
+        let world = pm * n.transform.matrix();
+        let vis = pvis && n.visible;
+        let tint_down = match n.props.get("modulate") {
+            Some(v) => {
+                let m = v.as_color();
+                [pmod[0] * m[0], pmod[1] * m[1], pmod[2] * m[2], pmod[3] * m[3]]
+            }
+            None => pmod,
+        };
+        info.insert(id, (world, vis, tint_down));
+        if !vis {
             continue;
         }
-        let n = &tree.objects[id];
-        let mut model = tree.global_matrix(id);
+        let mut model = world;
         // 2D things are flat: their z (with their parents') is the order they draw in,
         // higher on top.
         let z = if n.kind.is_2d() { std::mem::take(&mut model.w_axis.z) } else { 0.0 };
@@ -525,33 +660,12 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
             out.colliders.push(Rect2D { object: id, model: model * Mat4::from_translation(mid.extend(0.0)), size });
         }
         match n.kind {
-            ObjectKind::Sprite2D => out.sprites.push(Sprite {
-                object: id,
-                model,
-                size: Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32),
-                pivot: pivot_of(n),
-                color: tinted(tree, id, n.color("color")),
-                blend,
-                pixel,
-                lit,
-                texture: n.text("texture").to_string(),
-                layer: n.num("layer", 0.0) as f32 + z,
-                region: {
-                    let (h, v) = (n.num("hframes", 1.0).max(1.0) as u32, n.num("vframes", 1.0).max(1.0) as u32);
-                    if h * v > 1 { Region::Frame { h, v, frame: n.num("frame", 0.0).max(0.0) as u32 } } else { Region::Whole }
-                },
-                flip: [n.prop("flip_h").is_some_and(|v| v.as_bool()), n.prop("flip_v").is_some_and(|v| v.as_bool())],
-                parallax: Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32),
-                repeat: [n.prop("repeat_x").is_some_and(|v| v.as_bool()), n.prop("repeat_y").is_some_and(|v| v.as_bool())],
-                effects: Sprite::effects_of(n),
-                shader: n.text("shader").to_string(),
-                values: Sprite::values_of(n),
-            }),
+            ObjectKind::Sprite2D => out.sprites.push(sprite_2d(id, n, model, z, tint_down, blend, pixel, lit)),
             ObjectKind::TileMap2D => {
-                let grid = crate::tiles::parse(n.text("tiles"));
+                let grid = parsed_tiles(n.text("tiles"));
                 let (tw, th) = (n.num("tile_width", 32.0) as f32, n.num("tile_height", 32.0) as f32);
                 let tex = n.text("tileset").to_string();
-                let color = tinted(tree, id, n.color("color"));
+                let color = tint(n, tint_down, n.color("color"));
                 let layer = n.num("layer", -5.0) as f32 + z;
                 let parallax = Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32);
                 for (r, row) in grid.iter().enumerate() {
@@ -584,7 +698,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 let p = model.w_axis.truncate().truncate();
                 let mut props = n.props.clone();
                 // The UI layer reads one opacity: this object's, times its parents' modulate alpha.
-                let t = tinted(tree, id, [1.0; 4]);
+                let t = tint(n, tint_down, [1.0; 4]);
                 props.insert("opacity".into(), crate::Variant::Num(t[3] as f64));
                 out.ui.push(UiItem { object: id, kind: k, pos: p, size: Vec2::new(n.num("width", 100.0) as f32, n.num("height", 30.0) as f32), props, clip: None });
             }
@@ -594,7 +708,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 model,
                 text: n.text("text").to_string(),
                 size: n.num("size", 16.0) as f32,
-                color: tinted(tree, id, n.color("color")),
+                color: tint(n, tint_down, n.color("color")),
                 layer: n.num("layer", 10.0) as f32 + z,
                 font: n.text("font").to_string(),
                 anchor: label_anchor(n),
@@ -621,7 +735,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 pos: model.w_axis.truncate().truncate(),
                 radius: n.num("radius", 200.0) as f32 * model.x_axis.truncate().length(),
                 color: {
-                    let c = tinted(tree, id, n.color("color"));
+                    let c = tint(n, tint_down, n.color("color"));
                     let e = n.num("energy", 1.0) as f32;
                     [c[0] * e, c[1] * e, c[2] * e, c[3]]
                 },
@@ -640,7 +754,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
             }
             ObjectKind::Mesh3D => {
                 let whole = MeshDraw {
-                color: tinted(tree, id, n.color("color")),
+                color: tint(n, tint_down, n.color("color")),
                 texture: n.text("texture").to_string(),
                 uv_scale: [n.num("uv_scale_x", 1.0) as f32, n.num("uv_scale_y", 1.0) as f32],
                 rim: n.num("rim", 0.0) as f32,
@@ -696,7 +810,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
             ObjectKind::Sprite3D => {
                 let (w, h) = (n.num("width", 1.0) as f32, n.num("height", 1.0) as f32);
                 out.meshes.push(MeshDraw {
-                    color: tinted(tree, id, n.color("color")),
+                    color: tint(n, tint_down, n.color("color")),
                     texture: n.text("texture").to_string(),
                     cast_shadows: n.prop("cast_shadows").is_some_and(|v| v.as_bool()),
                     unlit: n.prop("unlit").is_none_or(|v| v.as_bool()),
@@ -710,7 +824,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 pos: model.w_axis.truncate(),
                 text: n.text("text").to_string(),
                 size: n.num("size", 24.0) as f32,
-                color: tinted(tree, id, n.color("color")),
+                color: tint(n, tint_down, n.color("color")),
                 font: n.text("font").to_string(),
             }),
             ObjectKind::Environment => {
@@ -753,7 +867,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 }
             }
             ObjectKind::Light3D => {
-                let c = tinted(tree, id, n.color("color"));
+                let c = tint(n, tint_down, n.color("color"));
                 let e = n.num("energy", 1.0) as f32;
                 out.lights.push(LightDraw {
                     kind: match n.text("type") {
@@ -777,7 +891,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
             _ => {}
         }
     }
-    out.sprites.sort_by(|a, b| a.layer.total_cmp(&b.layer));
+    sort_by_layer(&mut out.sprites);
     out.labels.sort_by(|a, b| a.layer.total_cmp(&b.layer));
     layout_ui(tree, &mut out.ui);
     out

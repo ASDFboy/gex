@@ -272,7 +272,10 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
                 stats.sprites = list.sprites.len();
                 stats.meshes = list.meshes.len();
                 frames += 1;
-                let tree = (frames % 6 == 1).then(|| game.tree().clone());
+                // The editor's object list follows the game a few times a second; a built game
+                // has no editor to send it to.
+                let standalone = crate::world::STANDALONE.load(Ordering::Relaxed);
+                let tree = (!standalone && frames % 6 == 1).then(|| game.tree().clone());
                 let blueprint = tree.as_ref().map(|_| game.st.borrow().blueprint.clone());
                 let logs = game.take_logs();
                 if tx.send(FromGame::Frame { list, tree, blueprint, logs, stats }).is_err() || quit {
@@ -281,5 +284,7 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
             }
         }
     }
+    // Saves still being written finish before the game says it's stopped (and the player quits).
+    crate::extras::flush_saves();
     let _ = tx.send(FromGame::Stopped { logs: game.take_logs() });
 }

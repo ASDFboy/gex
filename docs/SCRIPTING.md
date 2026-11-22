@@ -248,8 +248,13 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 | `DRAW_TEXT(x, y, text, size, color, [options])` | draws text this frame (tags work); options `layer`, `font`, `align`, `valign`, `wrap`, `outline`, `outline_color`, `rotation`, `scale`, `alpha` |
 | `DRAW_IMAGE(file, x, y, w, h, [options])` | draws an image this frame |
 | `DRAW_SPRITE(file, x, y, [options])` | draws a picture at its own size, like GameMaker's `draw_sprite_ext`: `frame`/`hframes`/`vframes` or `region: [x, y, w, h]`, `w`, `h`, `scale`, `scale_x`, `scale_y`, `rotation`, `pivot_x`, `pivot_y`, `color`, `alpha`, `layer`, `blend`, `flip_h`, `flip_v`, `brightness`, `hue`, `saturation`, `invert`, `shader`, `values`, `filter`, `lit` |
+| `PRELOAD(files...)` | gets pictures ready in the background (files, a table of them, or a folder) so they show without a pause the first time |
 | `IMAGE_SIZE(file)` | a picture's size: `[w:, h:]` |
 | `POINT_ON(object, x, y, precise)` | TRUE when a 2D world point is on an object (a Sprite2D's picture; precise: only its visible pixels) |
+
+Pictures load in the background: one that isn't ready yet is left out for a moment instead of
+the game stopping while it loads. Pictures placed in a blueprint start loading when it starts;
+`PRELOAD` starts others early.
 
 Drawings go on top (layer 1000) unless an option says `layer:`; then they go in among the
 blueprint's sprites and labels by layer, in the order they were drawn.

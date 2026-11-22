@@ -15,7 +15,7 @@ pub mod vmt;
 pub mod vpk;
 pub mod vtf;
 
-pub use image_load::{image_size, load_image, Rgba};
+pub use image_load::{decode_image, image_size, load_image, Rgba};
 pub use vfs::{Entry, Vfs};
 
 #[cfg(test)]

@@ -107,6 +107,10 @@ pub fn ui_mapping(d: &gex_core::settings::Display, design: Vec2, view: Rect) -> 
 pub fn paint_list(ui: &egui::Ui, rs: &egui_wgpu::RenderState, renderer: &mut Option<Renderer>, tex_id: &mut Option<egui::TextureId>, vfs: &gex_assets::Vfs, rect: Rect, list: &RenderList, cams: &Cameras, overlay: &Overlay, nearest: bool) -> Vec<String> {
     let r = renderer.get_or_insert_with(|| Renderer::new(&rs.device, &rs.queue));
     let new_target = r.render(&rs.device, &rs.queue, vfs, cams.size, list, cams, overlay);
+    if r.loading() {
+        // Pictures loading in the background show as soon as they're ready.
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+    }
     let view = r.target_view().unwrap();
     let filter = if nearest { wgpu::FilterMode::Nearest } else { wgpu::FilterMode::Linear };
     {

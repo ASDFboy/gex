@@ -9,6 +9,7 @@
 
 pub mod camera;
 pub mod mesh;
+pub mod loader;
 pub mod text;
 
 use std::collections::HashMap;
@@ -279,8 +280,18 @@ pub struct Renderer {
     quad: GpuMesh,
     models: HashMap<String, Result<GpuModel, String>>,
     skinned: HashMap<(ObjectId, String), Vec<wgpu::Buffer>>,
-    /// (path, pixel filtering) → texture, or the reason it couldn't load.
-    textures: HashMap<(String, bool), Result<Tex, String>>,
+    /// Textures by path, smooth ones in [0] and pixel ones in [1]: the texture, or the
+    /// reason it couldn't load.
+    textures: [HashMap<String, Result<Tex, String>>; 2],
+    /// 2D pictures being decoded on other threads, by filtering (as `textures`), and decoded
+    /// ones waiting to be uploaded.
+    loader: loader::Loader,
+    loading: [HashMap<String, bool>; 2],
+    decoded: std::collections::VecDeque<loader::Done>,
+    /// The picture going up in bands: its key, texture, and the level and row it's at.
+    uploading: Option<((String, bool), wgpu::Texture, usize, u32)>,
+    /// Goes up on each reload, so pictures asked for before it are dropped.
+    generation: u64,
     white_linear: Tex,
     white_nearest: Tex,
     missing: Tex,
@@ -643,7 +654,12 @@ impl Renderer {
             quad,
             models: HashMap::new(),
             skinned: HashMap::new(),
-            textures: HashMap::new(),
+            textures: [HashMap::new(), HashMap::new()],
+            loader: loader::Loader::new(),
+            loading: [HashMap::new(), HashMap::new()],
+            decoded: std::collections::VecDeque::new(),
+            uploading: None,
+            generation: 0,
             white_linear,
             white_nearest,
             missing,
@@ -662,7 +678,14 @@ impl Renderer {
 
     /// Forgets loaded textures and models (after files change on disk).
     pub fn reload_textures(&mut self) {
-        self.textures.clear();
+        self.textures[0].clear();
+        self.textures[1].clear();
+        self.loading[0].clear();
+        self.loading[1].clear();
+        self.decoded.clear();
+        self.uploading = None;
+        self.loader.clear();
+        self.generation += 1;
         self.texts.clear();
         self.fonts = text::Fonts::default();
         self.sprite_custom.clear();
@@ -676,17 +699,151 @@ impl Renderer {
 
     /// Loads (once) the texture at an asset path. Pixel textures use nearest filtering.
     fn ensure_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vfs: &Vfs, path: &str, pixel: bool) {
-        let key = (path.to_string(), pixel);
-        if path.is_empty() || path.starts_with('@') || self.textures.contains_key(&key) {
+        if path.is_empty() || path.starts_with('@') || self.textures[pixel as usize].contains_key(path) {
             return;
         }
         let sampler = if pixel { &self.nearest } else { &self.linear };
         let mips = !pixel && self.mipmaps;
-        let t = gex_assets::load_image(vfs, path).map(|img| make_tex(device, queue, &self.tex_layout, sampler, img.width, img.height, &img.pixels, mips, TEX_FORMAT));
+        let t = gex_assets::load_image(vfs, path).map(|img| make_tex_levels(device, queue, &self.tex_layout, sampler, &loader::decoded(img.width, img.height, img.pixels, mips), TEX_FORMAT));
         if let Err(e) = &t {
             self.problems.push(format!("texture {}: {}", path, e));
         }
-        self.textures.insert(key, t);
+        self.loading[pixel as usize].remove(path);
+        self.textures[pixel as usize].insert(path.to_string(), t);
+    }
+
+    /// Asks for a 2D picture without waiting for it: decoded on another thread and uploaded
+    /// when it's ready (a sprite whose picture isn't ready yet isn't drawn). `urgent`: it's
+    /// needed now; otherwise it's a preload, after everything needed now.
+    pub fn request_texture(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vfs: &Vfs, path: &str, pixel: bool, urgent: bool) {
+        let i = pixel as usize;
+        if path.is_empty() || path.starts_with('@') || self.textures[i].contains_key(path) {
+            return;
+        }
+        if let Some(was_urgent) = self.loading[i].get_mut(path) {
+            if urgent && !*was_urgent {
+                *was_urgent = true;
+                self.loader.hurry(&(path.to_string(), pixel));
+            }
+            return;
+        }
+        // .vmt materials point at another file (through the Vfs): loaded here, as before.
+        if path.to_ascii_lowercase().ends_with(".vmt") {
+            self.ensure_texture(device, queue, vfs, path, pixel);
+            return;
+        }
+        let src = match vfs.disk_file(path) {
+            Some(p) => loader::Src::File(p),
+            None => match vfs.read(path) {
+                Ok(b) => loader::Src::Bytes(b),
+                Err(e) => {
+                    self.problems.push(format!("texture {}: {}", path, e));
+                    self.textures[i].insert(path.to_string(), Err(e));
+                    return;
+                }
+            },
+        };
+        let job = loader::Job { key: (path.to_string(), pixel), path: path.to_string(), src, mips: !pixel && self.mipmaps, generation: self.generation };
+        self.loader.ask(job, urgent);
+        self.loading[i].insert(path.to_string(), urgent);
+    }
+
+    /// Pictures are still on their way (the caller should draw again soon).
+    pub fn loading(&self) -> bool {
+        !self.loading[0].is_empty() || !self.loading[1].is_empty() || !self.decoded.is_empty()
+    }
+
+    /// Whether a 2D picture can be drawn now (loaded, or failed: then it shows as missing).
+    fn texture_ready(&self, path: &str, pixel: bool) -> bool {
+        path.is_empty() || path.starts_with('@') || !self.loading[pixel as usize].contains_key(path)
+    }
+
+    /// Uploads pictures the loader finished, about 8 MB a frame: a big one goes up in bands
+    /// of rows over a few frames (it's drawn once it's all there), so no frame stalls on it.
+    fn upload_decoded(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        while let Ok(d) = self.loader.done.try_recv() {
+            self.decoded.push_back(d);
+        }
+        let mut budget: usize = 8 << 20;
+        while budget > 0 {
+            let Some(d) = self.decoded.front_mut() else { break };
+            if d.generation != self.generation {
+                self.decoded.pop_front();
+                continue;
+            }
+            let (path, pixel) = (d.key.0.clone(), d.key.1);
+            let i = pixel as usize;
+            if !self.loading[i].contains_key(&path) {
+                // Loaded meanwhile some other way (a 3D texture waits for its picture).
+                self.decoded.pop_front();
+                self.uploading = None;
+                continue;
+            }
+            let dec = match &d.result {
+                Ok(dec) => dec,
+                Err(e) => {
+                    self.problems.push(format!("texture {}: {}", path, e));
+                    let e = e.clone();
+                    self.decoded.pop_front();
+                    self.loading[i].remove(&path);
+                    self.textures[i].insert(path, Err(e));
+                    continue;
+                }
+            };
+            // The texture, made on its first band.
+            if self.uploading.as_ref().is_none_or(|u| u.0 != d.key) {
+                let t = device.create_texture(&wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d { width: dec.w, height: dec.h, depth_or_array_layers: 1 },
+                    mip_level_count: dec.levels.len() as u32,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: TEX_FORMAT,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                self.uploading = Some((d.key.clone(), t, 0, 0));
+            }
+            let u = self.uploading.as_mut().unwrap();
+            // Bands of rows of each level in turn, until the budget's used.
+            while budget > 0 && u.2 < dec.levels.len() {
+                let (lw, lh) = ((dec.w >> u.2).max(1), (dec.h >> u.2).max(1));
+                let row = lw as usize * 4;
+                let rows = ((budget / row).max(1) as u32).min(lh - u.3);
+                let data = &dec.levels[u.2][u.3 as usize * row..(u.3 + rows) as usize * row];
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo { texture: &u.1, mip_level: u.2 as u32, origin: wgpu::Origin3d { x: 0, y: u.3, z: 0 }, aspect: wgpu::TextureAspect::All },
+                    data,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(lw * 4), rows_per_image: Some(rows) },
+                    wgpu::Extent3d { width: lw, height: rows, depth_or_array_layers: 1 },
+                );
+                budget = budget.saturating_sub(data.len());
+                u.3 += rows;
+                if u.3 >= lh {
+                    u.2 += 1;
+                    u.3 = 0;
+                }
+            }
+            if u.2 < dec.levels.len() {
+                break;
+            }
+            // All there: ready to draw.
+            let (_, tex, _, _) = self.uploading.take().unwrap();
+            let size = [dec.w, dec.h];
+            self.decoded.pop_front();
+            let view = tex.create_view(&Default::default());
+            let sampler = if pixel { &self.nearest } else { &self.linear };
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.tex_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                ],
+            });
+            self.loading[i].remove(&path);
+            self.textures[i].insert(path, Ok(Tex { bind, view, size }));
+        }
     }
 
     /// A normal map (stored as plain values, not as colors).
@@ -869,15 +1026,17 @@ impl Renderer {
         if path.starts_with("@text:") {
             return self.texts.get(path).map(|t| &t.tex).unwrap_or(&self.missing);
         }
-        match self.textures.get(&(path.to_string(), pixel)) {
+        match self.textures[pixel as usize].get(path) {
             Some(Ok(t)) => t,
+            // Still on its way: plain white for the moment.
+            None if self.loading[pixel as usize].contains_key(path) => if pixel { &self.white_nearest } else { &self.white_linear },
             _ => &self.missing,
         }
     }
 
     /// The pixel size of a loaded texture (for sizing sprites to their image).
     pub fn texture_size(&self, path: &str) -> Option<[u32; 2]> {
-        match self.textures.get(&(path.to_string(), true)) {
+        match self.textures[1].get(path) {
             Some(Ok(t)) => Some(t.size),
             _ => None,
         }
@@ -897,10 +1056,9 @@ impl Renderer {
                     None => String::new(),
                     Some(ModelTexture::Path(t)) => t.clone(),
                     Some(ModelTexture::Embedded { key, image }) => {
-                        let k = (key.clone(), false);
-                        if !self.textures.contains_key(&k) {
+                        if !self.textures[0].contains_key(key) {
                             let t = make_tex(device, queue, &self.tex_layout, &self.linear, image.width, image.height, &image.pixels, self.mipmaps, TEX_FORMAT);
-                            self.textures.insert(k, Ok(t));
+                            self.textures[0].insert(key.clone(), Ok(t));
                         }
                         key.clone()
                     }
@@ -916,7 +1074,7 @@ impl Renderer {
             self.problems.push(format!("model {}: {}", path, e));
         }
         if let Ok(m) = &r {
-            let paths: Vec<String> = m.parts.iter().map(|p| p.texture.clone()).filter(|t| !self.textures.contains_key(&(t.clone(), false))).collect();
+            let paths: Vec<String> = m.parts.iter().map(|p| p.texture.clone()).filter(|t| !self.textures[0].contains_key(t)).collect();
             for t in paths {
                 self.ensure_texture(device, queue, vfs, &t, false);
             }
@@ -1074,13 +1232,22 @@ impl Renderer {
         let new_target = self.ensure_target(device, size);
         let sprite_pixel = gs.sprite_filter != "smooth";
         let mesh_pixel = gs.texture_filter == "pixel";
-        // Load what this frame needs.
+        // Load what this frame needs: 2D pictures on other threads (see request_texture).
         self.frame_no += 1;
+        self.upload_decoded(device, queue);
+        let mut last: (&str, bool) = ("", false);
         for s in &list.sprites {
-            self.ensure_texture(device, queue, vfs, &s.texture, s.pixel.unwrap_or(sprite_pixel));
+            let px = s.pixel.unwrap_or(sprite_pixel);
+            if (s.texture.as_str(), px) != last {
+                self.request_texture(device, queue, vfs, &s.texture, px, true);
+                last = (s.texture.as_str(), px);
+            }
             if !s.shader.is_empty() {
                 self.ensure_sprite_shader(device, vfs, &s.shader, s.blend);
             }
+        }
+        for p in &list.preload {
+            self.request_texture(device, queue, vfs, p, sprite_pixel, false);
         }
         // 2D labels become pictures of their text, drawn with the sprites (in layer order).
         let mut text_sprites: Vec<gex_core::render::Sprite> = Vec::new();
@@ -1451,6 +1618,9 @@ impl Renderer {
                 let off = (-s.pivot * s.size).extend(0.0);
                 let local = Mat4::from_translation(off) * Mat4::from_scale(Vec3::new(s.size.x, s.size.y, 1.0));
                 let pixel = s.pixel.unwrap_or(sprite_pixel);
+                if !self.texture_ready(&s.texture, pixel) {
+                    continue;
+                }
                 let tex_size = self.tex(&s.texture, pixel).size;
                 // Unlit sprites draw after the 2D light map, so the dark doesn't touch them.
                 let batches = if lit_2d && !s.lit { &mut unlit_batches } else { &mut sprite_batches };
@@ -1490,6 +1660,17 @@ impl Renderer {
                         }
                     }
                 } else {
+                    // Off the screen: nothing to draw (big levels, tile maps).
+                    let corners = [model.w_axis, model.w_axis + model.x_axis, model.w_axis + model.y_axis, model.w_axis + model.x_axis + model.y_axis];
+                    let (mut lo, mut hi) = (gex_core::glam::Vec2::splat(f32::MAX), gex_core::glam::Vec2::splat(f32::MIN));
+                    for c in corners {
+                        let p = gex_core::glam::Vec2::new(c.x, c.y);
+                        lo = lo.min(p);
+                        hi = hi.max(p);
+                    }
+                    if hi.x < vis_lo.x || hi.y < vis_lo.y || lo.x > vis_hi.x || lo.y > vis_hi.y {
+                        continue;
+                    }
                     push(&mut inst, batches, model, color, uv, &s.texture, pixel, s.blend, (s.effects, s.values, &s.shader));
                 }
             }
@@ -1862,30 +2043,17 @@ fn region_uv(r: gex_core::render::Region, tex: [u32; 2]) -> [f32; 4] {
     }
 }
 
-/// Halves an RGBA image (box filter).
-fn half(w: u32, h: u32, px: &[u8]) -> (u32, u32, Vec<u8>) {
-    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-    let mut out = vec![0u8; (nw * nh * 4) as usize];
-    for y in 0..nh {
-        for x in 0..nw {
-            for c in 0..4 {
-                let mut s = 0u32;
-                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let sx = (x * 2 + dx).min(w - 1);
-                    let sy = (y * 2 + dy).min(h - 1);
-                    s += px[((sy * w + sx) * 4 + c) as usize] as u32;
-                }
-                out[((y * nw + x) * 4 + c) as usize] = (s / 4) as u8;
-            }
-        }
-    }
-    (nw, nh, out)
-}
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn make_tex(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, w: u32, h: u32, rgba: &[u8], mips: bool, format: wgpu::TextureFormat) -> Tex {
-    let levels = if mips { 32 - w.max(h).max(1).leading_zeros() } else { 1 };
+    make_tex_levels(device, queue, layout, sampler, &loader::decoded(w, h, rgba.to_vec(), mips), format)
+}
+
+/// A texture from a picture and its mip levels.
+fn make_tex_levels(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, d: &loader::Decoded, format: wgpu::TextureFormat) -> Tex {
+    let (w, h) = (d.w, d.h);
+    let levels = d.levels.len() as u32;
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -1896,20 +2064,16 @@ fn make_tex(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroup
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let (mut cw, mut ch, mut data) = (w, h, rgba.to_vec());
-    for level in 0..levels {
+    let (mut cw, mut ch) = (w, h);
+    for (level, data) in d.levels.iter().enumerate() {
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            &data,
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            data,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(cw * 4), rows_per_image: Some(ch) },
             wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
         );
-        if level + 1 < levels {
-            let (nw, nh, nd) = half(cw, ch, &data);
-            cw = nw;
-            ch = nh;
-            data = nd;
-        }
+        cw = (cw / 2).max(1);
+        ch = (ch / 2).max(1);
     }
     let view = tex.create_view(&Default::default());
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {

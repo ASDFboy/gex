@@ -265,6 +265,10 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
      "Draws a picture for this frame at its own size, the way GameMaker's draw_sprite_ext does: DRAW_SPRITE(file, x, y, [options]).\n\n\
       Options: frame with hframes and vframes (a sheet of frames), or region: [x, y, w, h] (a part of the picture, in its pixels); w and h (the size to draw; its own size otherwise); scale, scale_x, scale_y; rotation (degrees); pivot_x and pivot_y (the point at x, y, and turned around: 0 the left/top edge, 0.5 the middle; 0 when left out); color and alpha; layer (1000 when left out: on top); blend; flip_h and flip_v; the effects brightness, hue, saturation, invert; shader and values: [a, b, c, d] (a custom sprite shader); filter (\"pixel\" or \"smooth\"); lit.",
      "DEF on_draw() {\n\tDRAW_SPRITE(\"res://cards.png\", x, y, [hframes: 8, frame: 3, pivot_x: 0.5, pivot_y: 0.5, rotation: 15, scale: 0.5, layer: 20])\n}"),
+    ("PRELOAD", "Drawing",
+     "Gets pictures ready in the background, so they show without a pause the first time they're drawn: PRELOAD(file, file...), a table of files, or a folder (every picture in it, and in its folders).\n\n\
+      Pictures are always loaded in the background (one that isn't ready yet isn't drawn for a moment, instead of the game stopping while it loads); PRELOAD starts them early, after whatever is being drawn now. Pictures placed in a blueprint are preloaded when it starts. Big games: preload what the next screen needs while this one shows.",
+     "DEF on_create() {\n\tPRELOAD(\"res://assets/cards\")\n}"),
     ("IMAGE_SIZE", "Drawing",
      "A picture's size in pixels: [w:, h:], or NULL when it can't be read. Read once per file and remembered.",
      "s = IMAGE_SIZE(\"res://cards.png\")\nPRINT(s.w + \" x \" + s.h)"),

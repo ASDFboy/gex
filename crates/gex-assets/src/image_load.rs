@@ -21,20 +21,27 @@ pub fn load_image(vfs: &Vfs, path: &str) -> Result<Rgba, String> {
         return load_image(vfs, &format!("{}://{}", scheme, tex));
     }
     let bytes = vfs.read(path)?;
+    decode_image(path, &bytes)
+}
+
+/// An image file's pixels from its bytes (any format but .vmt, which points at another file).
+/// No Vfs, so it can run on another thread.
+pub fn decode_image(path: &str, bytes: &[u8]) -> Result<Rgba, String> {
+    let lower = path.to_ascii_lowercase();
     if lower.ends_with(".vtf") {
-        return crate::vtf::decode(&bytes).map_err(|e| format!("{}: {}", path, e));
+        return crate::vtf::decode(bytes).map_err(|e| format!("{}: {}", path, e));
     }
     if lower.ends_with(".svg") {
-        return svg(&bytes).map_err(|e| format!("{}: {}", path, e));
+        return svg(bytes).map_err(|e| format!("{}: {}", path, e));
     }
     if lower.ends_with(".psd") {
-        return psd(&bytes).map_err(|e| format!("{}: {}", path, e));
+        return psd(bytes).map_err(|e| format!("{}: {}", path, e));
     }
     // By its ending first (TGA has no signature to recognise it by), then by its contents.
-    let by_name = image::ImageFormat::from_path(crate::model::map_base(path)).ok().and_then(|f| image::load_from_memory_with_format(&bytes, f).ok());
+    let by_name = image::ImageFormat::from_path(crate::model::map_base(path)).ok().and_then(|f| image::load_from_memory_with_format(bytes, f).ok());
     let img = match by_name {
         Some(i) => i,
-        None => image::load_from_memory(&bytes).map_err(|e| format!("{}: {}", path, e))?,
+        None => image::load_from_memory(bytes).map_err(|e| format!("{}: {}", path, e))?,
     }
     .to_rgba8();
     Ok(Rgba { width: img.width(), height: img.height(), pixels: img.into_raw() })
@@ -44,6 +51,14 @@ pub fn load_image(vfs: &Vfs, path: &str) -> Result<Rgba, String> {
 pub fn image_size(vfs: &Vfs, path: &str) -> Result<[u32; 2], String> {
     let lower = path.to_ascii_lowercase();
     if !(lower.ends_with(".vmt") || lower.ends_with(".vtf") || lower.ends_with(".svg") || lower.ends_with(".psd")) {
+        // A file on disk: only its first bytes (where the size is written) are read.
+        if let Some(p) = vfs.disk_file(path) {
+            if let Ok(r) = image::ImageReader::open(&p).and_then(|r| r.with_guessed_format()) {
+                if let Ok((w, h)) = r.into_dimensions() {
+                    return Ok([w, h]);
+                }
+            }
+        }
         let bytes = vfs.read(path)?;
         let fmt = image::ImageFormat::from_path(crate::model::map_base(path)).ok();
         let mut r = image::ImageReader::new(std::io::Cursor::new(&bytes));

@@ -119,6 +119,16 @@ impl Vfs {
         r
     }
 
+    /// The plain file on disk behind a project or mounted-folder path, so another thread can
+    /// read it (None for built-in assets and games' archives).
+    pub fn disk_file(&self, path: &str) -> Option<PathBuf> {
+        let (scheme, rel) = split(path)?;
+        if scheme == "res" {
+            return safe_join(&self.project_dir, rel).filter(|p| p.is_file());
+        }
+        self.folder_file(path).filter(|p| p.is_file())
+    }
+
     /// Where a fetched copy of a mounted file goes.
     pub fn remote_path(&self, scheme: &str, rel: &str) -> Option<PathBuf> {
         if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {

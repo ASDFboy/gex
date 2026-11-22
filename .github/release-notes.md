@@ -2,6 +2,15 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.4.2 (speed):
+- Pictures load in the background: a big one showing for the first time no longer freezes the game (it used to stall a frame for up to a tenth of a second or more). Pictures placed in a blueprint load as it starts; PRELOAD(files or a folder) loads others early.
+- Scripts' arithmetic is 2-3 times faster: fractions like 2.5 or 1/3 no longer use the big-number code (results are exactly the same).
+- Events cost far less per object (1000 objects with on_step: about 3x faster), and events most objects don't have cost nothing.
+- Drawing thousands of sprites, tile maps and particles takes about half the time; off-screen sprites are skipped.
+- SAVE_DATA writes in the background; a built game no longer copies its whole object tree a few times a second.
+- Moving to another blueprint reuses scripts already read.
+- The selected tab is drawn in front of the tabs next to it (their slanted edges used to cover it).
+
 New in 0.4.1 (what remaking a Scratch game and a GameMaker game needed):
 - Label2D text is drawn in layer order with sprites (under or between them), turns and scales with its object, and has align, valign, wrap_width and an outline.
 - Sprite2D: pivot_x / pivot_y (the point it sits at and turns around), color effects (brightness, hue, saturation, invert) and custom sprite shaders (a .wgsl `fn sprite(...)`, with value_1–value_4 from scripts); GameMaker shaders port line for line.

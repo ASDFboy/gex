@@ -121,3 +121,48 @@ fn editing_inside_an_instance_is_saved_as_overrides() {
     assert!(!again.objects[spark].from_instance);
     assert_eq!(blueprint::save(&again, &read).unwrap(), saved);
 }
+
+/// The one-pass Sprite2D reading gives what reading each property by itself gives.
+#[test]
+fn sprites_read_in_one_pass() {
+    use crate::render::{extract, pivot_of, Region, Sprite};
+    let mut tree = BlueprintTree::new();
+    let root = tree.add(None, Object::new("R", ObjectKind::Object2D));
+    let mut a = Object::new("A", ObjectKind::Sprite2D);
+    for (k, v) in [
+        ("width", Variant::Num(40.0)),
+        ("height", Variant::Num(20.0)),
+        ("color", Variant::Color([0.5, 0.25, 1.0, 0.8])),
+        ("pivot_x", Variant::Num(0.2)),
+        ("texture", Variant::Res("res://a.png".into())),
+        ("layer", Variant::Num(3.0)),
+        ("hframes", Variant::Num(4.0)),
+        ("frame", Variant::Num(2.0)),
+        ("flip_h", Variant::Bool(true)),
+        ("hue", Variant::Num(90.0)),
+        ("saturation", Variant::Num(0.5)),
+        ("invert", Variant::Bool(true)),
+        ("value_2", Variant::Num(7.0)),
+        ("opacity", Variant::Num(0.5)),
+        ("shader", Variant::Res("res://s.wgsl".into())),
+    ] {
+        a.props.insert(k.to_string(), v);
+    }
+    let mut parent = Object::new("P", ObjectKind::Object2D);
+    parent.props.insert("modulate".into(), Variant::Color([1.0, 0.5, 1.0, 1.0]));
+    let p = tree.add(Some(root), parent);
+    let id = tree.add(Some(p), a);
+    let list = extract(&tree);
+    let s = &list.sprites[0];
+    let n = &tree.objects[id];
+    assert_eq!(s.size, glam::Vec2::new(40.0, 20.0));
+    assert_eq!(s.pivot, pivot_of(n));
+    assert_eq!(s.color, crate::render::tinted(&tree, id, n.color("color")));
+    assert_eq!(s.texture, "res://a.png");
+    assert_eq!(s.layer, 3.0);
+    assert_eq!(s.region, Region::Frame { h: 4, v: 1, frame: 2 });
+    assert_eq!(s.flip, [true, false]);
+    assert_eq!(s.effects, Sprite::effects_of(n));
+    assert_eq!(s.values, Sprite::values_of(n));
+    assert_eq!(s.shader, "res://s.wgsl");
+}
