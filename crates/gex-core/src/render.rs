@@ -143,6 +143,8 @@ pub struct UiItem {
     pub pos: Vec2,
     pub size: Vec2,
     pub props: std::collections::BTreeMap<String, crate::Variant>,
+    /// Inside a ScrollBox: only this part of the window shows it (top-left, bottom-right).
+    pub clip: Option<(Vec2, Vec2)>,
 }
 
 impl UiItem {
@@ -505,7 +507,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 // The UI layer reads one opacity: this object's, times its parents' modulate alpha.
                 let t = tinted(tree, id, [1.0; 4]);
                 props.insert("opacity".into(), crate::Variant::Num(t[3] as f64));
-                out.ui.push(UiItem { object: id, kind: k, pos: p, size: Vec2::new(n.num("width", 100.0) as f32, n.num("height", 30.0) as f32), props });
+                out.ui.push(UiItem { object: id, kind: k, pos: p, size: Vec2::new(n.num("width", 100.0) as f32, n.num("height", 30.0) as f32), props, clip: None });
             }
             ObjectKind::Label2D => out.labels.push(Label {
                 object: id,
@@ -693,7 +695,132 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
     }
     out.sprites.sort_by(|a, b| a.layer.total_cmp(&b.layer));
     out.labels.sort_by(|a, b| a.layer.total_cmp(&b.layer));
+    layout_ui(tree, &mut out.ui);
     out
+}
+
+/// How much room a UI object takes in a Row, Column, Grid or ScrollBox. A Label without a
+/// width is as wide as its longest line (roughly: the fonts are only measured when drawn).
+fn room(u: &UiItem) -> Vec2 {
+    if u.kind == ObjectKind::Label && !u.props.contains_key("width") {
+        let size = u.num("size", 18.0) as f32;
+        let text = u.text("text");
+        let longest = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        return Vec2::new(longest as f32 * size * 0.55, text.lines().count().max(1) as f32 * size * 1.25);
+    }
+    u.size
+}
+
+/// Places the UI objects under Rows, Columns, Grids and ScrollBoxes (each with everything under
+/// it), sizes the Rows, Columns and Grids to what's in them, and scrolls and clips ScrollBoxes.
+pub fn layout_ui(tree: &BlueprintTree, items: &mut [UiItem]) {
+    if !items.iter().any(|u| u.kind.is_layout()) {
+        return;
+    }
+    let index: std::collections::HashMap<ObjectId, usize> = items.iter().enumerate().map(|(i, u)| (u.object, i)).collect();
+    let kids = |items: &[UiItem], i: usize| -> Vec<usize> { tree.objects[items[i].object].children.iter().filter_map(|c| index.get(c).copied()).collect() };
+    // A Grid's column widths and row heights.
+    let grid = |items: &[UiItem], i: usize, ks: &[usize]| -> (Vec<f32>, Vec<f32>) {
+        let cols = (items[i].num("columns", 2.0).max(1.0) as usize).min(ks.len().max(1));
+        let (mut w, mut h) = (vec![0.0f32; cols], vec![0.0f32; ks.len().div_ceil(cols)]);
+        for (n, &j) in ks.iter().enumerate() {
+            let r = room(&items[j]);
+            w[n % cols] = w[n % cols].max(r.x);
+            h[n / cols] = h[n / cols].max(r.y);
+        }
+        (w, h)
+    };
+    // Sizes, from the innermost out (children come after their parents).
+    for i in (0..items.len()).rev() {
+        let k = items[i].kind;
+        if !k.is_layout() {
+            continue;
+        }
+        let ks = kids(items, i);
+        let (gap, pad) = (items[i].num("spacing", 8.0).max(0.0) as f32, items[i].num("padding", 0.0).max(0.0) as f32);
+        let gaps = gap * ks.len().saturating_sub(1) as f32;
+        let sizes: Vec<Vec2> = ks.iter().map(|&j| room(&items[j])).collect();
+        let content = match k {
+            ObjectKind::Row => Vec2::new(sizes.iter().map(|s| s.x).sum::<f32>() + gaps, sizes.iter().fold(0.0f32, |m, s| m.max(s.y))),
+            ObjectKind::Grid => {
+                let (w, h) = grid(items, i, &ks);
+                Vec2::new(w.iter().sum::<f32>() + gap * w.len().saturating_sub(1) as f32, h.iter().sum::<f32>() + gap * h.len().saturating_sub(1) as f32)
+            }
+            _ => Vec2::new(sizes.iter().fold(0.0f32, |m, s| m.max(s.x)), sizes.iter().map(|s| s.y).sum::<f32>() + gaps),
+        } + Vec2::splat(pad * 2.0);
+        if k == ObjectKind::ScrollBox {
+            items[i].props.insert("content_height".into(), crate::Variant::Num(content.y as f64));
+        } else {
+            items[i].size = content;
+        }
+    }
+    // Places, from the outermost in: each object with everything under it moves to its spot.
+    for i in 0..items.len() {
+        let k = items[i].kind;
+        if !k.is_layout() {
+            continue;
+        }
+        let ks = kids(items, i);
+        let (gap, pad) = (items[i].num("spacing", 8.0).max(0.0) as f32, items[i].num("padding", 0.0).max(0.0) as f32);
+        let tl = items[i].top_left(Vec2::ZERO);
+        let inner = items[i].size - Vec2::splat(pad * 2.0);
+        let frac = match items[i].text("align") {
+            "center" => 0.5,
+            "bottom" | "right" => 1.0,
+            _ => 0.0,
+        };
+        let mut start = tl + Vec2::splat(pad);
+        let mut clip = None;
+        if k == ObjectKind::ScrollBox {
+            let most = (items[i].num("content_height", 0.0) as f32 - items[i].size.y).max(0.0);
+            start.y -= (items[i].num("scroll", 0.0) as f32).clamp(0.0, most);
+            let mine = (tl, tl + items[i].size);
+            clip = Some(match items[i].clip {
+                Some((a, b)) => (a.max(mine.0), b.min(mine.1)),
+                None => mine,
+            });
+        }
+        let cells = if k == ObjectKind::Grid { Some(grid(items, i, &ks)) } else { None };
+        let mut at = start;
+        let mut moves = Vec::new();
+        for (n, &j) in ks.iter().enumerate() {
+            let r = room(&items[j]);
+            let spot = match (k, &cells) {
+                (ObjectKind::Row, _) => {
+                    let p = Vec2::new(at.x, at.y + (inner.y - r.y) * frac);
+                    at.x += r.x + gap;
+                    p
+                }
+                (ObjectKind::Grid, Some((w, h))) => {
+                    let (c, row) = (n % w.len(), n / w.len());
+                    Vec2::new(start.x + w[..c].iter().sum::<f32>() + gap * c as f32, start.y + h[..row].iter().sum::<f32>() + gap * row as f32)
+                }
+                _ => {
+                    let p = Vec2::new(at.x + (inner.x - r.x) * frac, at.y);
+                    at.y += r.y + gap;
+                    p
+                }
+            };
+            moves.push((j, spot, r));
+        }
+        for (j, spot, r) in moves {
+            // A Label without a width takes the room worked out for it (so centering works).
+            if items[j].kind == ObjectKind::Label && !items[j].props.contains_key("width") {
+                items[j].size = r;
+            }
+            let delta = spot - items[j].top_left(Vec2::ZERO);
+            let mut under = Vec::new();
+            tree.walk_from(items[j].object, &mut under);
+            for o in under {
+                if let Some(&x) = index.get(&o) {
+                    items[x].pos += delta;
+                    if clip.is_some() {
+                        items[x].clip = clip;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -704,7 +831,7 @@ mod anchor_tests {
     fn anchor_is_the_origin() {
         let mut props = std::collections::BTreeMap::new();
         props.insert("anchor".to_string(), crate::Variant::Text("top".into()));
-        let mut u = UiItem { object: Default::default(), kind: crate::object::ObjectKind::Button, pos: Vec2::ZERO, size: Vec2::new(140.0, 36.0), props };
+        let mut u = UiItem { object: Default::default(), kind: crate::object::ObjectKind::Button, pos: Vec2::ZERO, size: Vec2::new(140.0, 36.0), props, clip: None };
         assert_eq!(u.top_left(Vec2::new(1280.0, 720.0)), Vec2::new(-70.0, 0.0), "top: the middle of its top edge at the position");
         u.props.insert("anchor".into(), crate::Variant::Text("bottom_right".into()));
         assert_eq!(u.top_left(Vec2::new(1280.0, 720.0)), Vec2::new(-140.0, -36.0));

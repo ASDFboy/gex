@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gex_core::{blueprint, ObjectId};
+use gex_core::{blueprint, ObjectId, Variant};
 use jlb::embed::{as_f64, list_table, num};
 use jlb::host::Host;
 use jlb::value::{display, err};
@@ -42,8 +42,8 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("DISTANCE", "(a, b)", "how far apart two objects are"),
     ("PLAY_SOUND", "(file, volume, pitch, pan, echo)", "plays a sound file once (res:// or hl2://...); pan -1 left to 1 right, echo 0 to 1; gives its id"),
     ("STOP_SOUND", "(id)", "stops a sound from PLAY_SOUND (NULL stops every sound)"),
-    ("PLAY", "(object)", "starts a Sound object"),
-    ("STOP", "(object)", "stops a Sound object"),
+    ("PLAY", "(object)", "starts a Sound object, or starts a Timer over"),
+    ("STOP", "(object)", "stops a Sound object or a Timer"),
     ("MUSIC", "(file, volume)", "plays a looping music track, replacing the last one (\"\" stops it)"),
     ("VOLUME", "(level)", "the master volume, 0 to 1"),
     ("BURST", "(object, count)", "a Particles2D or Particles3D throws out this many particles at once (an explosion, a puff)"),
@@ -553,11 +553,24 @@ impl Host for EngineHost {
             }
             "PLAY" => {
                 let id = target(st, a.first())?;
+                if st.tree.objects[id].kind == gex_core::ObjectKind::Timer {
+                    let n = &mut st.tree.objects[id];
+                    let wait = n.num("wait_time", 1.0).max(0.001);
+                    n.props.insert("running".into(), Variant::Bool(true));
+                    n.props.insert("time_left".into(), Variant::Num(wait));
+                    return Ok(Value::Null);
+                }
                 play_object(st, id).map_err(jlb::value::fault)?;
                 Ok(Value::Null)
             }
             "STOP" => {
                 let id = target(st, a.first())?;
+                if st.tree.objects[id].kind == gex_core::ObjectKind::Timer {
+                    let n = &mut st.tree.objects[id];
+                    n.props.insert("running".into(), Variant::Bool(false));
+                    n.props.insert("time_left".into(), Variant::Num(0.0));
+                    return Ok(Value::Null);
+                }
                 if let Some(s) = st.audio.by_object.remove(&id) {
                     st.audio.stop(s);
                 }

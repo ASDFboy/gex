@@ -97,6 +97,12 @@ pub enum UiEvent {
     Pressed(ObjectId),
     Changed(ObjectId, String),
     Submitted(ObjectId, String),
+    /// A Checkbox clicked: whether it's ticked now.
+    Toggled(ObjectId, bool),
+    /// A Slider's handle moved to a value.
+    Slid(ObjectId, f64),
+    /// A ScrollBox scrolled to a point (pixels from the top).
+    Scrolled(ObjectId, f64),
 }
 
 fn jle_vec(x: f32, y: f32) -> glam::Vec3 {
@@ -1123,7 +1129,28 @@ impl Game {
                 self.run(id, "on_text_changed", vec![Value::text(&text)]);
             }
             UiEvent::Submitted(id, text) => self.run(id, "on_text_submitted", vec![Value::text(&text)]),
+            UiEvent::Toggled(id, on) => {
+                let Some(slug) = self.set_ui(id, "checked", Variant::Bool(on)) else { return };
+                self.run(id, "on_toggled", vec![Value::Bool(on)]);
+                self.broadcast(&format!("on_toggled_{}", slug), vec![Value::Bool(on)]);
+            }
+            UiEvent::Slid(id, v) => {
+                let Some(slug) = self.set_ui(id, "value", Variant::Num(v)) else { return };
+                self.run(id, "on_value_changed", vec![num(v)]);
+                self.broadcast(&format!("on_value_changed_{}", slug), vec![num(v)]);
+            }
+            UiEvent::Scrolled(id, v) => {
+                self.set_ui(id, "scroll", Variant::Num(v.max(0.0)));
+            }
         }
+    }
+
+    /// Sets a property a UI object's use changed; gives its name for on_..._<name> events.
+    fn set_ui(&mut self, id: ObjectId, prop: &str, v: Variant) -> Option<String> {
+        let mut st = self.st.borrow_mut();
+        let n = st.tree.get_mut(id)?;
+        n.props.insert(prop.into(), v);
+        Some(n.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect())
     }
 
     /// Sprite sheet animations: moves each animated Sprite2D to its current frame.
@@ -1537,6 +1564,42 @@ impl Game {
         for (n, name) in fire {
             self.run(n, "on_timer", vec![Value::text(&name)]);
             self.run(n, &format!("on_timer_{}", name), vec![]);
+        }
+        // Timer objects: on_timeout(name) on the Timer and its parent, on_timeout_<name>() everywhere.
+        let mut done = Vec::new();
+        {
+            let mut st = self.st.borrow_mut();
+            let paused = st.paused;
+            for (id, n) in st.tree.objects.iter_mut() {
+                if n.kind != ObjectKind::Timer || !n.prop("running").is_none_or(|v| v.as_bool()) {
+                    continue;
+                }
+                if paused && !n.groups.iter().any(|g| g == PAUSE_GROUP) {
+                    continue;
+                }
+                let wait = n.num("wait_time", 1.0).max(0.001);
+                // Nothing left (new, or started again after it ran out): the whole wait.
+                let mut left = n.prop("time_left").and_then(|v| v.as_f64()).filter(|l| *l > 0.0).unwrap_or(wait);
+                left -= dt;
+                if left <= 0.0 {
+                    done.push((id, n.parent, n.name.clone()));
+                    if n.prop("repeat").is_none_or(|v| v.as_bool()) {
+                        left = (left + wait).max(0.001);
+                    } else {
+                        left = 0.0;
+                        n.props.insert("running".into(), Variant::Bool(false));
+                    }
+                }
+                n.props.insert("time_left".into(), Variant::Num(left.max(0.0)));
+            }
+        }
+        for (id, parent, name) in done {
+            self.run(id, "on_timeout", vec![Value::text(&name)]);
+            if let Some(p) = parent {
+                self.run(p, "on_timeout", vec![Value::text(&name)]);
+            }
+            let slug: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+            self.broadcast(&format!("on_timeout_{}", slug), vec![]);
         }
     }
 

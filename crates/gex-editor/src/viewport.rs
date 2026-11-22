@@ -267,9 +267,14 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
         for c in list.colliders.iter().filter(|_| st.show_colliders) {
             o.quad2(corners(c.model, c.size, true), [0.3, 0.9, 0.5, 0.8]);
         }
+
         for sel in st.selection.iter().copied().chain(st.selected).filter(|s| tree.contains(*s)) {
             let n = &tree.objects[sel];
             let m = tree.global_matrix(sel);
+            // UI is outlined over the UI layer (drawn on top of this).
+            if n.kind.is_ui() {
+                continue;
+            }
             match n.kind {
                 ObjectKind::Sprite2D | ObjectKind::Collider2D => {
                     let size = Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
@@ -540,7 +545,9 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         let drag_id = egui::Id::new("viewport drag");
         let ctrl = ui.input(|i| i.modifiers.command);
         // The handles on the selected object.
-        let giz = st.selected.filter(|s| st.tree.contains(*s) && (st.tree.objects[*s].kind.is_3d() == st.mode_3d)).and_then(|s| {
+        // (None for UI that a Row, Column, Grid or ScrollBox places: its position isn't used.)
+        let placed = |s: ObjectId| st.tree.objects[s].parent.is_some_and(|p| st.tree.objects[p].kind.is_layout());
+        let giz = st.selected.filter(|s| st.tree.contains(*s) && (st.tree.objects[*s].kind.is_3d() == st.mode_3d) && !placed(*s)).and_then(|s| {
             let m = st.tree.global_matrix(s);
             Gizmo::new(&cams, st.mode_3d, st.tool, m.w_axis.truncate(), m.to_scale_rotation_translation().1, ppp)
         });
@@ -751,7 +758,23 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         let scale = if world_ui { st.cam2.zoom / ppp } else { map_ui.1 };
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         child.set_clip_rect(if game_cam { view_rect } else { rect });
-        crate::ui_layer::paint_ui(&mut child, &list.ui, design, &map, scale, playing && game_cam, &mut st.ui_images, &st.vfs)
+        let ev = crate::ui_layer::paint_ui(&mut child, &list.ui, design, &map, scale, playing && game_cam, &mut st.ui_images, &st.vfs);
+        // Editing: on top of the UI, faint outlines of Rows, Columns, Grids and ScrollBoxes (they
+        // show nothing in the game) and the selected UI objects' outlines.
+        if !playing && !st.mode_3d {
+            let p = child.painter();
+            for u in &list.ui {
+                let selected = st.selected == Some(u.object) || st.selection.contains(&u.object);
+                if !selected && !u.kind.is_layout() {
+                    continue;
+                }
+                let tl = u.top_left(design);
+                let r = egui::Rect::from_min_max(map(tl), map(tl + u.size));
+                let (w, c) = if selected { (1.5, egui::Color32::from_rgb(0x66, 0xbf, 0xf5)) } else { (1.0, egui::Color32::from_white_alpha(50)) };
+                p.rect_stroke(r.expand(if selected { 1.0 } else { 0.0 }), 0.0, egui::Stroke::new(w, c), egui::StrokeKind::Outside);
+            }
+        }
+        ev
     };
     if game_cam {
         paint_fade(ui, rect, list.fade);

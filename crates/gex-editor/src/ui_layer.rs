@@ -1,5 +1,6 @@
-//! Draws UI objects (Panel, Button, Label, TextInput, ProgressBar, Image) with egui on top of
-//! the game view, and turns clicks and typing into events for the game.
+//! Draws UI objects (Panel, Button, Label, TextInput, ProgressBar, Image, Checkbox, Slider,
+//! ScrollBox) with egui on top of the game view, and turns clicks, drags, scrolling and typing
+//! into events for the game. (Rows, Columns and Grids only place things: gex_core::render.)
 
 use std::collections::HashMap;
 
@@ -31,9 +32,21 @@ pub fn paint_ui(
         // Each item's opacity (its own, times its parents' modulate alpha).
         let mut painter = base.clone();
         painter.multiply_opacity(it.num("opacity", 1.0).clamp(0.0, 1.0) as f32);
-        let painter = painter;
         let tl = it.top_left(design);
         let rect = Rect::from_min_max(to_screen(tl), to_screen(tl + it.size));
+        // Inside a ScrollBox: only the part within it shows (and can be clicked).
+        let shown = match it.clip {
+            Some((a, b)) => {
+                let c = Rect::from_min_max(to_screen(a), to_screen(b));
+                if !c.intersects(rect) {
+                    continue;
+                }
+                painter.set_clip_rect(c.intersect(painter.clip_rect()));
+                c.intersect(rect)
+            }
+            None => rect,
+        };
+        let painter = painter;
         let fam = crate::text::family(ui.ctx(), vfs, it.text("font"));
         let font = |size: f64| egui::FontId::new(((size as f32) * scale).max(4.0), fam.clone());
         match it.kind {
@@ -67,7 +80,7 @@ pub fn paint_ui(
             ObjectKind::Button => {
                 let disabled = it.props.get("disabled").is_some_and(|v| v.as_bool());
                 let id = ui.id().with(("ui button", it.object));
-                let resp = if live && !disabled { Some(ui.interact(rect, id, egui::Sense::click())) } else { None };
+                let resp = if live && !disabled { Some(ui.interact(shown, id, egui::Sense::click())) } else { None };
                 let mut fill = c32(it.color("color"));
                 if let Some(r) = &resp {
                     if r.is_pointer_button_down_on() {
@@ -116,6 +129,7 @@ pub fn paint_ui(
                         text = it.text("text").to_string();
                     }
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    child.set_clip_rect(painter.clip_rect());
                     let r = child.add_sized(
                         rect.size(),
                         egui::TextEdit::singleline(&mut text).id(id.with("edit")).hint_text(it.text("placeholder")).font(font(size)),
@@ -133,6 +147,105 @@ pub fn paint_ui(
                     let (t, c) = if it.text("text").is_empty() { (it.text("placeholder"), Color32::GRAY) } else { (it.text("text"), Color32::WHITE) };
                     painter.text(rect.left_center() + egui::vec2(6.0 * scale, 0.0), egui::Align2::LEFT_CENTER, t, font(size), c);
                 }
+            }
+            ObjectKind::Checkbox => {
+                let disabled = it.props.get("disabled").is_some_and(|v| v.as_bool());
+                let mut checked = it.props.get("checked").is_some_and(|v| v.as_bool());
+                let side = (it.num("size", 16.0) as f32 * 1.15 * scale).min(rect.height());
+                let b = Rect::from_center_size(Pos2::new(rect.left() + side / 2.0, rect.center().y), egui::vec2(side, side));
+                let mut fill = c32(it.color("color"));
+                if live && !disabled {
+                    let r = ui.interact(shown, ui.id().with(("ui checkbox", it.object)), egui::Sense::click());
+                    if r.hovered() {
+                        fill = Color32::from_rgb(fill.r().saturating_add(25), fill.g().saturating_add(25), fill.b().saturating_add(25));
+                    }
+                    if r.clicked() {
+                        checked = !checked;
+                        events.push(UiEvent::Toggled(it.object, checked));
+                    }
+                }
+                let dim = if disabled { 0.5 } else { 1.0 };
+                painter.rect_filled(b, CornerRadius::same((2.0 * scale) as u8), fill.gamma_multiply(dim));
+                painter.rect_stroke(b, CornerRadius::same((2.0 * scale) as u8), Stroke::new(scale.max(1.0), c32(it.color("check_color")).gamma_multiply(0.6 * dim)), egui::StrokeKind::Inside);
+                if checked {
+                    let at = |x: f32, y: f32| Pos2::new(b.left() + b.width() * x, b.top() + b.height() * y);
+                    painter.add(egui::Shape::line(vec![at(0.22, 0.52), at(0.42, 0.72), at(0.78, 0.3)], Stroke::new((2.0 * scale).max(1.5), c32(it.color("check_color")).gamma_multiply(dim))));
+                }
+                let text = c32(it.color("text_color")).gamma_multiply(dim);
+                crate::text::paint(&painter, Pos2::new(b.right() + 8.0 * scale, rect.center().y), egui::Align2::LEFT_CENTER, it.text("text"), font(it.num("size", 16.0)), text, scale);
+            }
+            ObjectKind::Slider => {
+                let disabled = it.props.get("disabled").is_some_and(|v| v.as_bool());
+                let (min, max) = (it.num("min", 0.0), it.num("max", 1.0));
+                let (lo, hi) = (min.min(max), min.max(max));
+                let step = it.num("step", 0.0);
+                let id = ui.id().with(("ui slider", it.object));
+                let mut v = it.num("value", 0.5).clamp(lo, hi);
+                let knob = rect.height() / 2.0;
+                let (x0, x1) = (rect.left() + knob, rect.right() - knob);
+                if live && !disabled {
+                    let r = ui.interact(shown, id, egui::Sense::click_and_drag());
+                    if let (true, Some(p)) = (r.dragged() || r.clicked(), r.interact_pointer_pos()) {
+                        let f = ((p.x - x0) / (x1 - x0).max(1.0)).clamp(0.0, 1.0) as f64;
+                        let mut nv = min + f * (max - min);
+                        if step > 0.0 {
+                            nv = (min + ((nv - min) / step).round() * step).clamp(lo, hi);
+                        }
+                        if (nv - v).abs() > 1e-9 {
+                            events.push(UiEvent::Slid(it.object, nv));
+                        }
+                        // Shown where it's dragged to (the game catches up a frame later).
+                        v = nv;
+                    }
+                }
+                let dim = if disabled { 0.5 } else { 1.0 };
+                let f = if (max - min).abs() < 1e-12 { 0.0 } else { ((v - min) / (max - min)).clamp(0.0, 1.0) as f32 };
+                let track = Rect::from_min_max(Pos2::new(x0, rect.center().y - rect.height() * 0.17), Pos2::new(x1, rect.center().y + rect.height() * 0.17));
+                painter.rect_filled(track, CornerRadius::same((track.height() / 2.0) as u8), c32(it.color("back_color")).gamma_multiply(dim));
+                let mut done = track;
+                done.set_width(track.width() * f);
+                painter.rect_filled(done, CornerRadius::same((track.height() / 2.0) as u8), c32(it.color("color")).gamma_multiply(dim));
+                painter.circle_filled(Pos2::new(x0 + (x1 - x0) * f, rect.center().y), knob * 0.9, c32(it.color("color")).gamma_multiply(dim));
+            }
+            ObjectKind::ScrollBox => {
+                let bg = c32(it.color("color"));
+                if bg.a() > 0 {
+                    painter.rect_filled(rect, 0.0, bg);
+                }
+                let content = it.num("content_height", 0.0) as f32;
+                let most = (content - it.size.y).max(0.0);
+                if most <= 0.0 {
+                    continue;
+                }
+                let id = ui.id().with(("ui scroll", it.object));
+                // Scrolled here a moment ago: carry on from there (the game catches up a frame later).
+                let now = ui.input(|i| i.time);
+                let recent = ui.data(|d| d.get_temp::<(f32, f64)>(id)).filter(|(_, t)| now - t < 0.3).map(|(v, _)| v);
+                let mut scroll = recent.unwrap_or(it.num("scroll", 0.0) as f32).clamp(0.0, most);
+                let before = scroll;
+                let bar_w = (6.0 * scale).max(3.0);
+                let bar = Rect::from_min_max(Pos2::new(rect.right() - bar_w, rect.top()), rect.right_bottom());
+                let thumb_h = (rect.height() * it.size.y / content).max(12.0 * scale).min(rect.height());
+                if live {
+                    if ui.rect_contains_pointer(shown) {
+                        let d = ui.input(|i| i.smooth_scroll_delta.y);
+                        if d != 0.0 {
+                            scroll = (scroll - d / scale.max(0.01)).clamp(0.0, most);
+                        }
+                    }
+                    let r = ui.interact(bar.intersect(shown), id.with("bar"), egui::Sense::drag());
+                    if r.dragged() {
+                        let room = (rect.height() - thumb_h).max(1.0);
+                        scroll = (scroll + r.drag_delta().y / room * most).clamp(0.0, most);
+                    }
+                    if scroll != before {
+                        let now = ui.input(|i| i.time);
+                        ui.data_mut(|d| d.insert_temp(id, (scroll, now)));
+                        events.push(UiEvent::Scrolled(it.object, scroll as f64));
+                    }
+                }
+                let y = rect.top() + (rect.height() - thumb_h) * (scroll / most);
+                painter.rect_filled(Rect::from_min_size(Pos2::new(bar.left(), y), egui::vec2(bar_w, thumb_h)), CornerRadius::same((bar_w / 2.0) as u8), c32(it.color("bar_color")));
             }
             _ => {}
         }

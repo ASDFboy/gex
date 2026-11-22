@@ -108,6 +108,9 @@ scripts can read it with `GET(object, "speed")`.
 | `on_pressed()` | on a Button's own scripts: it was clicked |
 | `on_pressed_<button name>()` | on every script: a Button with that name was clicked (`Start Game` → `on_pressed_start_game`) |
 | `on_text_changed(text)` / `on_text_submitted(text)` | on a TextInput's scripts |
+| `on_toggled(checked)` / `on_toggled_<name>(checked)` | a Checkbox was clicked (on its own scripts / on every script) |
+| `on_value_changed(value)` / `on_value_changed_<name>(value)` | a Slider's handle moved (on its own scripts / on every script) |
+| `on_timeout(name)` / `on_timeout_<name>()` | a Timer object ran out (on the Timer and its parent / on every script) |
 | `on_clip_end(clip)` | on an Animator's parent (and the Animator): its clip finished |
 | `on_tween_end(property)` | a `TWEEN` on this object finished |
 | `on_animation_end(name)` | a non-looping sprite or model animation finished |

@@ -2,6 +2,12 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.6:
+- Timer object: counts down from wait_time and runs on_timeout(name) on itself and its parent (and on_timeout_<name>() everywhere); repeats or runs once; PLAY / STOP start it over or stop it.
+- UI layout: Row, Column and Grid place the UI under them (sized to fit, so anchors center whole groups); ScrollBox stacks UI in a box you scroll with the wheel or its bar, clipping what's outside.
+- Checkbox (on_toggled) and Slider (on_value_changed, with min, max and step).
+- Selected UI objects are outlined in the editor (they used to be hidden behind the UI), and layout objects show a faint outline.
+
 New in 0.3.5:
 - Updating no longer keeps old copies of GEX: the replaced version (and any kept by earlier updates) is removed when the new one starts. The "Go back to…" button is gone with it.
 

@@ -226,7 +226,8 @@ it gets quieter the farther it is from the camera: put it under a waterfall or a
 
 ## UI
 
-UI objects (Panel, Label, Button, TextInput, ProgressBar, Image) are drawn over the game in
+UI objects (Panel, Label, Button, TextInput, ProgressBar, Image, Checkbox, Slider, and Row,
+Column, Grid and ScrollBox to place them) are drawn over the game in
 window pixels and ignore cameras. `anchor` is its origin: the point of it that sits at
 its position (`top_left`, `top`, `center`, `bottom_right`...). A `center` button at the middle
 of the screen is centred whatever its size.
@@ -235,6 +236,12 @@ of the screen is centred whatever its size.
 |---|---|
 | Button | `on_pressed()` on its own scripts; `on_pressed_<name>()` on every script |
 | TextInput | `on_text_changed(text)`, `on_text_submitted(text)` (Enter) |
+| Checkbox | `on_toggled(checked)`; `on_toggled_<name>(checked)` on every script |
+| Slider | `on_value_changed(value)`; `on_value_changed_<name>(value)` on every script |
+
+Put buttons under a **Column** and they stack, `spacing` apart, in hierarchy order; give the
+Column anchor `center` and the whole menu is centered. A **Row** puts things side by side, a
+**Grid** in rows of `columns`, and a **ScrollBox** stacks them in a box you scroll through.
 
 A health bar is a ProgressBar: `SET("HUD/Health", "value", hp / max_hp)` (or set its `max`).
 Hide or show a whole menu by setting `visible` on the Panel that holds it.

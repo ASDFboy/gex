@@ -1342,3 +1342,85 @@ fn multiplayer_host_and_join() {
     assert!(text(&hl).contains(&"left 2".to_string()));
     assert_eq!(ps(&h).len(), 1);
 }
+
+#[test]
+fn timers_checkboxes_sliders_and_layout() {
+    let blueprint = r#"(root: (name: "R", kind: Some(Object), scripts: ["res://r.jlb"], children: [
+        (name: "Spawn", kind: Some(Timer), props: {"wait_time": Num(0.5)}),
+        (name: "Once", kind: Some(Timer), props: {"wait_time": Num(0.25), "repeat": Bool(false)}),
+        (name: "Later", kind: Some(Timer), props: {"running": Bool(false)}),
+        (name: "Menu", kind: Some(Column), transform: Some((position: (640.0, 360.0, 0.0))), props: {"anchor": Text("center"), "spacing": Num(10.0), "align": Text("center")}, children: [
+            (name: "Sound", kind: Some(Checkbox)),
+            (name: "Volume", kind: Some(Slider), props: {"step": Num(0.1)}),
+            (name: "Buttons", kind: Some(Row), children: [
+                (name: "A", kind: Some(Button), props: {"width": Num(100.0)}),
+                (name: "B", kind: Some(Button), props: {"width": Num(60.0)}, children: [
+                    (name: "Badge", kind: Some(Label), transform: Some((position: (5.0, 5.0, 0.0)))),
+                ]),
+            ]),
+        ]),
+        (name: "List", kind: Some(ScrollBox), props: {"height": Num(100.0), "spacing": Num(0.0)}, children: [
+            (name: "L1", kind: Some(Button), props: {"height": Num(40.0)}),
+            (name: "L2", kind: Some(Button), props: {"height": Num(40.0)}),
+            (name: "L3", kind: Some(Button), props: {"height": Num(40.0)}),
+        ]),
+    ]))"#;
+    let r = "ticks = 0\nonce = 0\nlater = 0\nsound = NULL\nvol = NULL\nDEF on_timeout(name) {\n    IF name == \"Spawn\" { GLOBAL ticks += 1 }\n    IF name == \"Once\" { GLOBAL once += 1 }\n}\nDEF on_timeout_later() {\n    GLOBAL later += 1\n}\nDEF on_toggled_sound(on) {\n    GLOBAL sound = on\n}\nDEF on_value_changed_volume(v) {\n    GLOBAL vol = v\n}\nDEF on_press_p() {\n    PLAY(\"Later\")\n    STOP(\"Spawn\")\n}\nDEF on_step(dt) {\n    self.ticks = ticks\n    self.once = once\n    self.later = later\n    self.sound = sound\n    self.vol = vol\n}\n";
+    let p = project("ui_more", &[("main.jblueprint", blueprint), ("r.jlb", r)]);
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    for _ in 0..66 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    let id = |g: &Game, p: &str| g.tree().find_path(None, p).unwrap();
+    let num = |g: &Game, k: &str| g.tree().objects[id(g, "R")].num(k, -1.0);
+    assert_eq!(num(&g, "ticks"), 2.0, "every half second, for 1.1 s");
+    assert_eq!(num(&g, "once"), 1.0, "a one-shot timer runs out once");
+    assert_eq!(num(&g, "later"), 0.0, "a timer that isn't running");
+    assert!(!g.tree().objects[id(&g, "R/Once")].prop("running").unwrap().as_bool());
+    // PLAY starts a timer, STOP stops one.
+    g.frame(1.0 / 60.0, HashSet::from(["p".to_string()]), [0.0; 2], HashSet::new());
+    for _ in 0..70 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    }
+    assert_eq!(num(&g, "later"), 1.0);
+    assert_eq!(num(&g, "ticks"), 2.0, "stopped");
+    // A checkbox and a slider used.
+    let (sound, volume) = (id(&g, "R/Menu/Sound"), id(&g, "R/Menu/Volume"));
+    g.step(crate::FrameInput { dt: 1.0 / 60.0, ui: vec![crate::UiEvent::Toggled(sound, true), crate::UiEvent::Slid(volume, 0.7)], ..Default::default() });
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0; 2], HashSet::new());
+    assert!(g.tree().objects[sound].prop("checked").unwrap().as_bool());
+    assert_eq!(g.tree().objects[volume].num("value", 0.0), 0.7);
+    assert!(g.tree().objects[id(&g, "R")].prop("sound").unwrap().as_bool());
+    assert_eq!(num(&g, "vol"), 0.7);
+    let logs = g.take_logs();
+    let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text.clone()).collect();
+    assert!(errs.is_empty(), "{:#?}", errs);
+    // Layout: the menu is a centered column; the row's buttons sit side by side and the badge
+    // moves with its button.
+    let list = g.render_list();
+    let item = |p: &str| list.ui.iter().find(|u| u.object == id(&g, p)).unwrap().clone();
+    let tl = |p: &str| item(p).top_left(gex_core::glam::Vec2::ZERO);
+    let menu = item("R/Menu");
+    assert_eq!(menu.size.x, 200.0, "as wide as its widest (the slider)");
+    assert_eq!(menu.size.y, 28.0 + 10.0 + 20.0 + 10.0 + 36.0);
+    assert_eq!(tl("R/Menu"), gex_core::glam::Vec2::new(540.0, 360.0 - menu.size.y / 2.0));
+    assert_eq!(tl("R/Menu/Sound").y, tl("R/Menu").y);
+    assert_eq!(tl("R/Menu/Volume").y, tl("R/Menu").y + 38.0);
+    let row = tl("R/Menu/Buttons");
+    assert_eq!(item("R/Menu/Buttons").size.x, 100.0 + 8.0 + 60.0);
+    assert_eq!(row.x, 540.0 + (200.0 - 168.0) / 2.0, "centered in the column");
+    assert_eq!(tl("R/Menu/Buttons/A"), row);
+    assert_eq!(tl("R/Menu/Buttons/B").x, row.x + 108.0);
+    assert_eq!(item("R/Menu/Buttons/B/Badge").pos, tl("R/Menu/Buttons/B") + gex_core::glam::Vec2::new(5.0, 5.0));
+    // The scroll box: 120 high inside 100, scrolled 15 (and no further than 20), clipped to the box.
+    let list_id = id(&g, "R/List");
+    g.step(crate::FrameInput { dt: 1.0 / 60.0, ui: vec![crate::UiEvent::Scrolled(list_id, 15.0)], ..Default::default() });
+    let list = g.render_list();
+    let item = |p: &str| list.ui.iter().find(|u| u.object == id(&g, p)).unwrap().clone();
+    assert_eq!(item("R/List").num("content_height", 0.0), 120.0);
+    assert_eq!(item("R/List/L2").top_left(gex_core::glam::Vec2::ZERO).y, 40.0 - 15.0);
+    assert_eq!(item("R/List/L3").clip, Some((gex_core::glam::Vec2::ZERO, gex_core::glam::Vec2::new(240.0, 100.0))));
+    g.step(crate::FrameInput { dt: 1.0 / 60.0, ui: vec![crate::UiEvent::Scrolled(list_id, 500.0)], ..Default::default() });
+    let list = g.render_list();
+    assert_eq!(list.ui.iter().find(|u| u.object == id(&g, "R/List/L1")).unwrap().top_left(gex_core::glam::Vec2::ZERO).y, -20.0, "no further than the end");
+}

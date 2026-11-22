@@ -20,6 +20,8 @@ pub enum ObjectKind {
     Object,
     /// Plays a sound file (with autoplay, or PLAY(object) from a script).
     Sound,
+    /// Counts down and runs on_timeout when it reaches zero (once, or over and over).
+    Timer,
     // ---- 2D ----
     #[serde(alias = "Node2D")]
     Object2D,
@@ -45,6 +47,18 @@ pub enum ObjectKind {
     TextInput,
     ProgressBar,
     Image,
+    /// Places the UI objects under it side by side, left to right.
+    Row,
+    /// Places the UI objects under it one under another.
+    Column,
+    /// Places the UI objects under it in a grid, a set number across.
+    Grid,
+    /// A box the UI objects under it stack in and scroll through (mouse wheel, or dragging its bar).
+    ScrollBox,
+    /// A box that's ticked or not, with text beside it.
+    Checkbox,
+    /// A bar with a handle to drag between a lowest and highest value.
+    Slider,
     // ---- 3D ----
     #[serde(alias = "Node3D")]
     Object3D,
@@ -70,6 +84,7 @@ pub const ALL_KINDS: &[ObjectKind] = &[
     ObjectKind::Object,
     ObjectKind::Animator,
     ObjectKind::Sound,
+    ObjectKind::Timer,
     ObjectKind::Object2D,
     ObjectKind::Sprite2D,
     ObjectKind::Label2D,
@@ -85,6 +100,12 @@ pub const ALL_KINDS: &[ObjectKind] = &[
     ObjectKind::TextInput,
     ObjectKind::ProgressBar,
     ObjectKind::Image,
+    ObjectKind::Row,
+    ObjectKind::Column,
+    ObjectKind::Grid,
+    ObjectKind::ScrollBox,
+    ObjectKind::Checkbox,
+    ObjectKind::Slider,
     ObjectKind::Object3D,
     ObjectKind::Mesh3D,
     ObjectKind::Camera3D,
@@ -103,6 +124,7 @@ impl ObjectKind {
             ObjectKind::Object => "Object",
             ObjectKind::Animator => "Animator",
             ObjectKind::Sound => "Sound",
+            ObjectKind::Timer => "Timer",
             ObjectKind::Object2D => "Object2D",
             ObjectKind::Sprite2D => "Sprite2D",
             ObjectKind::Label2D => "Label2D",
@@ -118,6 +140,12 @@ impl ObjectKind {
             ObjectKind::TextInput => "TextInput",
             ObjectKind::ProgressBar => "ProgressBar",
             ObjectKind::Image => "Image",
+            ObjectKind::Row => "Row",
+            ObjectKind::Column => "Column",
+            ObjectKind::Grid => "Grid",
+            ObjectKind::ScrollBox => "ScrollBox",
+            ObjectKind::Checkbox => "Checkbox",
+            ObjectKind::Slider => "Slider",
             ObjectKind::Object3D => "Object3D",
             ObjectKind::Mesh3D => "Mesh3D",
             ObjectKind::Camera3D => "Camera3D",
@@ -144,7 +172,25 @@ impl ObjectKind {
         matches!(self, ObjectKind::Object2D | ObjectKind::Sprite2D | ObjectKind::Label2D | ObjectKind::Camera2D | ObjectKind::Collider2D | ObjectKind::Body2D | ObjectKind::TileMap2D | ObjectKind::Particles2D | ObjectKind::Light2D)
     }
     pub fn is_ui(self) -> bool {
-        matches!(self, ObjectKind::Panel | ObjectKind::Button | ObjectKind::Label | ObjectKind::TextInput | ObjectKind::ProgressBar | ObjectKind::Image)
+        matches!(
+            self,
+            ObjectKind::Panel
+                | ObjectKind::Button
+                | ObjectKind::Label
+                | ObjectKind::TextInput
+                | ObjectKind::ProgressBar
+                | ObjectKind::Image
+                | ObjectKind::Row
+                | ObjectKind::Column
+                | ObjectKind::Grid
+                | ObjectKind::ScrollBox
+                | ObjectKind::Checkbox
+                | ObjectKind::Slider
+        )
+    }
+    /// UI that places the UI objects under it (their own positions are ignored).
+    pub fn is_layout(self) -> bool {
+        matches!(self, ObjectKind::Row | ObjectKind::Column | ObjectKind::Grid | ObjectKind::ScrollBox)
     }
     pub fn is_3d(self) -> bool {
         matches!(self, ObjectKind::Object3D | ObjectKind::Mesh3D | ObjectKind::Camera3D | ObjectKind::Light3D | ObjectKind::Body3D | ObjectKind::Collider3D | ObjectKind::Sprite3D | ObjectKind::Label3D | ObjectKind::Particles3D | ObjectKind::Environment)
@@ -281,6 +327,48 @@ impl ObjectKind {
                 ("height", Num(64.0)),
                 ("color", Color([1.0; 4])),
                 ("slice", Num(0.0)),
+                ("anchor", Text("top_left".into())),
+                ("opacity", Num(1.0)),
+            ],
+            ObjectKind::Row => vec![("spacing", Num(8.0)), ("padding", Num(0.0)), ("align", Text("top".into())), ("anchor", Text("top_left".into())), ("opacity", Num(1.0))],
+            ObjectKind::Column => vec![("spacing", Num(8.0)), ("padding", Num(0.0)), ("align", Text("left".into())), ("anchor", Text("top_left".into())), ("opacity", Num(1.0))],
+            ObjectKind::Grid => vec![("columns", Num(2.0)), ("spacing", Num(8.0)), ("padding", Num(0.0)), ("anchor", Text("top_left".into())), ("opacity", Num(1.0))],
+            ObjectKind::ScrollBox => vec![
+                ("width", Num(240.0)),
+                ("height", Num(200.0)),
+                ("spacing", Num(8.0)),
+                ("padding", Num(0.0)),
+                ("align", Text("left".into())),
+                ("color", Color([0.0, 0.0, 0.0, 0.0])),
+                ("bar_color", Color([0.4, 0.75, 0.96, 0.8])),
+                ("scroll", Num(0.0)),
+                ("anchor", Text("top_left".into())),
+                ("opacity", Num(1.0)),
+            ],
+            ObjectKind::Checkbox => vec![
+                ("text", Text("Checkbox".into())),
+                ("checked", Bool(false)),
+                ("width", Num(160.0)),
+                ("height", Num(28.0)),
+                ("size", Num(16.0)),
+                ("color", Color([0.14, 0.2, 0.28, 1.0])),
+                ("check_color", Color([0.4, 0.75, 0.96, 1.0])),
+                ("text_color", Color([0.78, 0.84, 0.88, 1.0])),
+                ("disabled", Bool(false)),
+                ("font", Res(String::new())),
+                ("anchor", Text("top_left".into())),
+                ("opacity", Num(1.0)),
+            ],
+            ObjectKind::Slider => vec![
+                ("value", Num(0.5)),
+                ("min", Num(0.0)),
+                ("max", Num(1.0)),
+                ("step", Num(0.0)),
+                ("width", Num(200.0)),
+                ("height", Num(20.0)),
+                ("color", Color([0.4, 0.75, 0.96, 1.0])),
+                ("back_color", Color([0.1, 0.1, 0.12, 1.0])),
+                ("disabled", Bool(false)),
                 ("anchor", Text("top_left".into())),
                 ("opacity", Num(1.0)),
             ],
@@ -436,6 +524,7 @@ impl ObjectKind {
                 ("tint", Color([1.0; 4])),
                 ("vignette", Num(0.0)),
             ],
+            ObjectKind::Timer => vec![("wait_time", Num(1.0)), ("running", Bool(true)), ("repeat", Bool(true))],
             ObjectKind::Animator => vec![("clips", Res(String::new())), ("autoplay", Text(String::new())), ("speed", Num(1.0))],
             ObjectKind::Sound => vec![
                 ("stream", Res(String::new())),

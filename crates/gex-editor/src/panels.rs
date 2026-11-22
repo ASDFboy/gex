@@ -768,6 +768,12 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("on_pressed_play()", "any Button named Play was clicked (runs on every script)"),
     ("on_text_changed(text)", "this TextInput's text changed"),
     ("on_text_submitted(text)", "Enter was pressed in this TextInput"),
+    ("on_toggled(checked)", "this Checkbox was clicked (checked: whether it's ticked now)"),
+    ("on_toggled_sound()", "any Checkbox named Sound was clicked (runs on every script, with checked)"),
+    ("on_value_changed(value)", "this Slider's handle was moved"),
+    ("on_value_changed_volume(value)", "any Slider named Volume moved (runs on every script)"),
+    ("on_timeout(name)", "a Timer under this object (or this Timer) reached zero"),
+    ("on_timeout_spawn()", "any Timer named Spawn reached zero (runs on every script)"),
     ("on_animation_end(name)", "a non-looping animation on this object finished"),
     ("on_tween_end(property)", "a TWEEN of one of this object's properties finished"),
     ("on_connected(id)", "multiplayer: you joined a game (id is your player number)"),
@@ -799,6 +805,9 @@ fn event_label(h: &str) -> String {
         ("on_pressed", "Clicked"),
         ("on_text_changed", "Text changed"),
         ("on_text_submitted", "Text submitted"),
+        ("on_toggled", "Toggled"),
+        ("on_value_changed", "Value changed"),
+        ("on_timeout", "Timer ran out"),
         ("on_animation_end", "Animation end"),
         ("on_tween_end", "Tween end"),
         ("on_connected", "Joined a game"),
@@ -902,6 +911,9 @@ fn add_event_menu(ui: &mut egui::Ui, st: &EditorState) -> Option<String> {
         item(ui, "Clicked (a Button)", "on_pressed()");
         item(ui, "Text changed (a TextInput)", "on_text_changed(text)");
         item(ui, "Text submitted (a TextInput)", "on_text_submitted(text)");
+        item(ui, "Toggled (a Checkbox)", "on_toggled(checked)");
+        item(ui, "Value changed (a Slider)", "on_value_changed(value)");
+        item(ui, "Timer ran out (a Timer object)", "on_timeout(name)");
     });
     ui.separator();
     crate::docs::menu(ui, "Custom", |ui| { crate::theme::fade_in(ui);

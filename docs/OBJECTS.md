@@ -14,6 +14,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 |---|---|---|
 | `Object` | an empty object: a folder, or a holder for scripts (game managers) | |
 | `Animator` | plays clips made in the Timeline: property values (position, color, any number, text or switch) keyed over time, on its parent and the objects under it | `clips` (the .anim file the Timeline saves), `autoplay` (a clip to start with), `speed`. Scripts use `PLAY_CLIP`, `STOP_CLIP`, `CLIP_PLAYING` and get `on_clip_end(clip)`. Put it under the thing it animates. |
+| `Timer` | counts down, then runs `on_timeout(name)` on itself and its parent and `on_timeout_<name>()` on every script | `wait_time` (seconds), `running` (counting from the start when on; off pauses it), `repeat` (starts over each time; off stops after once); live: `time_left`. `PLAY(timer)` starts it over, `STOP(timer)` stops it. Simpler than `TIMER()` in a script when you want to see and tweak it in the editor. |
 | `Sound` | a sound you can start and stop | `stream` (a sound file: see [File formats](#file-formats)), `volume`, `pitch`, `loop`, `autoplay`; `spatial` makes it quieter the farther it is from the camera (silent at `range`: 0 = 25 m in 3D, 1000 px in 2D) and moves it left or right to where it is; `pan` (-1 left to 1 right) when not spatial; `echo` (0 to 1) and `echo_delay` (seconds) for caves and halls. Put it under the thing making the noise. |
 
 ## 2D
@@ -70,6 +71,19 @@ x 640 spans 540 to 740.
 | `TextInput` | a box to type in | `text`, `placeholder`, `width`, `height` | `on_text_changed(text)`, `on_text_submitted(text)` |
 | `ProgressBar` | a bar (health, loading) | `value`, `max`, `color`, `back_color` | |
 | `Image` | a picture | `texture`, `width`, `height`, `color`, `slice` | |
+| `Checkbox` | a box that's ticked or not, with text beside it (settings: full screen, sound on) | `text`, `checked`, `width`, `height`, `size`, `color`, `check_color`, `text_color`, `disabled`, `font` | `on_toggled(checked)`, `on_toggled_<name>(checked)` |
+| `Slider` | a bar with a handle to drag (volume, difficulty, field of view) | `value`, `min`, `max`, `step` (1 = whole numbers, 0 = smooth), `width`, `height`, `color`, `back_color`, `disabled` | `on_value_changed(value)`, `on_value_changed_<name>(value)` |
+| `Row` | places the UI objects under it side by side | `spacing`, `padding`, `align` (top / center / bottom) | |
+| `Column` | places the UI objects under it one under another | `spacing`, `padding`, `align` (left / center / right) | |
+| `Grid` | places the UI objects under it in a grid | `columns`, `spacing`, `padding` | |
+| `ScrollBox` | a box the UI objects under it stack in and scroll through (mouse wheel, or its bar) | `width`, `height`, `spacing`, `padding`, `align`, `color` (background, clear by default), `bar_color`, `scroll` (how far down, in pixels; set it to scroll from a script) | |
+
+**Layout.** Rows, Columns, Grids and ScrollBoxes place the UI objects directly under them, in
+the order they're listed in the hierarchy (drag to reorder); those objects' own positions are
+ignored, and anything under them moves along. Rows, Columns and Grids are exactly as big as what's
+in them, so their `anchor` places the whole group: a Column with anchor `center` at the middle of
+the screen is a centered menu. They nest: a Column of Rows makes a settings screen, a ScrollBox
+of Rows a list. Hidden objects take no room.
 
 **Fonts.** Drop a `.ttf` or `.otf` into the project and onto a Label's, Button's, TextInput's or
 Label2D's `font`.
