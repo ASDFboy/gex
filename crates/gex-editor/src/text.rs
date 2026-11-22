@@ -38,7 +38,7 @@ pub fn family(ctx: &egui::Context, vfs: &gex_assets::Vfs, path: &str) -> FontFam
     st.data.insert(path.to_string(), bytes);
     // Rebuild the font set: egui's own fonts, plus every game font as its own family (with
     // the default fonts behind it, for characters it doesn't have).
-    let mut defs = egui::FontDefinitions::default();
+    let mut defs = base_fonts();
     let fallback = defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     for (p, b) in &st.data {
         let Some(b) = b else { continue };
@@ -49,6 +49,19 @@ pub fn family(ctx: &egui::Context, vfs: &gex_assets::Vfs, path: &str) -> FontFam
     }
     ctx.set_fonts(defs);
     FontFamily::Proportional
+}
+
+/// egui's own fonts, with the monospace one behind the others for the symbols they lack (arrows
+/// like →, ▸, ■): text never shows empty boxes.
+pub fn base_fonts() -> egui::FontDefinitions {
+    let mut defs = egui::FontDefinitions::default();
+    let mono = defs.families.get(&FontFamily::Monospace).and_then(|m| m.first().cloned());
+    if let (Some(m), Some(p)) = (mono, defs.families.get_mut(&FontFamily::Proportional)) {
+        if !p.contains(&m) {
+            p.push(m);
+        }
+    }
+    defs
 }
 
 fn parse_color(s: &str) -> Option<Color32> {

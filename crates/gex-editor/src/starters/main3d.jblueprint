@@ -1,0 +1,24 @@
+(
+  format: 1,
+  root: (
+    name: "World",
+    kind: Some(Object3D),
+    children: [
+      (name: "Sky", kind: Some(Environment)),
+      (name: "Sun", kind: Some(Light3D), transform: Some((rotation: (-55.0, 40.0, 0.0))), props: {"shadows": Bool(true)}),
+      (name: "Ground", kind: Some(Mesh3D), transform: Some((scale: (30.0, 1.0, 30.0))),
+        props: {"mesh": Text("plane"), "color": Color((0.32, 0.4, 0.34, 1.0)), "collision": Bool(true)}),
+      (name: "Box", kind: Some(Mesh3D), transform: Some((position: (3.0, 0.75, -4.0), scale: (1.5, 1.5, 1.5))),
+        props: {"color": Color((0.9, 0.75, 0.2, 1.0)), "collision": Bool(true)}),
+      (name: "Player", kind: Some(Body3D), transform: Some((position: (0.0, 1.0, 4.0))),
+        props: {"body": Text("kinematic"), "shape": Text("capsule"), "width": Num(0.6), "height": Num(1.8), "depth": Num(0.6), "radius": Num(0.3)},
+        scripts: ["res://scripts/player.jlb"],
+        children: [
+          (name: "Look", kind: Some(Mesh3D), transform: Some((scale: (0.6, 1.8, 0.6))), props: {"mesh": Text("sphere"), "color": Color((0.4, 0.75, 0.96, 1.0))}),
+          (name: "Camera", kind: Some(Camera3D), transform: Some((position: (0.0, 2.5, 5.0), rotation: (-18.0, 0.0, 0.0)))),
+        ]),
+      (name: "Help", kind: Some(Label), transform: Some((position: (20.0, 16.0, 0.0))),
+        props: {"text": Text("WASD / arrows: move - Space: jump. Change scripts/player.jlb to make it yours."), "size": Num(16.0)}),
+    ],
+  ),
+)

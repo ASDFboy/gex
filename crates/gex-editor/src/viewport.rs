@@ -359,28 +359,42 @@ struct Drag {
 pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::RenderState>, textures: &mut Option<egui::TextureId>) {
     let playing = st.playing.is_some();
     crate::docs::mark(ui, ui.available_rect_before_wrap(), "ui:blueprint_view");
+    // A blueprint with only 2D things in it has nothing to see in 3D.
+    let flat_only = {
+        let t = st.view_tree();
+        let (mut two, mut three) = (false, false);
+        for (_, n) in t.objects.iter() {
+            two |= n.kind.is_2d() || n.kind.is_ui();
+            three |= n.kind.is_3d();
+        }
+        two && !three
+    };
+    if flat_only && st.mode_3d && !playing {
+        st.mode_3d = false;
+    }
     ui.horizontal(|ui| {
-        let a = ui.selectable_label(!st.mode_3d, "2D");
-        if a.clicked() {
-            st.mode_3d = false;
+        let mut three = st.mode_3d;
+        let tip = if flat_only { "This blueprint has only 2D things in it (add a 3D object to see it in 3D)" } else { "Switches the view between 2D (sprites, menus) and 3D" };
+        let r = crate::theme::switch(ui, &mut three, "2D", "3D", !flat_only).tip(tip);
+        if r.changed() {
+            st.mode_3d = three;
         }
-        let b = ui.selectable_label(st.mode_3d, "3D");
-        if b.clicked() {
-            st.mode_3d = true;
-        }
-        crate::docs::mark(ui, a.rect.union(b.rect), "ui:2d3d");
-        ui.separator();
-        for (t, label, key) in [(Tool::Move, "Move", "1"), (Tool::Rotate, "Rotate", "2"), (Tool::Scale, "Scale", "3")] {
-            if crate::docs::on(ui.selectable_label(st.tool == t, label).tip(format!("Key: {}", key)), ui, "ui:tools").clicked() {
-                st.tool = t;
+        crate::docs::mark(ui, r.rect, "ui:2d3d");
+        // While playing, the editing tools don't do anything: they step aside.
+        if !playing {
+            ui.separator();
+            for (t, label, key) in [(Tool::Move, "Move", "1"), (Tool::Rotate, "Rotate", "2"), (Tool::Scale, "Scale", "3")] {
+                if crate::docs::on(ui.selectable_label(st.tool == t, label).tip(format!("Key: {}", key)), ui, "ui:tools").clicked() {
+                    st.tool = t;
+                }
             }
+            ui.separator();
+            let snap0 = ui.label("Snap").rect;
+            let (step, unit, speed) = if st.mode_3d { (&mut st.snap3, " m", 0.05) } else { (&mut st.snap2, " px", 1.0) };
+            ui.add(egui::DragValue::new(step).range(0.0..=10000.0).speed(speed).suffix(unit)).tip("Moving and scaling go in steps of this (scaling in 2D: steps of 0.25). 0 is off.\nHolding Ctrl while dragging flips snapping.");
+            ui.add(egui::DragValue::new(&mut st.snap_angle).range(0.0..=180.0).speed(1.0).suffix("°")).tip("Rotating goes in steps of this. 0 is off.\nHolding Ctrl while dragging flips snapping.");
+            crate::docs::mark(ui, snap0.union(ui.min_rect().intersect(egui::Rect::everything_right_of(snap0.left()))), "ui:snap");
         }
-        ui.separator();
-        let snap0 = ui.label("Snap").rect;
-        let (step, unit, speed) = if st.mode_3d { (&mut st.snap3, " m", 0.05) } else { (&mut st.snap2, " px", 1.0) };
-        ui.add(egui::DragValue::new(step).range(0.0..=10000.0).speed(speed).suffix(unit)).tip("Moving and scaling go in steps of this (scaling in 2D: steps of 0.25). 0 is off.\nHolding Ctrl while dragging flips snapping.");
-        ui.add(egui::DragValue::new(&mut st.snap_angle).range(0.0..=180.0).speed(1.0).suffix("°")).tip("Rotating goes in steps of this. 0 is off.\nHolding Ctrl while dragging flips snapping.");
-        crate::docs::mark(ui, snap0.union(ui.min_rect().intersect(egui::Rect::everything_right_of(snap0.left()))), "ui:snap");
         ui.separator();
         let r = ui.checkbox(&mut st.show_grid, "Grid").tip("Shows or hides the grid in the blueprint view. It isn't part of the game.");
         crate::docs::mark(ui, r.rect, "ui:grid");
@@ -388,6 +402,11 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         crate::docs::mark(ui, r.rect, "ui:colliders");
         if let Some(p) = &mut st.playing {
             ui.separator();
+            // The game may have moved on to another blueprint (CHANGE_BLUEPRINT).
+            if !p.blueprint.is_empty() && st.blueprint_res.as_deref() != Some(p.blueprint.as_str()) {
+                let name = p.blueprint.rsplit('/').next().unwrap_or(&p.blueprint).trim_end_matches(".jblueprint");
+                ui.label(egui::RichText::new(format!("Now in: {}", name)).color(theme::GOOD)).tip(format!("The game changed to {} (the tab is the blueprint it started in)", p.blueprint));
+            }
             let r = ui.checkbox(&mut p.game_camera, "Game camera").tip("Off: look around with the editor camera while the game runs");
             crate::docs::mark(ui, r.rect, "ui:game_camera");
             let view: Option<egui::Id> = ui.ctx().data(|d| d.get_temp(egui::Id::new("gex viewport id")));

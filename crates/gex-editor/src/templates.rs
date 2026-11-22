@@ -32,6 +32,42 @@ pub const DEMO_BIN: &[(&str, &[u8])] = &[
     ("assets/jump.wav", include_bytes!("demo/assets/jump.wav")),
 ];
 
+/// What a new project starts with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Start {
+    Nothing,
+    /// A 2D blueprint with a player that runs and jumps.
+    Starter2D,
+    /// A 3D blueprint with ground, a sun and a player that walks and jumps.
+    Starter3D,
+    Demo,
+}
+
+/// A small starting game: a player, ground and a script to change.
+pub fn create_starter(dir: &Path, name: &str, three: bool) -> Result<Project, String> {
+    if dir.join(PROJECT_FILE).exists() {
+        return Err(format!("{} already has a project in it", dir.display()));
+    }
+    let files: [(&str, &str); 3] = if three {
+        [
+            (PROJECT_FILE, include_str!("starters/project3d.jproj")),
+            ("blueprints/main.jblueprint", include_str!("starters/main3d.jblueprint")),
+            ("scripts/player.jlb", include_str!("starters/player3d.jlb")),
+        ]
+    } else {
+        [
+            (PROJECT_FILE, include_str!("starters/project2d.jproj")),
+            ("blueprints/main.jblueprint", include_str!("starters/main2d.jblueprint")),
+            ("scripts/player.jlb", include_str!("starters/player2d.jlb")),
+        ]
+    };
+    write_all(dir, &files)?;
+    let mut p = Project::open(dir)?;
+    p.config.name = name.to_string();
+    p.save()?;
+    Ok(p)
+}
+
 fn write_all<T: AsRef<[u8]>>(dir: &Path, files: &[(&str, T)]) -> Result<(), String> {
     for (p, text) in files {
         let path = dir.join(p);
@@ -67,6 +103,36 @@ mod tests {
     use std::collections::HashSet;
 
     use gex_script::{Game, LogKind};
+
+    /// The 2D and 3D starters play: the player stands on the ground and moves.
+    #[test]
+    fn starters_play() {
+        for three in [false, true] {
+            let dir = std::env::temp_dir().join(format!("gex-starter-{}-{}", three, std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let p = super::create_starter(&dir, "Test", three).unwrap();
+            assert_eq!(p.config.name, "Test");
+            let mut g = Game::from_blueprint(p.clone(), &p.config.main_blueprint, None).unwrap();
+            let start = { let t = g.tree(); let id = t.find_path(None, if three { "World/Player" } else { "Main/Player" }).unwrap(); t.objects[id].transform.position };
+            for i in 0..120 {
+                let k: HashSet<String> = if i > 60 { ["right".into()].into() } else { HashSet::new() };
+                g.frame(1.0 / 60.0, k, [0.0; 2], HashSet::new());
+            }
+            let logs = g.take_logs();
+            let errs: Vec<_> = logs.iter().filter(|l| l.kind == LogKind::Error).map(|l| &l.text).collect();
+            assert!(errs.is_empty(), "{:#?}", errs);
+            let t = g.tree();
+            let id = t.find_path(None, if three { "World/Player" } else { "Main/Player" }).unwrap();
+            let now = t.objects[id].transform.position;
+            assert!(now.x > start.x + 1.0, "moved right: {:?} -> {:?}", start, now);
+            if three {
+                assert!(now.y > 0.5 && now.y < 1.5, "standing on the ground: {:?}", now);
+            } else {
+                assert!((now.y - 616.0).abs() < 3.0, "standing on the floor: {:?}", now);
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 
     /// The demo's scripts run without errors, and playing it actually works.
     #[test]

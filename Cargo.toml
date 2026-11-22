@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["third_party/jlb"]
 
 [workspace.package]
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 authors = ["ASDFboy"]
 

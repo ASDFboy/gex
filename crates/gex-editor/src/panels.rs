@@ -156,6 +156,34 @@ pub fn hierarchy(ui: &mut egui::Ui, st: &mut EditorState) {
     match action {
         Some(Action::Select(id)) => st.select(Some(id)),
         Some(Action::Toggle(id)) => st.toggle_select(id),
+        Some(Action::StartRename(id)) if !playing => {
+            st.select(Some(id));
+            st.renaming = Some(id);
+        }
+        Some(Action::Rename(id, name)) => {
+            st.renaming = None;
+            if let Some(name) = name {
+                st.rename_object(id, &name);
+            }
+        }
+        Some(Action::Copy(id, cut)) => {
+            if !st.is_selected(id) {
+                st.select(Some(id));
+            }
+            if let Some(t) = st.copy_selected() {
+                ui.ctx().copy_text(t);
+                if cut && !playing {
+                    st.delete_selected();
+                }
+            }
+        }
+        Some(Action::Paste(id)) if !playing => {
+            st.select(Some(id));
+            let t = st.clipboard.clone();
+            if st.paste_text(&t) {
+                st.status = "pasted".into();
+            }
+        }
         Some(Action::Reparent(id, to)) if !playing => {
             if st.tree.objects[id].from_instance {
                 st.status = "objects inside an instanced blueprint can't be moved out of it".into();
@@ -221,6 +249,12 @@ pub const COLOR_PROP: &str = "editor_color";
 
 enum Action {
     Select(ObjectId),
+    StartRename(ObjectId),
+    /// Renaming done: the new name, or None (cancelled).
+    Rename(ObjectId, Option<String>),
+    /// Copy (true: cut).
+    Copy(ObjectId, bool),
+    Paste(ObjectId),
     Toggle(ObjectId),
     Reparent(ObjectId, ObjectId),
     Delete(ObjectId),
@@ -240,6 +274,37 @@ fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTre
     let icon = crate::icons::object(tree, id);
     let color = if n.from_instance { theme::TEXT_DIM } else if !n.visible { Color32::from_gray(110) } else { theme::TEXT };
     let draw_label = |ui: &mut egui::Ui, action: &mut Option<Action>| {
+        // Being renamed (F2, double-click): a box to type the name in. Enter keeps it, Esc
+        // (or clicking elsewhere without changing it) doesn't.
+        if st.renaming == Some(id) && !playing {
+            let mem = egui::Id::new(("renaming", id));
+            let mut text: String = ui.data(|d| d.get_temp(mem)).unwrap_or_else(|| label.clone());
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(150.0));
+            // Focused until it has been once (the click that started it may take a frame to settle).
+            let had = ui.data(|d| d.get_temp::<bool>(mem.with("focused"))).is_some();
+            if r.has_focus() {
+                if !had {
+                    ui.data_mut(|d| d.insert_temp(mem.with("focused"), true));
+                    // Everything selected, to type the new name straight over it.
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), r.id) {
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()))));
+                        state.store(ui.ctx(), r.id);
+                    }
+                }
+            } else if !had {
+                r.request_focus();
+            }
+            ui.data_mut(|d| d.insert_temp(mem, text.clone()));
+            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if (had && !r.has_focus()) || esc {
+                ui.data_mut(|d| {
+                    d.remove::<String>(mem);
+                    d.remove::<bool>(mem.with("focused"));
+                });
+                *action = Some(Action::Rename(id, (!esc).then_some(text)));
+            }
+            return;
+        }
         let tint = std::iter::successors(Some(id), |i| tree.objects[*i].parent).find_map(|i| theme::hex(tree.objects[i].text(COLOR_PROP)));
         let r = theme::tinted(ui, tint, |ui| crate::icons::row(ui, st, &icon, RichText::new(&label).color(color), selected));
         crate::docs::mark(ui, r.rect, format!("object:{}", n.kind.name()));
@@ -253,6 +318,14 @@ fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTre
         }
         if r.clicked() {
             *action = Some(if ui.input(|i| i.modifiers.command) { Action::Toggle(id) } else { Action::Select(id) });
+        }
+        if r.double_clicked() && !playing && !n.from_instance {
+            *action = Some(Action::StartRename(id));
+        }
+        // Right-clicking something not selected selects it (its menu acts on it, and Properties
+        // shows it).
+        if r.secondary_clicked() && !selected {
+            *action = Some(Action::Select(id));
         }
         if !playing {
             r.dnd_set_drag_payload(id);
@@ -279,6 +352,23 @@ fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTre
                     }
                 }
             });
+            ui.separator();
+            if !n.from_instance && theme::menu_item(ui, "Rename", "F2").clicked() {
+                *action = Some(Action::StartRename(id));
+                ui.close();
+            }
+            if theme::menu_item(ui, "Cut", "Ctrl+X").tip("Copies it (with what's inside) and removes it.").clicked() {
+                *action = Some(Action::Copy(id, true));
+                ui.close();
+            }
+            if theme::menu_item(ui, "Copy", "Ctrl+C").tip("Copies it (with what's inside), to paste here or in another blueprint.").clicked() {
+                *action = Some(Action::Copy(id, false));
+                ui.close();
+            }
+            if ui.add_enabled_ui(!st.clipboard.is_empty(), |ui| theme::menu_item(ui, "Paste", "Ctrl+V")).inner.tip("Puts the copied objects in next to it.").clicked() {
+                *action = Some(Action::Paste(id));
+                ui.close();
+            }
             if theme::menu_item(ui, "Duplicate", "Ctrl+D").tip("Makes a copy of the selected objects next to them.").clicked() {
                 *action = Some(Action::Duplicate(id));
                 ui.close();
@@ -313,7 +403,7 @@ fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTre
                 ui.close();
             }
             ui.separator();
-            if ui.button(RichText::new("Delete  (Del)").color(theme::BAD)).clicked() {
+            if ui.add(egui::Button::new(RichText::new("Delete").color(theme::BAD)).shortcut_text(RichText::new("Del").color(theme::TEXT_DIM))).clicked() {
                 *action = Some(Action::Delete(id));
                 ui.close();
             }
@@ -338,12 +428,44 @@ fn object_row(ui: &mut egui::Ui, st: &EditorState, tree: &gex_core::BlueprintTre
 
 // ---------------------------------------------------------------- inspector
 
+/// A number as people write it: up to 3 decimals, no trailing zeros ("320", "0.5", "1.25").
+pub fn num_text(n: f64) -> String {
+    let s = format!("{:.3}", n);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".into() } else { s.to_string() }
+}
+
+fn fmt(n: f64, _: std::ops::RangeInclusive<usize>) -> String {
+    num_text(n)
+}
+
+/// A built-in property's name as words: border_color → "Border color" (UV, FPS... stay capitals).
+pub fn prop_label(k: &str) -> String {
+    let words: Vec<String> = k
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| match w {
+            "uv" | "fps" | "fov" | "ui" | "hl2" => w.to_ascii_uppercase(),
+            _ => w.to_string(),
+        })
+        .collect();
+    let mut s = words.join(" ");
+    if let Some(c) = s.get(0..1) {
+        if c.chars().all(|c| c.is_ascii_lowercase()) {
+            s.replace_range(0..1, &c.to_ascii_uppercase());
+        }
+    }
+    s
+}
+
 fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: ObjectId) {
     let kind = st.tree.objects[id].kind;
     let mut t = st.tree.objects[id].transform;
     let before = t;
     let drag = |ui: &mut egui::Ui, v: &mut f32, speed: f64, label: &str| {
-        ui.add(egui::DragValue::new(v).speed(speed).prefix(label).max_decimals(3));
+        let d = egui::DragValue::new(v).speed(speed).max_decimals(3).custom_formatter(fmt);
+        // Degrees: "45°"; the rest: "x 12".
+        ui.add(if label == "°" { d.suffix("°") } else { d.prefix(label) });
     };
     egui::Grid::new("xform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
         let flat = kind.is_2d();
@@ -369,7 +491,7 @@ fn transform_ui(ui: &mut egui::Ui, st: &mut EditorState, id: ObjectId) {
         ui.label("Rotation");
         ui.horizontal(|ui| {
             if flat {
-                drag(ui, &mut t.rotation.z, 1.0, "° ");
+                drag(ui, &mut t.rotation.z, 1.0, "°");
             } else {
                 drag(ui, &mut t.rotation.x, 1.0, "x ");
                 drag(ui, &mut t.rotation.y, 1.0, "y ");
@@ -445,7 +567,7 @@ fn prop_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str, info: &gex_core::props
         }
     }
     if let (Some((lo, hi)), Variant::Num(n)) = (info.range, &mut *v) {
-        return ui.add(egui::Slider::new(n, lo..=hi).clamping(egui::SliderClamping::Never).max_decimals(3)).changed();
+        return ui.add(egui::Slider::new(n, lo..=hi).clamping(egui::SliderClamping::Never).max_decimals(3).custom_formatter(fmt)).changed();
     }
     variant_ui(ui, v, key)
 }
@@ -457,7 +579,7 @@ fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
             false
         }
         Variant::Bool(b) => ui.checkbox(b, "").changed(),
-        Variant::Num(n) => ui.add(egui::DragValue::new(n).speed(if key == "zoom" || key == "energy" { 0.01 } else { 0.5 }).max_decimals(3)).changed(),
+        Variant::Num(n) => ui.add(egui::DragValue::new(n).speed(if key == "zoom" || key == "energy" { 0.01 } else { 0.5 }).max_decimals(3).custom_formatter(fmt)).changed(),
         Variant::Text(s) if key == "tiles" || key == "animations" || key == "text" && s.contains('\n') => {
             ui.add(egui::TextEdit::multiline(s).code_editor().desired_rows(3).desired_width(f32::INFINITY)).changed()
         }
@@ -473,7 +595,15 @@ fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
         }
         Variant::Color(c) => {
             let mut c32 = Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8);
-            let r = egui::color_picker::color_edit_button_srgba(ui, &mut c32, egui::color_picker::Alpha::OnlyBlend);
+            let r = ui.horizontal(|ui| {
+                let r = egui::color_picker::color_edit_button_srgba(ui, &mut c32, egui::color_picker::Alpha::OnlyBlend);
+                // An edge, so dark colors show against the panel, and the color as text.
+                ui.painter().rect_stroke(r.rect, 0.0, egui::Stroke::new(1.0, Color32::from_gray(110)), egui::StrokeKind::Outside);
+                let [rr, g, b, a] = c32.to_srgba_unmultiplied();
+                let alpha = if a < 255 { format!(" {}%", (a as f32 / 2.55).round()) } else { String::new() };
+                ui.label(RichText::new(format!("#{:02x}{:02x}{:02x}{}", rr, g, b, alpha)).small().color(theme::TEXT_DIM));
+                r
+            }).inner;
             if r.changed() {
                 let [rr, g, b, a] = c32.to_srgba_unmultiplied();
                 *c = [rr as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0];
@@ -483,8 +613,8 @@ fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
         Variant::Vec2(p) => {
             let mut ch = false;
             ui.horizontal(|ui| {
-                ch |= ui.add(egui::DragValue::new(&mut p[0]).prefix("x ")).changed();
-                ch |= ui.add(egui::DragValue::new(&mut p[1]).prefix("y ")).changed();
+                ch |= ui.add(egui::DragValue::new(&mut p[0]).prefix("x ").custom_formatter(fmt)).changed();
+                ch |= ui.add(egui::DragValue::new(&mut p[1]).prefix("y ").custom_formatter(fmt)).changed();
             });
             ch
         }
@@ -492,7 +622,7 @@ fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
             let mut ch = false;
             ui.horizontal(|ui| {
                 for (k, l) in ["x ", "y ", "z "].iter().enumerate() {
-                    ch |= ui.add(egui::DragValue::new(&mut p[k]).prefix(*l)).changed();
+                    ch |= ui.add(egui::DragValue::new(&mut p[k]).prefix(*l).custom_formatter(fmt)).changed();
                 }
             });
             ch
@@ -506,7 +636,7 @@ fn variant_ui(ui: &mut egui::Ui, v: &mut Variant, key: &str) -> bool {
 
 /// A value as plain text (for read-only views).
 fn show_variant(v: &Variant) -> String {
-    let n = |x: f64| format!("{}", (x * 1000.0).round() / 1000.0);
+    let n = num_text;
     match v {
         Variant::Null => "NULL".into(),
         Variant::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
@@ -540,14 +670,16 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.separator();
         let t = n.transform;
         egui::Grid::new("live").num_columns(2).show(ui, |ui| {
-            ui.label("position");
-            ui.label(format!("{:.2}, {:.2}, {:.2}", t.position.x, t.position.y, t.position.z));
+            let v3 = |v: gex_core::glam::Vec3| format!("{}, {}, {}", num_text(v.x as f64), num_text(v.y as f64), num_text(v.z as f64));
+            ui.label("Position");
+            ui.label(v3(t.position));
             ui.end_row();
-            ui.label("rotation");
-            ui.label(format!("{:.1}, {:.1}, {:.1}", t.rotation.x, t.rotation.y, t.rotation.z));
+            ui.label("Rotation");
+            ui.label(v3(t.rotation));
             ui.end_row();
-            for (k, v) in &n.props {
-                ui.label(k);
+            // The object's own look settings (editor_icon...) aren't shown.
+            for (k, v) in n.props.iter().filter(|(k, _)| !k.starts_with("editor_")) {
+                ui.label(prop_label(k)).tip(format!("In scripts: self.{}", k));
                 ui.label(show_variant(v));
                 ui.end_row();
             }
@@ -636,11 +768,11 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             egui::Grid::new(("props grid", group)).num_columns(2).spacing([8.0, 4.0]).striped(true).show(ui, |ui| {
                 for k in in_group {
                     let info = gex_core::props::info(kind, k);
-                    let label = ui.label(k.as_str());
+                    let label = ui.label(prop_label(k));
                     let row = label.rect;
-                    if !info.doc.is_empty() {
-                        label.tip(info.doc);
-                    }
+                    // The help, and the name scripts use for it.
+                    let script = format!("In scripts: self.{}", k);
+                    label.tip(if info.doc.is_empty() { script } else { format!("{}\n\n{}", info.doc, script) });
                     let mut v = st.tree.objects[id].props[k].clone();
                     if prop_ui(ui, &mut v, k, &info) {
                         st.will_change(&format!("prop {:?} {}", id, k));
@@ -1218,6 +1350,24 @@ fn asset_row(ui: &mut egui::Ui, st: &mut EditorState, path: &str) {
     let label = name.rsplit_once('.').map_or(name, |x| x.0);
     let tint = st.asset_color(path).and_then(theme::hex);
     let r = theme::tinted(ui, tint, |ui| crate::icons::row(ui, st, &icon, RichText::new(label), sel)).tip(name);
+    // Sounds: a play button at the end of the row, to hear one without selecting it.
+    if is_sound(name) {
+        let playing = st.previews.sound_playing(path);
+        let at = egui::Rect::from_center_size(egui::pos2(ui.clip_rect().right() - 14.0, r.rect.center().y), egui::vec2(18.0, 16.0));
+        let b = ui.interact(at, ui.id().with(("play sound", path)), egui::Sense::click());
+        if b.hovered() || playing || r.hovered() {
+            if b.hovered() {
+                ui.painter().rect_filled(at, 0.0, theme::GRAY_LIGHT);
+            }
+            ui.painter().text(at.center(), egui::Align2::CENTER_CENTER, if playing { "■" } else { "▶" }, egui::FontId::proportional(11.0), if playing { theme::ACCENT } else { theme::TEXT_DIM });
+        }
+        if b.tip(if playing { "Stop" } else { "Play it" }).clicked() {
+            st.previews.toggle_sound(&st.vfs, path);
+        }
+        if playing {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
     asset_interact(ui, st, &r, path);
 }
 
@@ -1243,18 +1393,20 @@ fn asset_interact(ui: &egui::Ui, st: &mut EditorState, r: &egui::Response, path:
     }
 }
 
-/// The pictures of a folder, as a grid of thumbnails (their names show when pointed at).
+/// The pictures of a folder, as a grid of thumbnails with their names under them.
 fn asset_tiles(ui: &mut egui::Ui, st: &mut EditorState, paths: &[&str]) {
     if paths.is_empty() {
         return;
     }
     const SIZE: f32 = 44.0;
+    const W: f32 = 58.0;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
         for path in paths {
             let name = path.rsplit('/').next().unwrap_or(path);
-            let (rect, r) = ui.allocate_exact_size(egui::vec2(SIZE, SIZE), egui::Sense::click_and_drag());
-            if ui.is_rect_visible(rect) {
+            let (cell, r) = ui.allocate_exact_size(egui::vec2(W, SIZE + 14.0), egui::Sense::click_and_drag());
+            let rect = egui::Rect::from_min_size(egui::pos2(cell.center().x - SIZE / 2.0, cell.top()), egui::vec2(SIZE, SIZE));
+            if ui.is_rect_visible(cell) {
                 let sel = st.asset_selected.as_deref() == Some(*path);
                 ui.painter().rect_filled(rect, 0.0, if sel { theme::GRAY_LIGHT } else if r.hovered() { theme::GRAY } else { Color32::from_rgb(0x16, 0x16, 0x16) });
                 if let Some(c) = st.asset_color(path).and_then(theme::hex) {
@@ -1264,6 +1416,10 @@ fn asset_tiles(ui: &mut egui::Ui, st: &mut EditorState, paths: &[&str]) {
                 if sel {
                     ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
                 }
+                // The name, shortened to fit (the whole name shows when pointed at).
+                let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+                let short: String = if stem.chars().count() > 9 { format!("{}…", stem.chars().take(8).collect::<String>()) } else { stem.to_string() };
+                ui.painter().with_clip_rect(cell).text(egui::pos2(cell.center().x, rect.bottom() + 1.0), egui::Align2::CENTER_TOP, short, egui::FontId::proportional(10.5), if sel { theme::TEXT } else { theme::TEXT_DIM });
             }
             let r = r.tip(name);
             asset_interact(ui, st, &r, path);
@@ -1382,7 +1538,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             let dir = st.asset_dir.clone();
             let place = if dir == "res://" { "the project's top folder".to_string() } else { dir.trim_start_matches("res://").to_string() };
             let mut made = None;
-            crate::docs::menu(ui, "+Blueprint", |ui| { crate::theme::fade_in(ui);
+            crate::docs::menu(ui, "+ Blueprint", |ui| { crate::theme::fade_in(ui);
                 for (label, k) in [("2D", ObjectKind::Object2D), ("3D", ObjectKind::Object3D), ("UI / menu", ObjectKind::Object)] {
                     if ui.button(label).clicked() {
                         made = st.new_blueprint_file(&dir, k);
@@ -1392,17 +1548,17 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             })
             .response
             .tip(format!("Makes a new blueprint in {}.", place));
-            if ui.button("+Script").tip(format!("Makes a new script in {} and opens it.", place)).clicked() {
+            if ui.button("+ Script").tip(format!("Makes a new script in {} and opens it.", place)).clicked() {
                 made = st.new_script_file(&dir);
             }
-            if ui.button("+Folder").tip(format!("Makes a new folder in {}.", place)).clicked() {
+            if ui.button("+ Folder").tip(format!("Makes a new folder in {}.", place)).clicked() {
                 made = st.new_folder(&dir);
             }
             if let Some(r) = made {
                 let name = r.rsplit('/').next().unwrap_or("").to_string();
                 set_dialog(ui.ctx(), AssetDialog::Rename(r, name));
             }
-            crate::docs::menu(ui, "+", |ui| { crate::theme::fade_in(ui);
+            crate::docs::menu(ui, "More", |ui| { crate::theme::fade_in(ui);
                 #[cfg(windows)]
                 if ui.button("Import files…").tip("Copies files from your computer into the selected folder.").clicked() {
                     if let Some(files) = rfd::FileDialog::new().pick_files() {

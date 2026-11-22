@@ -116,6 +116,7 @@ pub fn apply(ctx: &egui::Context) {
     // Always dark, whatever the system's light/dark setting (Windows in light mode would
     // otherwise switch to egui's light look under ours).
     ctx.set_theme(egui::Theme::Dark);
+    ctx.set_fonts(crate::text::base_fonts());
     let mut v = Visuals::dark();
     // See-through panels over the gradient backdrop.
     v.panel_fill = Color32::TRANSPARENT;
@@ -268,12 +269,14 @@ pub fn tab(ui: &mut egui::Ui, label: &str, active: bool, closeable: bool, dirty:
     let lit = ui.ctx().animate_bool_with_time(r.id, active, 0.12);
     let hover = ui.ctx().animate_bool_with_time(r.id.with("h"), r.hovered(), 0.1);
     let p = ui.painter();
-    let base = mix(Color32::from_rgb(0x17, 0x17, 0x17), Color32::from_rgb(0x20, 0x20, 0x20), hover);
+    // The tab showing is the darker one (it joins the dark page under it); the others are
+    // lighter, and lighter still when pointed at.
+    let base = mix(Color32::from_rgb(0x2c, 0x2c, 0x2c), Color32::from_rgb(0x36, 0x36, 0x36), hover);
     // Wider at the bottom, where it joins the page.
     let slant = 9.0;
     let (top, bottom) = (rect.top() + if active { 0.0 } else { 2.0 }, rect.bottom());
     let shape = vec![Pos2::new(rect.left() - slant / 2.0, bottom), Pos2::new(rect.left() + slant / 2.0, top), Pos2::new(rect.right() - slant / 2.0, top), Pos2::new(rect.right() + slant / 2.0, bottom)];
-    p.add(Shape::convex_polygon(shape.clone(), mix(base, Color32::from_rgb(0x2a, 0x2a, 0x2a), lit), Stroke::NONE));
+    p.add(Shape::convex_polygon(shape.clone(), mix(base, Color32::from_rgb(0x12, 0x12, 0x12), lit), Stroke::NONE));
     p.add(Shape::line(shape, Stroke::new(1.0, Color32::from_rgb(0x34, 0x34, 0x34))));
     p.galley(Pos2::new(rect.left() + 12.0, (top + bottom) / 2.0 - galley.size().y / 2.0), galley, if active { TEXT } else { TEXT_DIM });
     let x = Rect::from_center_size(Pos2::new(rect.right() - 16.0, rect.center().y + 1.0), egui::vec2(16.0, 16.0));
@@ -291,6 +294,29 @@ pub fn tab(ui: &mut egui::Ui, label: &str, active: bool, closeable: bool, dirty:
     }
     let close = over_x && r.clicked();
     TabOut { resp: r, close }
+}
+
+/// A switch between two choices, labelled with the one it's on ("2D" / "3D"): a square track
+/// with a knob that slides over. Gives the response (clicked = flipped).
+pub fn switch(ui: &mut egui::Ui, on: &mut bool, off_label: &str, on_label: &str, enabled: bool) -> egui::Response {
+    let (rect, mut r) = ui.allocate_exact_size(egui::vec2(30.0, 16.0), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
+    if r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    let t = ui.ctx().animate_bool_with_time(r.id, *on, 0.12);
+    let dim = if enabled { 1.0 } else { 0.45 };
+    let p = ui.painter();
+    let track = if r.hovered() && enabled { Color32::from_rgb(0x30, 0x30, 0x30) } else { Color32::from_rgb(0x22, 0x22, 0x22) };
+    p.rect(rect, 0.0, track.gamma_multiply(dim), Stroke::new(1.0, Color32::from_rgb(0x44, 0x44, 0x44)), egui::StrokeKind::Inside);
+    let knob = Rect::from_min_size(Pos2::new(rect.left() + 2.0 + t * (rect.width() - 16.0), rect.top() + 2.0), egui::vec2(12.0, 12.0));
+    p.rect_filled(knob, 0.0, mix(TEXT_DIM, ACCENT, t).gamma_multiply(dim));
+    let label = ui.add(egui::Label::new(egui::RichText::new(if *on { on_label } else { off_label }).strong().color(if enabled { TEXT } else { TEXT_DIM })).sense(if enabled { egui::Sense::click() } else { egui::Sense::hover() }));
+    if label.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    r.union(label)
 }
 
 /// A row of tabs that only switch between pages (no closing): gives the page picked.

@@ -81,6 +81,8 @@ struct SettingsForm {
     /// (action name, keys as "space, w, pad_a").
     actions: Vec<(String, String)>,
     icon: String,
+    /// The settings as they were when the window opened (Cancel puts them back).
+    before: Option<gex_core::project::ProjectConfig>,
 }
 
 impl EditorApp {
@@ -356,6 +358,8 @@ impl EditorApp {
     fn menu(&mut self, ui: &mut egui::Ui) {
         let Some(st) = &mut self.st else { return };
         let mut close = false;
+        // Another project to open instead (File → Open project).
+        let mut switch: Option<std::path::PathBuf> = None;
         let bar_bg = ui.painter().add(egui::Shape::Noop);
         let top = ui.cursor().top();
         theme::window_drag(ui, egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + 24.0));
@@ -391,6 +395,34 @@ impl EditorApp {
                         }
                     }
                 });
+                ui.separator();
+                crate::docs::menu(ui, "Open project", |ui| { crate::theme::fade_in(ui);
+                    let here = st.project.dir.clone();
+                    let recent: Vec<std::path::PathBuf> = state::recent_projects().into_iter().filter(|d| *d != here && d.join(gex_core::project::PROJECT_FILE).is_file()).take(10).collect();
+                    for d in &recent {
+                        let name = Project::peek(d).map(|c| c.name).unwrap_or_else(|_| d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+                        if ui.button(&name).tip(d.to_string_lossy()).clicked() {
+                            switch = Some(d.clone());
+                            ui.close();
+                        }
+                    }
+                    if recent.is_empty() {
+                        ui.label(RichText::new("No other projects yet").color(theme::TEXT_DIM));
+                    }
+                    ui.separator();
+                    #[cfg(windows)]
+                    if ui.button("Choose a folder…").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                            switch = Some(p);
+                        }
+                        ui.close();
+                    }
+                    if ui.button("Start screen (new project, From GitHub…)").clicked() {
+                        st.stop();
+                        close = true;
+                        ui.close();
+                    }
+                });
                 if ui.button("Set as main blueprint").tip("The game starts in this blueprint").clicked() {
                     if let Some(r) = st.blueprint_res.clone() {
                         st.project.config.main_blueprint = r;
@@ -415,7 +447,7 @@ impl EditorApp {
                     st.show_settings = true;
                     ui.close();
                 }
-                if ui.button("Close project").tip("Back to the start screen. Unsaved changes are kept in memory only until then: save first.").clicked() {
+                if ui.button("Close project").tip("Saves what's changed and goes back to the start screen.").clicked() {
                     st.stop();
                     close = true;
                     ui.close();
@@ -436,12 +468,43 @@ impl EditorApp {
                     ui.close();
                 }
                 ui.separator();
-                if theme::menu_item(ui, "Duplicate", "Ctrl+D").tip("Makes a copy of the selected objects next to them.").clicked() {
+                let editing = st.playing.is_none();
+                let any = st.selected.is_some();
+                if ui.add_enabled_ui(editing && any, |ui| theme::menu_item(ui, "Cut", "Ctrl+X")).inner.tip("Copies the selected objects and removes them.").clicked() {
+                    if let Some(t) = st.copy_selected() {
+                        ui.ctx().copy_text(t);
+                        st.delete_selected();
+                    }
+                    ui.close();
+                }
+                if ui.add_enabled_ui(any, |ui| theme::menu_item(ui, "Copy", "Ctrl+C")).inner.tip("Copies the selected objects (with what's inside them), to paste here or in another blueprint.").clicked() {
+                    if let Some(t) = st.copy_selected() {
+                        ui.ctx().copy_text(t);
+                    }
+                    ui.close();
+                }
+                if ui.add_enabled_ui(editing && !st.clipboard.is_empty(), |ui| theme::menu_item(ui, "Paste", "Ctrl+V")).inner.tip("Puts the copied objects in, next to the selection.").clicked() {
+                    let t = st.clipboard.clone();
+                    if st.paste_text(&t) {
+                        st.status = "pasted".into();
+                    }
+                    ui.close();
+                }
+                if ui.add_enabled_ui(editing && any, |ui| theme::menu_item(ui, "Duplicate", "Ctrl+D")).inner.tip("Makes a copy of the selected objects next to them.").clicked() {
                     st.duplicate_selected();
                     ui.close();
                 }
-                if theme::menu_item(ui, "Delete", "Del").tip("Removes the selected objects (and what's inside them) from the blueprint.").clicked() {
+                if ui.add_enabled_ui(editing && any, |ui| theme::menu_item(ui, "Rename", "F2")).inner.tip("Renames the selected object, in the Blueprint panel.").clicked() {
+                    st.renaming = st.selected;
+                    ui.close();
+                }
+                if ui.add_enabled_ui(editing && any, |ui| theme::menu_item(ui, "Delete", "Del")).inner.tip("Removes the selected objects (and what's inside them) from the blueprint.").clicked() {
                     st.delete_selected();
+                    ui.close();
+                }
+                ui.separator();
+                if ui.add_enabled_ui(editing, |ui| theme::menu_item(ui, "Select all", "Ctrl+A")).inner.tip("Selects every object in the blueprint.").clicked() {
+                    st.select_all();
                     ui.close();
                 }
             });
@@ -449,7 +512,7 @@ impl EditorApp {
                 ui.checkbox(&mut self.ws.show_assets, "Assets").tip("Shows or hides the Assets panel.");
                 ui.checkbox(&mut self.ws.show_console, "Console").tip("Shows or hides the Console panel.");
                 ui.separator();
-                if ui.button("Updates…").tip("Whether GEX updates itself, checking now, and going back to the version before").clicked() {
+                if ui.button("Updates…").tip("Whether GEX updates itself, and checking for a new version now").clicked() {
                     self.updater.window = true;
                     ui.close();
                 }
@@ -525,9 +588,27 @@ impl EditorApp {
         let full = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), bar.response.rect.y_range()).expand2(egui::vec2(8.0, 2.0));
         crate::docs::mark(ui, full, "ui:menubar");
         ui.painter().set(bar_bg, theme::header(full, false));
+        if let Some(d) = switch {
+            // What's changed is saved before the other project takes this one's place.
+            if let Some(st) = &mut self.st {
+                st.stop();
+                st.save_all();
+                self.ws.save(&st.project.dir);
+            }
+            self.open_project(&d);
+            return;
+        }
         if close {
+            if let Some(st) = &mut self.st {
+                st.save_all();
+                self.ws.save(&st.project.dir);
+            }
             self.stop_sync();
             self.st = None;
+            // The project's windows go with it.
+            self.collab_panel.open = false;
+            self.github.open = false;
+            self.updater.window = false;
         }
     }
 
@@ -535,7 +616,9 @@ impl EditorApp {
         let Some(st) = &mut self.st else { return };
         let view: Option<egui::Id> = ctx.data(|d| d.get_temp(egui::Id::new("gex viewport id")));
         let focused = ctx.memory(|m| m.focused());
-        let typing = ctx.egui_wants_keyboard_input() && (focused.is_none() || focused != view);
+        // Typing in a text box (a script, a name, a number being typed): the keys are its. A
+        // focused button or list row doesn't count (clicking one focuses it).
+        let typing = ctx.text_edit_focused() && focused != view;
         let (f5, f6, shift, save, undo, redo, dup, del, colon) = ctx.input_mut(|i| {
             (
                 i.key_pressed(egui::Key::F5),
@@ -550,8 +633,11 @@ impl EditorApp {
             )
         });
         let mut find_in_files = false;
-        let (copy, paste, close_blueprint, tool) = ctx.input_mut(|i| {
+        let (copy, cut, all, rename, paste, close_blueprint, tool) = ctx.input_mut(|i| {
             let copy = i.events.iter().any(|e| matches!(e, egui::Event::Copy));
+            let cut = i.events.iter().any(|e| matches!(e, egui::Event::Cut));
+            let all = i.modifiers.command && i.key_pressed(egui::Key::A);
+            let rename = i.key_pressed(egui::Key::F2);
             let paste = i.events.iter().find_map(|e| match e {
                 egui::Event::Paste(t) => Some(t.clone()),
                 _ => None,
@@ -570,7 +656,7 @@ impl EditorApp {
             } else {
                 None
             };
-            (copy, paste, close, tool)
+            (copy, cut, all, rename, paste, close, tool)
         });
         let (f8, f10) = ctx.input(|i| (i.key_pressed(egui::Key::F8), i.key_pressed(egui::Key::F10)));
         if let Some(p) = &mut st.playing {
@@ -633,11 +719,20 @@ impl EditorApp {
             if let Some(t) = tool {
                 st.tool = t;
             }
-            if copy {
-                if let Some(t) = st.copy_text() {
+            if copy || cut {
+                if let Some(t) = st.copy_selected() {
                     ctx.copy_text(t);
-                    st.status = format!("copied {} object(s)", st.selected_roots().len());
+                    if cut {
+                        st.delete_selected();
+                        st.status = "cut".into();
+                    }
                 }
+            }
+            if all {
+                st.select_all();
+            }
+            if rename {
+                st.renaming = st.selected;
             }
             if let Some(t) = paste {
                 if st.paste_text(&t) {
@@ -706,6 +801,7 @@ impl EditorApp {
         let f = &mut self.settings;
         if !f.loaded {
             f.loaded = true;
+            f.before = Some(st.project.config.clone());
             f.name = st.project.config.name.clone();
             f.main_blueprint = st.project.config.main_blueprint.clone();
             f.message.clear();
@@ -725,6 +821,7 @@ impl EditorApp {
             }
         }
         let mut open = true;
+        let mut cancel = false;
         egui::Window::new("Project settings").collapsible(false).open(&mut open).default_width(560.0).default_height(560.0).show(ctx, |ui| {
             theme::fade_in(ui);
             theme::tab_row(ui, &["General", "Display", "Graphics", "Physics", "Input", "Half-Life 2"], &mut f.tab);
@@ -776,13 +873,7 @@ impl EditorApp {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() {
-                        f.message = match st.project.save() {
-                            Ok(()) => "Saved.".into(),
-                            Err(e) => e,
-                        };
-                    }
-                    if ui.button("Reset to defaults").tip("Every setting on this page").clicked() {
+                    if ui.button("Reset to defaults").tip("Every setting on this page (Save keeps it, Cancel takes it back)").clicked() {
                         if display {
                             st.project.config.display = Default::default();
                         } else if graphics {
@@ -817,10 +908,6 @@ impl EditorApp {
                 }
                 ui.end_row();
             });
-            ui.separator();
-            if ui.button("Updates…").tip("Whether GEX updates itself, checking now, and going back to the version before").clicked() {
-                self.updater.window = true;
-            }
             }
             if f.tab == 4 {
             theme::title(ui, "Input actions");
@@ -878,7 +965,17 @@ impl EditorApp {
                 ui.colored_label(theme::WARN, &f.message);
             }
             ui.separator();
-            if ui.button("Save").clicked() {
+            let mut save = false;
+            ui.horizontal(|ui| {
+                save = theme::primary_button(ui, "Save", theme::ACCENT_DIM).tip("Keeps the changes on every page").clicked();
+                if ui.button("Cancel").tip("Puts every setting back as it was when this window opened").clicked() {
+                    if let Some(b) = f.before.clone() {
+                        st.project.config = b;
+                    }
+                    cancel = true;
+                }
+            });
+            if save {
                 st.project.config.name = f.name.clone();
                 st.project.config.main_blueprint = f.main_blueprint.clone();
                 st.project.config.icon = f.icon.trim().to_string();
@@ -919,7 +1016,7 @@ impl EditorApp {
                 }
             }
         });
-        if !open {
+        if !open || cancel {
             st.show_settings = false;
         }
     }

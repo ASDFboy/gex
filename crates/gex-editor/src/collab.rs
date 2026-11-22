@@ -3246,7 +3246,15 @@ pub fn window(ctx: &egui::Context, panel: &mut Panel, mut st: Option<&mut Editor
             ui.add(egui::TextEdit::singleline(&mut panel.code).hint_text("XXXX-XXXX-XXXX-XXXX").desired_width(280.0));
             ui.end_row();
             ui.label("Put it in");
-            ui.add(egui::TextEdit::singleline(&mut panel.folder).desired_width(280.0)).tip("The project is copied into a folder here, named after it.");
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut panel.folder).desired_width(if cfg!(windows) { 206.0 } else { 280.0 })).tip("The project is copied into a folder here, named after it.");
+                #[cfg(windows)]
+                if ui.button("Browse…").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().set_directory(&panel.folder).pick_folder() {
+                        panel.folder = p.to_string_lossy().into_owned();
+                    }
+                }
+            });
             ui.end_row();
         });
         ui.label(RichText::new("Only join people you trust: their scripts run on your computer when you play.").small().color(theme::TEXT_DIM));

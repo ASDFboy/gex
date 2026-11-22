@@ -2,6 +2,19 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.9 (polish):
+- Tabs: the one showing is taller and darker, the others shorter and lighter. The 2D/3D buttons are one switch (blueprints with only 2D things in them stay in 2D).
+- Arrows (→) and other symbols show everywhere instead of empty boxes.
+- Start screen: projects listed by when they were last worked on; new projects can start as a 2D game or a 3D game (a player that moves and jumps), as well as empty or the demo games.
+- Inspector: property names in words ("Border color"; scripts' names in the tooltip), numbers without stray decimals, rotation as "45°", colors with an edge and their hex value. Selected UI objects are outlined. The object list gets more room.
+- Rename objects with F2 or a double-click; Cut, Copy, Paste and Select all in the Edit menu and the right-click menu, with their shortcuts. Shortcuts (Delete, F2, Ctrl+C...) work right after clicking in the object list.
+- File → Open project (recent ones, or a folder); closing or switching projects saves first.
+- Right-clicking an object selects it. The Timeline and Profiler open in different places and stay off the Commands page; windows close with their project.
+- Assets: picture names under their thumbnails, a play button on sounds, "+ Blueprint / + Script / + Folder / More".
+- Project settings: one Save and a Cancel that puts everything back; Updates moved out of it.
+- Work together: a Browse button for where to put the copy (Windows).
+- While playing, the editing tools step aside, and the view says which blueprint the game is in when it has moved on.
+
 New in 0.3.8 (Sync with GitHub, gone over):
 - Works with Work together: while you share a linked project, changes from GitHub wait until what others are typing is saved; a joined copy never syncs on its own.
 - Line endings are kept exactly as GEX writes them (no Windows CRLF conversion), and file names of any kind come through.

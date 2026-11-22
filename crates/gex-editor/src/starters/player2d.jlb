@@ -1,0 +1,27 @@
+>> The player: a kinematic Body2D moved with MOVE, which slides along walls and floors
+>> and gives back TRUE when it ends up standing on something.
+
+speed = 300
+gravity = 1500
+jump = 620
+vy = 0
+on_floor = FALSE
+
+DEF on_physics(dt) {
+	>> move_left, move_right and jump are input actions (File > Project settings > Input).
+	dx = AXIS("left_x")
+	IF KEY_DOWN("move_left") { dx = -1 }
+	IF KEY_DOWN("move_right") { dx = 1 }
+	IF KEY_PRESSED("jump") AND on_floor {
+		GLOBAL vy = 0 - jump
+	}
+	GLOBAL vy = MIN(vy + gravity * dt, 1000)
+	GLOBAL on_floor = MOVE(NULL, dx * speed * dt, vy * dt)
+	IF on_floor AND vy > 0 { GLOBAL vy = 0 }
+	>> Fell off the world: back to the start.
+	IF self.y > 800 {
+		self.x = 200
+		self.y = 560
+		GLOBAL vy = 0
+	}
+}

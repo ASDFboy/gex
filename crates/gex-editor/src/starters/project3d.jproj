@@ -1,0 +1,13 @@
+(
+    name: "My Game",
+    main_blueprint: "res://blueprints/main.jblueprint",
+    window_size: (1280, 720),
+    mounts: [],
+    actions: {
+        "jump": ["space", "pad_a"],
+        "move_left": ["left", "a", "pad_left"],
+        "move_right": ["right", "d", "pad_right"],
+        "move_forward": ["up", "w", "pad_up"],
+        "move_back": ["down", "s", "pad_down"],
+    },
+)

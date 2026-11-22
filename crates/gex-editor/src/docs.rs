@@ -79,8 +79,8 @@ const MENUS: &[(&str, &str)] = &[
     ("Other", "Timers, UI buttons and text boxes, animations and tweens finishing."),
     ("Custom", "Your own events: BROADCAST(\"name\") runs on_name() on every object that has it."),
     ("Attach", "Attaches an existing script to this object as well."),
-    ("+", "Import files, open the project folder, undo the last file change."),
-    ("+Blueprint", "Makes a new blueprint (2D, 3D or a menu) in the selected folder."),
+    ("More", "Import files, open the project folder, undo the last file change."),
+    ("+ Blueprint", "Makes a new blueprint (2D, 3D or a menu) in the selected folder."),
     ("Key pressed", "Runs once when a key goes down."),
     ("Key released", "Runs once when a key comes up."),
 ];
@@ -218,7 +218,7 @@ fn kind_doc(k: ObjectKind) -> &'static str {
 
 const UI: &[(&str, &str, &str)] = &[
     ("editor", "GEX", "Blueprints are trees of objects; scripts attached to objects handle events.\n\nTabs along the top: one tab per open blueprint; scripts open as small windows over its view, wired to their object.\n\nMiddle-click or mouse 4 on any panel, button, object, property, event, file or word in a script to read about it."),
-    ("assets", "Assets", "The project's folders and files, as they are on disk.\n\n- +Blueprint, +Script, +Folder: make one in the selected folder\n- +: import files, open the project folder\n- Double-click: open a blueprint (in a tab) or a script (in the tab showing)\n- Drag onto a folder: move it there (everything using it is updated)\n- Drag into the blueprint view or onto a property: use it\n- Right-click: rename, color, delete, more\n\nUnder the project: the art that comes with GEX and connected game installs. Those are read in place; right-click a built-in file to copy it into the project."),
+    ("assets", "Assets", "The project's folders and files, as they are on disk.\n\n- + Blueprint, + Script, + Folder: make one in the selected folder\n- More: import files, open the project folder\n- Double-click: open a blueprint (in a tab) or a script (in the tab showing)\n- Drag onto a folder: move it there (everything using it is updated)\n- Drag into the blueprint view or onto a property: use it\n- Right-click: rename, color, delete, more\n\nUnder the project: the art that comes with GEX and connected game installs. Those are read in place; right-click a built-in file to copy it into the project."),
     ("folder", "Folder", "A folder in the project. Click to select it (new things from + go here) and open or close it. Drag files or folders onto it to move them in; drag it onto another folder to move it."),
     ("instances", "Blueprint", "The objects of the blueprint, as a tree. A child follows its parent's position and visibility.\n\n- Click: select (Ctrl+click: several)\n- Drag onto another object: make it its child\n- Right-click: add a child, duplicate, color, save as a blueprint, delete\n- + Object: a new object at the top of the blueprint (a collider goes on the selected object)\n- + Instance: places another blueprint here as an instance"),
     ("properties", "Properties", "The selected object's values: its name, where it is (Transform), what its kind has (Properties, Look...), its scripts' $variables, and custom properties scripts read as self.<name>.\n\nDrag a number sideways to change it, or double-click to type. Drag a file from Assets onto a texture, sound or font field. Click the icon by the name to change the object's icon."),

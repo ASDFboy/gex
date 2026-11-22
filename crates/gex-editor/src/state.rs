@@ -79,6 +79,8 @@ pub struct Playing {
     pub buttons: HashSet<String>,
     /// The viewport shows the game's own camera (else the editor camera, to look around).
     pub game_camera: bool,
+    /// The blueprint the game is in now (it may have moved on from the one it started in).
+    pub blueprint: String,
     /// Just started: the view takes the keyboard so the game can be played straight away.
     pub focus_view: bool,
     /// Raw mouse movement since the last frame request.
@@ -163,6 +165,10 @@ pub struct EditorState {
     pub show_settings: bool,
     pub show_export: bool,
     pub status: String,
+    /// What Edit → Copy (or Ctrl+C) copied last, for Edit → Paste.
+    pub clipboard: String,
+    /// The object being renamed in the Blueprint panel (F2, or double-click).
+    pub renaming: Option<ObjectId>,
     /// Breakpoints by script (res:// path) → line numbers.
     pub breakpoints: HashMap<String, std::collections::BTreeSet<usize>>,
     /// Shared with the running game, which checks it as it runs.
@@ -239,6 +245,8 @@ impl EditorState {
             show_settings: false,
             show_export: false,
             status: String::new(),
+            clipboard: String::new(),
+            renaming: None,
             breakpoints: HashMap::new(),
             game_breakpoints: Default::default(),
             preview_particles: HashMap::new(),
@@ -1178,6 +1186,31 @@ impl EditorState {
         self.selection = id.into_iter().collect();
     }
 
+    /// Selects every object in the blueprint (but its root).
+    pub fn select_all(&mut self) {
+        let root = self.tree.root;
+        self.selection = self.tree.walk().into_iter().filter(|i| Some(*i) != root).collect();
+        self.selected = self.selection.first().copied();
+    }
+
+    /// Renames an object (not one inside an instance: those names are its blueprint's).
+    pub fn rename_object(&mut self, id: ObjectId, name: &str) {
+        let name = name.trim();
+        if !self.tree.contains(id) || name.is_empty() || name.contains('/') || self.tree.objects[id].from_instance || self.tree.objects[id].name == name {
+            return;
+        }
+        self.will_change(&format!("name {:?}", id));
+        self.tree.objects[id].name = name.to_string();
+    }
+
+    /// Copies the selected objects (for Ctrl+V / Edit → Paste); gives the text for the clipboard.
+    pub fn copy_selected(&mut self) -> Option<String> {
+        let t = self.copy_text()?;
+        self.clipboard = t.clone();
+        self.status = format!("copied {} object(s)", self.selected_roots().len());
+        Some(t)
+    }
+
     /// Adds or removes an object from the selection (Ctrl+click).
     pub fn toggle_select(&mut self, id: ObjectId) {
         if let Some(i) = self.selection.iter().position(|s| *s == id) {
@@ -1485,6 +1518,7 @@ impl EditorState {
             mouse: [0.0; 2],
             buttons: HashSet::new(),
             game_camera: true,
+            blueprint: String::new(),
             focus_view: true,
             mouse_delta: [0.0; 2],
             stats: Default::default(),
@@ -1515,7 +1549,10 @@ impl EditorState {
         let mut paused_at = None;
         for m in p.handle.poll() {
             match m {
-                FromGame::Frame { list, tree, logs, stats } => {
+                FromGame::Frame { list, tree, blueprint, logs, stats } => {
+                    if let Some(b) = blueprint {
+                        p.blueprint = b;
+                    }
                     p.stats.push_back((p.last_frame.elapsed().as_secs_f32() * 1000.0, stats));
                     p.last_frame = Instant::now();
                     while p.stats.len() > 240 {

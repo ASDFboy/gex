@@ -263,7 +263,10 @@ pub fn show(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, rs: Option<
         if st.playing.is_none() && tab != COMMANDS_TAB {
             script_windows(ui, l, st, &tab, view);
         }
-        tool_windows(ui, l, st, view);
+        // (The Timeline and Profiler belong with a blueprint, not over the Commands page.)
+        if tab != COMMANDS_TAB {
+            tool_windows(ui, l, st, view);
+        }
     });
 }
 
@@ -384,7 +387,7 @@ fn blueprint_tab(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, res: &
         // (Kept from covering the object list when the column gets shorter, as when the
         // console opens.)
         let room = ui.available_height();
-        egui::Panel::bottom("blueprint tab inspector").resizable(true).default_size(room * 0.6).size_range(80.0..=(room - 90.0).max(80.0)).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
+        egui::Panel::bottom("blueprint tab inspector").resizable(true).default_size(room * 0.5).size_range(80.0..=(room - 90.0).max(80.0)).frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..Default::default() })).show(ui, |ui| {
             let id = egui::Id::new("blueprint tab side events");
             let mut page: usize = ui.data(|d| d.get_temp(id).unwrap_or(0));
             theme::tab_row(ui, &["Properties", "Events"], &mut page);
@@ -417,8 +420,17 @@ fn tool_windows(ui: &mut egui::Ui, l: &mut Layout, st: &mut EditorState, view: e
             .title_bar(false)
             .frame(frame)
             .resizable(true)
-            .default_pos(if name == "Sprite" { Pos2::new(view.right() - 740.0, view.top() + 60.0) } else { Pos2::new(view.left() + 20.0, view.bottom() - 300.0) })
-            .default_size(if name == "Sprite" { [720.0, 420.0] } else { [640.0, 260.0] })
+            // Each tool starts in its own place, so two opened together don't sit on each other.
+            .default_pos(match name.as_str() {
+                "Sprite" => Pos2::new(view.right() - 740.0, view.top() + 60.0),
+                "Timeline" => Pos2::new(view.left() + 20.0, view.bottom() - 300.0),
+                _ => Pos2::new(view.right() - 440.0, view.bottom() - 300.0),
+            })
+            .default_size(match name.as_str() {
+                "Sprite" => [720.0, 420.0],
+                "Timeline" => [640.0, 260.0],
+                _ => [420.0, 260.0],
+            })
             .constrain_to(view)
             .show(&ctx, |ui| {
                 ui.horizontal(|ui| {

@@ -185,6 +185,26 @@ impl Previews {
         }
     }
 
+    /// Whether this sound file is being played as a preview.
+    pub fn sound_playing(&mut self, path: &str) -> bool {
+        self.audio.tidy();
+        self.sound.as_ref().is_some_and(|(p, id)| p == path && self.audio.playing(*id))
+    }
+
+    /// Plays a sound file as a preview, or stops it when it's the one playing.
+    pub fn toggle_sound(&mut self, vfs: &gex_assets::Vfs, path: &str) {
+        if self.sound_playing(path) {
+            self.stop_sound();
+            return;
+        }
+        self.stop_sound();
+        if let Ok(id) = self.audio.play(vfs, path, 1.0, 1.0, false) {
+            if id != 0 {
+                self.sound = Some((path.to_string(), id));
+            }
+        }
+    }
+
     pub fn stop_sound(&mut self) {
         if let Some((_, id)) = self.sound.take() {
             self.audio.stop(id);

@@ -33,7 +33,8 @@ pub enum NetStart {
 
 pub enum FromGame {
     /// `tree` (a copy for the editor's inspector) comes about ten times a second.
-    Frame { list: RenderList, tree: Option<BlueprintTree>, logs: Vec<LogLine>, stats: crate::world::FrameStats },
+    /// `blueprint`: the blueprint the game is in (it changes with CHANGE_BLUEPRINT), with `tree`.
+    Frame { list: RenderList, tree: Option<BlueprintTree>, blueprint: Option<String>, logs: Vec<LogLine>, stats: crate::world::FrameStats },
     /// A breakpoint (or a step) stopped the game; it waits for `resume` / `step`.
     Paused(Paused),
     Stopped { logs: Vec<LogLine> },
@@ -271,8 +272,9 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
                 stats.meshes = list.meshes.len();
                 frames += 1;
                 let tree = (frames % 6 == 1).then(|| game.tree().clone());
+                let blueprint = tree.as_ref().map(|_| game.st.borrow().blueprint.clone());
                 let logs = game.take_logs();
-                if tx.send(FromGame::Frame { list, tree, logs, stats }).is_err() || quit {
+                if tx.send(FromGame::Frame { list, tree, blueprint, logs, stats }).is_err() || quit {
                     break;
                 }
             }

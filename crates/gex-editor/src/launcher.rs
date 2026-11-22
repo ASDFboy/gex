@@ -28,7 +28,7 @@ pub struct Launcher {
     name: String,
     /// The folder new projects are made in (each in its own folder inside).
     pub location: String,
-    demo: bool,
+    start: templates::Start,
     #[cfg_attr(windows, allow(dead_code))]
     open_path: String,
     dialog: Option<Dialog>,
@@ -47,7 +47,7 @@ impl Default for Launcher {
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
         // Where the last project was made, or a "GEX Projects" folder.
         let location = std::fs::read_to_string(state::config_dir().join("projects_dir.txt")).ok().map(|s| s.trim().to_string()).filter(|s| Path::new(s).is_dir()).unwrap_or_else(|| home.join("GEX Projects").to_string_lossy().into_owned());
-        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, demo: false, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false, github: false, updates: false }
+        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, start: templates::Start::Starter2D, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false, github: false, updates: false }
     }
 }
 
@@ -79,13 +79,17 @@ fn ago(t: std::time::SystemTime) -> String {
 }
 
 fn load() -> Vec<Entry> {
-    state::recent_projects()
+    let mut v: Vec<Entry> = state::recent_projects()
         .into_iter()
         .map(|dir| {
             let used = [dir.join(".gex").join("layout.ron"), dir.join(PROJECT_FILE)].iter().filter_map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok()).max();
             Entry { name: Project::peek(&dir).map(|c| c.name), dir, used }
         })
-        .collect()
+        .collect();
+    // Last worked on first (the date shown beside each), so the list reads in order; projects
+    // with no date keep their place after the rest.
+    v.sort_by(|a, b| b.used.cmp(&a.used));
+    v
 }
 
 /// A square with the project's first letter, colored by its name.
@@ -109,13 +113,15 @@ impl Launcher {
     fn create(&mut self) -> Option<PathBuf> {
         let dir = self.new_dir();
         let name = self.name.trim().to_string();
-        let made = if self.demo {
-            templates::create_demo(&dir).and_then(|mut p| {
+        use templates::Start;
+        let made = match self.start {
+            Start::Demo => templates::create_demo(&dir).and_then(|mut p| {
                 p.config.name = name;
                 p.save().map(|_| p)
-            })
-        } else {
-            templates::create_project(&dir, &name)
+            }),
+            Start::Starter2D => templates::create_starter(&dir, &name, false),
+            Start::Starter3D => templates::create_starter(&dir, &name, true),
+            Start::Nothing => templates::create_project(&dir, &name),
         };
         match made {
             Ok(p) => {
@@ -281,15 +287,21 @@ impl Launcher {
                         ui.add(egui::Label::new(RichText::new(format!("Folder: {}", dir.display())).small().color(theme::TEXT_DIM)).truncate()).tip(dir.to_string_lossy());
                         ui.add_space(8.0);
                         ui.label(RichText::new("Starts with").small().color(theme::TEXT_DIM));
-                        for (demo, label, what) in [(false, "Nothing", "An empty project."), (true, "Demo games", "Five small games with commented scripts.")] {
-                            let on = self.demo == demo;
+                        use templates::Start;
+                        for (start, label, what) in [
+                            (Start::Starter2D, "2D game", "A player that runs and jumps, ground, a script to change."),
+                            (Start::Starter3D, "3D game", "Ground, a sun, and a player that walks and jumps."),
+                            (Start::Nothing, "Nothing", "An empty project."),
+                            (Start::Demo, "Demo games", "Five small games with commented scripts."),
+                        ] {
+                            let on = self.start == start;
                             let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
                             let fill = if on { theme::alpha(theme::ACCENT_DIM, 60) } else if r.hovered() { Color32::from_rgb(0x2a, 0x2a, 0x2a) } else { Color32::from_rgb(0x1c, 0x1c, 0x1c) };
                             ui.painter().rect(rect, 0.0, fill, egui::Stroke::new(1.0, if on { theme::ACCENT } else { Color32::from_gray(0x38) }), egui::StrokeKind::Inside);
                             ui.painter().text(rect.left_top() + egui::vec2(10.0, 5.0), egui::Align2::LEFT_TOP, label, egui::FontId::proportional(13.5), theme::TEXT);
                             ui.painter().text(rect.left_top() + egui::vec2(10.0, 22.0), egui::Align2::LEFT_TOP, what, egui::FontId::proportional(11.0), theme::TEXT_DIM);
                             if r.clicked() {
-                                self.demo = demo;
+                                self.start = start;
                             }
                         }
                         ui.add_space(10.0);
@@ -326,7 +338,7 @@ impl Launcher {
                         self.join = true;
                     }
                     ui.add_space(18.0);
-                    if ui.button("Updates…").tip("Whether GEX updates itself, checking now, and going back to the version before").clicked() {
+                    if ui.button("Updates…").tip("Whether GEX updates itself, and checking for a new version now").clicked() {
                         self.updates = true;
                     }
                     if !self.error.is_empty() {
