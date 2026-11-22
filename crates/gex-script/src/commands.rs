@@ -25,7 +25,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("PARENT", "(object)", "an object's parent, or NULL"),
     ("NAME_OF", "(object)", "an object's name"),
     ("PATH_OF", "(object)", "an object's full path"),
-    ("SPAWN", "(blueprint, x, y, z, parent)", "adds an instance of a blueprint file; gives its id"),
+    ("SPAWN", "(blueprint, x, y, z, parent, [values])", "adds an instance of a blueprint file; gives its id. A last table like [hp: 5, speed: 300] sets those variables of its scripts (or properties) before on_create"),
     ("DESTROY", "(object)", "removes an object (at the end of the frame); runs on_destroy"),
     ("SEND", "(object, event, inputs...)", "runs on_<event>(inputs...) on one object"),
     ("EMIT", "(event, inputs...)", "runs on_<event>(inputs...) on every object that has it"),
@@ -62,11 +62,14 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("SAVE_DATA", "(name, value)", "keeps a value (a table, number, text...) on disk between runs"),
     ("LOAD_DATA", "(name)", "a value kept with SAVE_DATA, or NULL"),
     ("DELETE_DATA", "(name)", "forgets a value kept with SAVE_DATA"),
-    ("DRAW_RECT", "(x, y, w, h, color, filled)", "draws a rectangle this frame (2D world)"),
+    ("DRAW_RECT", "(x, y, w, h, color, filled, [options])", "draws a rectangle this frame (2D world); options: [layer:, rotation:, blend:]"),
     ("DRAW_LINE", "(x1, y1, x2, y2, color)", "draws a line this frame"),
-    ("DRAW_CIRCLE", "(x, y, radius, color, filled)", "draws a circle this frame"),
-    ("DRAW_TEXT", "(x, y, text, size, color)", "draws text this frame"),
-    ("DRAW_IMAGE", "(file, x, y, w, h)", "draws an image this frame"),
+    ("DRAW_CIRCLE", "(x, y, radius, color, filled, [options])", "draws a circle this frame; options: [layer:, blend:]"),
+    ("DRAW_TEXT", "(x, y, text, size, color, [options])", "draws text this frame (tags like [color=red] work); options: [layer:, font:, align:, valign:, wrap:, outline:, outline_color:, rotation:, scale:]"),
+    ("DRAW_IMAGE", "(file, x, y, w, h, [options])", "draws an image this frame; options as DRAW_SPRITE"),
+    ("DRAW_SPRITE", "(file, x, y, [options])", "draws a picture this frame at its own size: options [frame:, hframes:, vframes:, region: [x, y, w, h], w:, h:, scale:, scale_x:, scale_y:, rotation:, pivot_x:, pivot_y:, color:, alpha:, layer:, blend:, flip_h:, flip_v:, brightness:, hue:, saturation:, invert:, shader:, values: [a, b, c, d], filter:, lit:]"),
+    ("IMAGE_SIZE", "(file)", "a picture's size in pixels: [w:, h:] (NULL if it can't be read)"),
+    ("POINT_ON", "(object, x, y, precise)", "TRUE when a 2D world point is on an object: a Sprite2D's picture (precise: only its visible pixels), a Collider2D's or Body2D's shape, a Label2D's text"),
     ("KEY_DOWN", "(key)", "TRUE while a key is held (mouse buttons: \"mouse_left\", \"mouse_right\", \"mouse_middle\")"),
     ("KEY_PRESSED", "(key)", "TRUE on the frame a key went down"),
     ("KEY_RELEASED", "(key)", "TRUE on the frame a key went up"),
@@ -162,6 +165,19 @@ fn text_arg(name: &str, a: &[Value], i: usize) -> R<String> {
     }
 }
 
+/// SPAWN's last input may be a table of starting values: [hp: 5, speed: 300].
+fn spawn_vars(a: &[Value]) -> (Vec<Value>, Vec<(String, Value)>) {
+    let mut a = a.to_vec();
+    let mut vars = Vec::new();
+    if let Some(Value::Table(t, _)) = a.last() {
+        for (k, v) in t.named.iter() {
+            vars.push((k.to_string(), v.borrow().clone()));
+        }
+        a.pop();
+    }
+    (a, vars)
+}
+
 fn num_arg(a: &[Value], i: usize, default: f64) -> f64 {
     a.get(i).and_then(as_f64).unwrap_or(default)
 }
@@ -192,7 +208,7 @@ fn get_prop(st: &WorldState, id: ObjectId, k: &str) -> Value {
     }
 }
 
-fn set_prop(st: &mut WorldState, id: ObjectId, k: &str, v: &Value) -> R<()> {
+pub(crate) fn set_prop(st: &mut WorldState, id: ObjectId, k: &str, v: &Value) -> R<()> {
     let n = &mut st.tree.objects[id];
     let like = n.props.get(k).cloned();
     let Some(var) = to_variant(v, like.as_ref()) else {
@@ -223,53 +239,97 @@ fn set_prop(st: &mut WorldState, id: ObjectId, k: &str, v: &Value) -> R<()> {
 /// Something a script drew this frame (2D world coordinates).
 #[derive(Clone, Debug)]
 pub enum Draw {
-    Rect { x: f32, y: f32, w: f32, h: f32, color: [f32; 4], filled: bool },
+    Sprite(Box<gex_core::render::Sprite>),
+    Text(Box<gex_core::render::Label>),
     Line { a: [f32; 2], b: [f32; 2], color: [f32; 4] },
-    Circle { x: f32, y: f32, r: f32, color: [f32; 4], filled: bool },
-    Text { x: f32, y: f32, text: String, size: f32, color: [f32; 4] },
-    Image { file: String, x: f32, y: f32, w: f32, h: f32 },
 }
 
-/// Turns DRAW_* commands into sprites, lines and labels on top of the blueprint.
-pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
-    use gex_core::render::{Label, Region, Sprite};
-    let object = ObjectId::default();
-    let sprite = |x: f32, y: f32, w: f32, h: f32, color, texture: &str| Sprite {
-        object,
-        model: glam::Mat4::from_translation(glam::Vec3::new(x, y, 0.0)),
-        size: glam::Vec2::new(w, h),
-        centered: false,
-        color,
-        texture: texture.to_string(),
-        layer: 1000.0,
-        region: Region::Whole,
-        flip: [false; 2],
-        parallax: glam::Vec2::ONE,
-        repeat: [false; 2],
-        ..Default::default()
+/// Draws go on top of the blueprint unless they say otherwise.
+const DRAW_LAYER: f32 = 1000.0;
+
+/// An entry of an options table.
+fn opt(t: Option<&Rc<jlb::value::Table>>, k: &str) -> Option<Value> {
+    t.and_then(|t| t.named.get(k)).map(|s| s.borrow().clone())
+}
+fn opt_num(t: Option<&Rc<jlb::value::Table>>, k: &str, d: f64) -> f64 {
+    opt(t, k).as_ref().and_then(as_f64).unwrap_or(d)
+}
+fn opt_bool(t: Option<&Rc<jlb::value::Table>>, k: &str, d: bool) -> bool {
+    match opt(t, k) {
+        None | Some(Value::Null) => d,
+        Some(Value::Bool(b)) => b,
+        Some(v) => as_f64(&v).is_some_and(|n| n != 0.0),
+    }
+}
+fn opt_text(t: Option<&Rc<jlb::value::Table>>, k: &str) -> String {
+    match opt(t, k) {
+        Some(Value::Text(s)) => s.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// A command's last input, when it's a table of options; the other inputs.
+fn split_opts(a: &[Value]) -> (&[Value], Option<Rc<jlb::value::Table>>) {
+    match a.last() {
+        Some(Value::Table(t, _)) => (&a[..a.len() - 1], Some(t.clone())),
+        _ => (a, None),
+    }
+}
+
+/// A 2D transform: at (x, y), turned by `rotation` degrees, scaled.
+fn place(x: f32, y: f32, rotation: f32, sx: f32, sy: f32) -> glam::Mat4 {
+    glam::Mat4::from_scale_rotation_translation(glam::Vec3::new(sx, sy, 1.0), glam::Quat::from_rotation_z(rotation.to_radians()), glam::Vec3::new(x, y, 0.0))
+}
+
+/// The look options every drawn picture takes: layer, blend, effects, shader, filter, lit.
+fn look(s: &mut gex_core::render::Sprite, o: Option<&Rc<jlb::value::Table>>) {
+    s.layer = opt_num(o, "layer", DRAW_LAYER as f64) as f32;
+    s.blend = gex_core::render::Blend::from_name(&opt_text(o, "blend"));
+    let inv = opt(o, "invert").map(|v| match v { Value::Bool(b) => b as u8 as f64, v => as_f64(&v).unwrap_or(0.0) }).unwrap_or(0.0);
+    s.effects = [
+        opt_num(o, "brightness", 0.0) as f32,
+        (opt_num(o, "hue", 0.0) / 360.0) as f32,
+        (1.0 - opt_num(o, "saturation", 1.0)).clamp(-4.0, 1.0) as f32,
+        inv.clamp(0.0, 1.0) as f32,
+    ];
+    s.shader = opt_text(o, "shader");
+    if let Some(Value::Table(v, _)) = opt(o, "values") {
+        for (i, it) in v.items.iter().take(4).enumerate() {
+            s.values[i] = as_f64(&it.borrow()).unwrap_or(0.0) as f32;
+        }
+    }
+    s.pixel = match opt_text(o, "filter").as_str() {
+        "pixel" => Some(true),
+        "smooth" => Some(false),
+        _ => None,
     };
+    s.lit = opt_bool(o, "lit", true);
+    let a = opt_num(o, "alpha", 1.0) as f32;
+    s.color[3] *= a;
+}
+
+/// Adds DRAW_* commands' sprites, lines and labels to the blueprint's, in layer order.
+pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
+    let (mut sprites, mut labels) = (false, false);
     for d in draws {
         match d {
-            Draw::Rect { x, y, w, h, color, filled: true } => list.sprites.push(sprite(*x, *y, *w, *h, *color, "")),
-            Draw::Rect { x, y, w, h, color, filled: false } => {
-                let p = [[*x, *y], [x + w, *y], [x + w, y + h], [*x, y + h]];
-                for k in 0..4 {
-                    list.lines_2d.push((p[k], p[(k + 1) % 4], *color));
-                }
+            Draw::Sprite(s) => {
+                list.sprites.push((**s).clone());
+                sprites = true;
+            }
+            Draw::Text(l) => {
+                list.labels.push((**l).clone());
+                labels = true;
             }
             Draw::Line { a, b, color } => list.lines_2d.push((*a, *b, *color)),
-            Draw::Circle { x, y, r, color, filled: true } => list.sprites.push(sprite(x - r, y - r, r * 2.0, r * 2.0, *color, "@circle")),
-            Draw::Circle { x, y, r, color, filled: false } => {
-                let n = 32;
-                for k in 0..n {
-                    let a0 = k as f32 / n as f32 * std::f32::consts::TAU;
-                    let a1 = (k + 1) as f32 / n as f32 * std::f32::consts::TAU;
-                    list.lines_2d.push(([x + r * a0.cos(), y + r * a0.sin()], [x + r * a1.cos(), y + r * a1.sin()], *color));
-                }
-            }
-            Draw::Text { x, y, text, size, color } => list.labels.push(Label { object, pos: glam::Vec2::new(*x, *y), text: text.clone(), size: *size, color: *color, layer: 1000.0, font: String::new() }),
-            Draw::Image { file, x, y, w, h } => list.sprites.push(sprite(*x, *y, *w, *h, [1.0; 4], file)),
         }
+    }
+    // (Stable: the same layer keeps the order things were made / drawn in.)
+    if sprites {
+        list.sprites.sort_by(|a, b| a.layer.total_cmp(&b.layer));
+    }
+    if labels {
+        list.labels.sort_by(|a, b| a.layer.total_cmp(&b.layer));
     }
 }
 
@@ -391,7 +451,9 @@ impl Host for EngineHost {
                 Ok(Value::text(&st.tree.path_of(id)))
             }
             "SPAWN" => {
-                let res = text_arg(name, &a, 0)?;
+                let (a, vars) = spawn_vars(&a);
+                let a = &a[..];
+                let res = text_arg(name, a, 0)?;
                 let parent = match a.get(4) {
                     None | Some(Value::Null) => st.tree.root,
                     v => Some(target(st, v)?),
@@ -402,7 +464,7 @@ impl Host for EngineHost {
                 t.position.x = num_arg(&a, 1, t.position.x as f64) as f32;
                 t.position.y = num_arg(&a, 2, t.position.y as f64) as f32;
                 t.position.z = num_arg(&a, 3, t.position.z as f64) as f32;
-                st.queue.push_back(Pending::Created(id));
+                st.queue.push_back(Pending::Created(id, vars));
                 Ok(id_value(id))
             }
             "DESTROY" => {
@@ -771,19 +833,128 @@ impl Host for EngineHost {
                 let local = st.tree.global_matrix(id).inverse().transform_point3(glam::Vec3::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, 0.0));
                 Ok(jlb::embed::named_table(vec![("col", num((local.x / tw).floor() as f64)), ("row", num((local.y / th).floor() as f64))]))
             }
-            "DRAW_RECT" | "DRAW_CIRCLE" | "DRAW_LINE" | "DRAW_TEXT" | "DRAW_IMAGE" => {
-                let n = |i| num_arg(&a, i, 0.0) as f32;
-                let d = match name {
-                    "DRAW_RECT" => Draw::Rect { x: n(0), y: n(1), w: n(2), h: n(3), color: color_arg(a.get(4)), filled: truthy(a.get(5), true) },
-                    "DRAW_CIRCLE" => Draw::Circle { x: n(0), y: n(1), r: n(2), color: color_arg(a.get(3)), filled: truthy(a.get(4), true) },
-                    "DRAW_LINE" => Draw::Line { a: [n(0), n(1)], b: [n(2), n(3)], color: color_arg(a.get(4)) },
-                    "DRAW_TEXT" => Draw::Text { x: n(0), y: n(1), text: a.get(2).map(display).unwrap_or_default(), size: num_arg(&a, 3, 16.0) as f32, color: color_arg(a.get(4)) },
-                    _ => Draw::Image { file: text_arg(name, &a, 0)?, x: n(1), y: n(2), w: num_arg(&a, 3, 64.0) as f32, h: num_arg(&a, 4, 64.0) as f32 },
+            "DRAW_RECT" | "DRAW_CIRCLE" | "DRAW_LINE" | "DRAW_TEXT" | "DRAW_IMAGE" | "DRAW_SPRITE" => {
+                use gex_core::render::{Label, Region, Sprite};
+                let (a, o) = split_opts(&a);
+                let o = o.as_ref();
+                let n = |i| num_arg(a, i, 0.0) as f32;
+                let rot = opt_num(o, "rotation", 0.0) as f32;
+                let sc = opt_num(o, "scale", 1.0);
+                let (sx, sy) = (opt_num(o, "scale_x", sc) as f32, opt_num(o, "scale_y", sc) as f32);
+                let mut out: Vec<Draw> = Vec::new();
+                let shape = |x: f32, y: f32, w: f32, h: f32, pivot: glam::Vec2, color: [f32; 4], tex: &str| {
+                    let mut s = Sprite { model: place(x, y, rot, sx, sy), size: glam::Vec2::new(w, h), pivot, color, texture: tex.to_string(), ..Default::default() };
+                    look(&mut s, o);
+                    s
                 };
+                match name {
+                    "DRAW_RECT" => {
+                        let (x, y, w, h, color) = (n(0), n(1), n(2), n(3), color_arg(a.get(4)));
+                        if truthy(a.get(5), true) {
+                            out.push(Draw::Sprite(Box::new(shape(x, y, w, h, glam::Vec2::ZERO, color, ""))));
+                        } else {
+                            let m = place(x, y, rot, sx, sy);
+                            let p = [[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]].map(|q: [f32; 2]| {
+                                let v = m.transform_point3(glam::Vec3::new(q[0], q[1], 0.0));
+                                [v.x, v.y]
+                            });
+                            for k in 0..4 {
+                                out.push(Draw::Line { a: p[k], b: p[(k + 1) % 4], color });
+                            }
+                        }
+                    }
+                    "DRAW_CIRCLE" => {
+                        let (x, y, r, color) = (n(0), n(1), n(2), color_arg(a.get(3)));
+                        if truthy(a.get(4), true) {
+                            out.push(Draw::Sprite(Box::new(shape(x, y, r * 2.0, r * 2.0, glam::Vec2::splat(0.5), color, "@circle"))));
+                        } else {
+                            let k = 32;
+                            for i in 0..k {
+                                let a0 = i as f32 / k as f32 * std::f32::consts::TAU;
+                                let a1 = (i + 1) as f32 / k as f32 * std::f32::consts::TAU;
+                                out.push(Draw::Line { a: [x + r * a0.cos(), y + r * a0.sin()], b: [x + r * a1.cos(), y + r * a1.sin()], color });
+                            }
+                        }
+                    }
+                    "DRAW_LINE" => out.push(Draw::Line { a: [n(0), n(1)], b: [n(2), n(3)], color: color_arg(a.get(4)) }),
+                    "DRAW_TEXT" => {
+                        let mut color = color_arg(a.get(4));
+                        color[3] *= opt_num(o, "alpha", 1.0) as f32;
+                        let anchor = glam::Vec2::new(
+                            match opt_text(o, "align").as_str() { "center" | "middle" => 0.5, "right" => 1.0, _ => 0.0 },
+                            match opt_text(o, "valign").as_str() { "center" | "middle" => 0.5, "bottom" => 1.0, _ => 0.0 },
+                        );
+                        out.push(Draw::Text(Box::new(Label {
+                            object: ObjectId::default(),
+                            pos: glam::Vec2::new(n(0), n(1)),
+                            model: place(n(0), n(1), rot, sx, sy),
+                            text: a.get(2).map(display).unwrap_or_default(),
+                            size: num_arg(a, 3, 16.0) as f32,
+                            color,
+                            layer: opt_num(o, "layer", DRAW_LAYER as f64) as f32,
+                            font: opt_text(o, "font"),
+                            anchor,
+                            wrap: opt_num(o, "wrap", 0.0) as f32,
+                            outline: opt_num(o, "outline", 0.0) as f32,
+                            outline_color: opt(o, "outline_color").map(|c| color_arg(Some(&c))).unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                        })));
+                    }
+                    _ => {
+                        let file = text_arg(name, a, 0)?;
+                        let (x, y) = (n(1), n(2));
+                        let (hf, vf) = (opt_num(o, "hframes", 1.0).max(1.0) as u32, opt_num(o, "vframes", 1.0).max(1.0) as u32);
+                        let region = match opt(o, "region") {
+                            Some(Value::Table(r, _)) => {
+                                let g = |i: usize, k: &str| r.items.get(i).map(|s| s.borrow().clone()).or_else(|| r.named.get(k).map(|s| s.borrow().clone())).as_ref().and_then(as_f64).unwrap_or(0.0) as f32;
+                                Region::Rect { x: g(0, "x"), y: g(1, "y"), w: g(2, "w"), h: g(3, "h") }
+                            }
+                            _ if hf * vf > 1 => Region::Frame { h: hf, v: vf, frame: opt_num(o, "frame", 0.0).max(0.0) as u32 },
+                            _ => Region::Whole,
+                        };
+                        // Its own size (of one frame / the region) unless given.
+                        let (w, h) = if name == "DRAW_IMAGE" {
+                            (num_arg(a, 3, 64.0) as f32, num_arg(a, 4, 64.0) as f32)
+                        } else {
+                            let own = match region {
+                                Region::Rect { w, h, .. } => Some([w, h]),
+                                _ => {
+                                    let vfs = &st.vfs;
+                                    st.images.size(vfs, &file).map(|[w, h]| [w as f32 / hf as f32, h as f32 / vf as f32])
+                                }
+                            };
+                            let own = own.unwrap_or([64.0, 64.0]);
+                            (opt_num(o, "w", own[0] as f64) as f32, opt_num(o, "h", own[1] as f64) as f32)
+                        };
+                        let pivot = glam::Vec2::new(opt_num(o, "pivot_x", 0.0) as f32, opt_num(o, "pivot_y", 0.0) as f32);
+                        let color = opt(o, "color").map(|c| color_arg(Some(&c))).unwrap_or([1.0; 4]);
+                        let mut s = shape(x, y, w, h, pivot, color, &file);
+                        s.region = region;
+                        s.flip = [opt_bool(o, "flip_h", false), opt_bool(o, "flip_v", false)];
+                        out.push(Draw::Sprite(Box::new(s)));
+                    }
+                }
                 if st.draws.len() < 100_000 {
-                    st.draws.push(d);
+                    st.draws.extend(out);
                 }
                 Ok(Value::Null)
+            }
+            "IMAGE_SIZE" => {
+                let file = text_arg(name, &a, 0)?;
+                let vfs = &st.vfs;
+                Ok(match st.images.size(vfs, &file) {
+                    Some([w, h]) => {
+                        let mut t = jlb::value::Table::new();
+                        t.named.insert(Rc::from("w"), jlb::value::new_slot(num(w as f64)));
+                        t.named.insert(Rc::from("h"), jlb::value::new_slot(num(h as f64)));
+                        Value::new_table(t)
+                    }
+                    None => Value::Null,
+                })
+            }
+            "POINT_ON" => {
+                let id = target(st, a.first())?;
+                let p = glam::Vec2::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32);
+                Ok(Value::Bool(crate::hit::point_on(st, id, p, truthy(a.get(3), false))))
             }
             "FIND_PATH" => {
                 let id = target(st, a.first())?;
@@ -965,7 +1136,9 @@ impl Host for EngineHost {
                 Ok(Value::Null)
             }
             "NET_SPAWN" => {
-                let res = text_arg(name, &a, 0)?;
+                let (a, vars) = spawn_vars(&a);
+                let a = &a[..];
+                let res = text_arg(name, a, 0)?;
                 let parent = match a.get(4) {
                     None | Some(Value::Null) => st.tree.root,
                     v => Some(target(st, v)?),
@@ -977,7 +1150,7 @@ impl Host for EngineHost {
                 t.position.y = num_arg(&a, 2, t.position.y as f64) as f32;
                 t.position.z = num_arg(&a, 3, t.position.z as f64) as f32;
                 crate::net::spawned(st, id, &res);
-                st.queue.push_back(Pending::Created(id));
+                st.queue.push_back(Pending::Created(id, vars));
                 Ok(id_value(id))
             }
             "NET_SYNC" => {

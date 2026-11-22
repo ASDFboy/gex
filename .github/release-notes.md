@@ -2,6 +2,15 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.4.1 (what remaking a Scratch game and a GameMaker game needed):
+- Label2D text is drawn in layer order with sprites (under or between them), turns and scales with its object, and has align, valign, wrap_width and an outline.
+- Sprite2D: pivot_x / pivot_y (the point it sits at and turns around), color effects (brightness, hue, saturation, invert) and custom sprite shaders (a .wgsl `fn sprite(...)`, with value_1–value_4 from scripts); GameMaker shaders port line for line.
+- DRAW_SPRITE(file, x, y, [options]): GameMaker's draw_sprite_ext and more (frames, regions, scale, rotation, pivot, tint, alpha, layer, blend, effects, shaders). Every DRAW_ command takes an options table, including layer.
+- Mouse events on 2D objects: on_mouse_enter, on_mouse_leave, on_clicked, on_click_held, on_click_released (mouse_precise counts only visible pixels); POINT_ON and IMAGE_SIZE.
+- SPAWN takes starting values: SPAWN(file, x, y, [hp: 5]) sets the new object's variables before its on_create.
+- GLOBAL variables last across CHANGE_BLUEPRINT, as the docs always said; `LOCAL d @= GLOBAL.save` works; events written in an IMPORTed file run.
+- Particles2D: animated textures (sprite sheets, over each particle's life or at a rate, from a random frame), a starting angle (start_rotation), facing the way they fly, three colors, acceleration, damping, gravity direction, wiggle, a spawn rectangle, random size and lifetime, non-square particles.
+
 New in 0.4.0 (GitHub for the whole of GEX):
 - GEX settings (Settings on the start screen, File → GEX settings in a project): sign in to GitHub once, for every project; and the update settings, which used to be in the View menu.
 - New projects can be kept on GitHub: tick "Keep it on GitHub" (on by default once signed in; changeable in GEX settings). An existing project: Project settings → GitHub. A project kept on GitHub stays linked and saves to and loads from it by itself whenever it's open.

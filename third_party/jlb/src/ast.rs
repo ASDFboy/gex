@@ -52,6 +52,8 @@ pub enum StmtKind {
     Expr(Expr),
     Assign(Expr, &'static str, Expr),
     Local(Rc<str>, Option<Expr>),
+    /// LOCAL name @= value: a local that is another name for value's place.
+    LocalRef(Rc<str>, Expr),
     Const(Rc<str>, Expr),
     /// GLOBAL before an assignment, FUNC or CONST: it's for the file's outside name.
     Global(Box<StmtKind>),

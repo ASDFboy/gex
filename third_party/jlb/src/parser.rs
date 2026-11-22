@@ -273,6 +273,11 @@ impl Parser {
                         self.advance();
                     }
                     let name = self.expect_name("a variable name after LOCAL")?;
+                    if ty.is_none() && self.is_op("@=") {
+                        self.advance();
+                        let e = self.expr()?;
+                        return Ok(Stmt { kind: StmtKind::LocalRef(name, e), line });
+                    }
                     let v = if self.is_op("=") {
                         self.advance();
                         Some(self.expr()?)

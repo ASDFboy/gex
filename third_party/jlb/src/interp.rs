@@ -1160,6 +1160,11 @@ impl Interp {
                 self.frame_mut().scopes[0].insert(name.clone(), new_slot(v));
                 Ok(Flow::Normal)
             }
+            StmtKind::LocalRef(name, e) => {
+                let s = self.share_slot(e)?;
+                self.frame_mut().scopes[0].insert(name.clone(), s);
+                Ok(Flow::Normal)
+            }
             StmtKind::If(branches, otherwise) => {
                 for (c, b) in branches {
                     let v = self.eval(c)?;

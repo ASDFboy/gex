@@ -352,30 +352,101 @@ struct SpriteOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // brightness (added), hue shift (turns), toward grey, inverted
+    @location(2) fx: vec4<f32>,
+    // a custom sprite shader's four values
+    @location(3) values: vec4<f32>,
+    // where the pixel is in the 2D world
+    @location(4) world: vec2<f32>,
 };
 
 @vertex
 fn vs_sprite(v: SpriteIn, i: InstanceIn) -> SpriteOut {
     let model = mat4x4<f32>(i.m0, i.m1, i.m2, i.m3);
     var o: SpriteOut;
-    o.clip = g.view_proj_2d * model * vec4<f32>(v.pos, 0.0, 1.0);
+    let w = model * vec4<f32>(v.pos, 0.0, 1.0);
+    o.clip = g.view_proj_2d * w;
     o.uv = mix(i.uv.xy, i.uv.zw, v.uv);
     o.color = i.color;
+    o.fx = i.mat;
+    o.values = i.extra0;
+    o.world = w.xy;
     return o;
+}
+
+// Screen colors (sRGB) back to linear light.
+fn decode(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow(max((c + 0.055) / 1.055, vec3<f32>(0.0)), vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
+    let k = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.bg, k.wz), vec4<f32>(c.gb, k.xy), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.xyw, c.r), vec4<f32>(c.r, p.yzx), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1.0e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}
+
+fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
+    let k = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(c.xxx + k.xyz) * 6.0 - k.www);
+    return c.z * mix(k.xxx, clamp(p - k.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
+}
+
+// A sprite's color effects, on its screen (sRGB) color.
+fn sprite_fx(c0: vec3<f32>, fx: vec4<f32>) -> vec3<f32> {
+    var c = c0;
+    if (fx.y != 0.0) {
+        var h = rgb_to_hsv(c);
+        h.x = fract(h.x + fx.y);
+        c = hsv_to_rgb(h);
+    }
+    if (fx.z != 0.0) {
+        let l = dot(c, vec3<f32>(0.299, 0.587, 0.114));
+        c = mix(c, vec3<f32>(l), fx.z);
+    }
+    c = c + vec3<f32>(fx.x);
+    c = mix(c, vec3<f32>(1.0) - c, fx.w);
+    return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// The texture times the color, with the effects: in screen (sRGB) color.
+fn sprite_base(o: SpriteOut) -> vec4<f32> {
+    let t = textureSample(tex, samp, o.uv) * o.color;
+    var c = encode(t);
+    if (any(o.fx != vec4<f32>(0.0))) {
+        c = vec4<f32>(sprite_fx(c.rgb, o.fx), c.a);
+    }
+    return c;
+}
+
+// A custom sprite shader can read the texture anywhere with this (screen colors).
+fn sprite_texture(uv: vec2<f32>) -> vec4<f32> {
+    return encode(textureSample(tex, samp, uv));
 }
 
 @fragment
 fn fs_sprite(o: SpriteOut) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, samp, o.uv) * o.color;
+    if (all(o.fx == vec4<f32>(0.0))) {
+        let c = textureSample(tex, samp, o.uv) * o.color;
+        if (c.a < 0.004) {
+            discard;
+        }
+        return encode(c);
+    }
+    let c = sprite_base(o);
     if (c.a < 0.004) {
         discard;
     }
-    return encode(c);
+    return c;
 }
 
 @fragment
 fn fs_sprite_mul(o: SpriteOut) -> @location(0) vec4<f32> {
-    let c = encode(textureSample(tex, samp, o.uv) * o.color);
+    let c = sprite_base(o);
     return vec4<f32>(c.rgb * c.a, c.a);
 }
 

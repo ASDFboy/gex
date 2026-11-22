@@ -1,0 +1,500 @@
+//! Label2D text drawn as pictures, so text sits in layer order with sprites (a label can be
+//! under a sprite, or between two). Each label's text is turned into a picture once (and
+//! again only when its text, size, font or tag colors change).
+//!
+//! The same tags as the editor's game text: `[color=#ff8800]..[/color]` (or a name),
+//! `[size=24]..[/size]`, `[i]..[/i]`, `[u]..[/u]`, `[s]..[/s]`, `[bg=#000000]..[/bg]`.
+//! Anything else in square brackets is shown as written.
+
+use std::collections::HashMap;
+
+use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont};
+
+/// One run of text with one look.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub text: String,
+    /// None: the label's own color.
+    pub color: Option<[u8; 4]>,
+    pub bg: Option<[u8; 4]>,
+    /// Size in game pixels ([size=..]); None: the label's size.
+    pub size: Option<f32>,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+}
+
+pub fn parse_color(s: &str) -> Option<[u8; 4]> {
+    let t = s.trim().to_ascii_lowercase();
+    let named = match t.as_str() {
+        "white" => Some((255, 255, 255)),
+        "black" => Some((0, 0, 0)),
+        "red" => Some((230, 51, 51)),
+        "green" => Some((77, 204, 77)),
+        "blue" => Some((64, 115, 242)),
+        "yellow" => Some((242, 217, 51)),
+        "orange" => Some((242, 140, 38)),
+        "purple" => Some((153, 77, 217)),
+        "gray" | "grey" => Some((128, 128, 128)),
+        _ => None,
+    };
+    if let Some((r, g, b)) = named {
+        return Some([r, g, b, 255]);
+    }
+    let h = t.trim_start_matches('#');
+    let p = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
+    match h.len() {
+        6 => Some([p(0)?, p(2)?, p(4)?, 255]),
+        8 => Some([p(0)?, p(2)?, p(4)?, p(6)?]),
+        _ => None,
+    }
+}
+
+/// Text with tags → runs of text.
+pub fn parse(text: &str) -> Vec<Span> {
+    let plain = Span { text: String::new(), color: None, bg: None, size: None, italic: false, underline: false, strike: false };
+    let mut out: Vec<Span> = Vec::new();
+    let mut stack: Vec<(String, Span)> = Vec::new();
+    let mut cur = plain;
+    let mut rest = text;
+    let add = |s: &Span, t: &str, out: &mut Vec<Span>| {
+        if t.is_empty() {
+            return;
+        }
+        match out.last_mut() {
+            Some(l) if Span { text: String::new(), ..l.clone() } == Span { text: String::new(), ..s.clone() } => l.text.push_str(t),
+            _ => out.push(Span { text: t.to_string(), ..s.clone() }),
+        }
+    };
+    while !rest.is_empty() {
+        let Some(open) = rest.find('[') else {
+            add(&cur, rest, &mut out);
+            break;
+        };
+        let Some(close) = rest[open..].find(']').map(|c| open + c) else {
+            add(&cur, rest, &mut out);
+            break;
+        };
+        let tag = &rest[open + 1..close];
+        let (name, arg) = tag.split_once('=').map(|(a, b)| (a.trim(), Some(b.trim()))).unwrap_or((tag.trim(), None));
+        let lname = name.to_ascii_lowercase();
+        let mut handled = true;
+        let mut next = cur.clone();
+        if let Some(end) = lname.strip_prefix('/') {
+            match stack.iter().rposition(|(t, _)| t == end) {
+                Some(i) => {
+                    next = stack[i].1.clone();
+                    stack.truncate(i);
+                }
+                None => handled = false,
+            }
+        } else {
+            match (lname.as_str(), arg) {
+                ("color", Some(c)) => match parse_color(c) {
+                    Some(c) => next.color = Some(c),
+                    None => handled = false,
+                },
+                ("bg", Some(c)) => match parse_color(c) {
+                    Some(c) => next.bg = Some(c),
+                    None => handled = false,
+                },
+                ("size", Some(n)) => match n.parse::<f32>() {
+                    Ok(n) => next.size = Some(n.max(1.0)),
+                    Err(_) => handled = false,
+                },
+                ("i", None) => next.italic = true,
+                ("u", None) => next.underline = true,
+                ("s", None) => next.strike = true,
+                _ => handled = false,
+            }
+            if handled {
+                stack.push((lname.clone(), cur.clone()));
+            }
+        }
+        if handled {
+            add(&cur, &rest[..open], &mut out);
+            cur = next;
+        } else {
+            add(&cur, &rest[..=close], &mut out);
+        }
+        rest = &rest[close + 1..];
+    }
+    out
+}
+
+/// Fonts: egui's default ones (always there), and the project's font files as they're asked for.
+pub struct Fonts {
+    main: FontArc,
+    fallbacks: Vec<FontArc>,
+    files: HashMap<String, Option<FontArc>>,
+}
+
+impl Default for Fonts {
+    fn default() -> Self {
+        let f = |b: &'static [u8]| FontArc::try_from_slice(b).expect("built-in font");
+        Fonts {
+            main: f(epaint_default_fonts::UBUNTU_LIGHT),
+            fallbacks: vec![f(epaint_default_fonts::HACK_REGULAR), f(epaint_default_fonts::NOTO_EMOJI_REGULAR), f(epaint_default_fonts::EMOJI_ICON)],
+            files: HashMap::new(),
+        }
+    }
+}
+
+impl Fonts {
+    /// The font for a file path ("" = the default), loading it the first time.
+    pub fn get(&mut self, vfs: &gex_assets::Vfs, path: &str, problems: &mut Vec<String>) -> FontArc {
+        if path.is_empty() {
+            return self.main.clone();
+        }
+        if !self.files.contains_key(path) {
+            let f = match vfs.read(path) {
+                Ok(b) => match FontArc::try_from_vec(b) {
+                    Ok(f) => Some(f),
+                    Err(e) => {
+                        problems.push(format!("font {}: {}", path, e));
+                        None
+                    }
+                },
+                Err(e) => {
+                    problems.push(format!("font {}: {}", path, e));
+                    None
+                }
+            };
+            self.files.insert(path.to_string(), f);
+        }
+        self.files[path].clone().unwrap_or_else(|| self.main.clone())
+    }
+
+    /// The font that has a character (and a number telling which it is): the chosen one,
+    /// else the default, else the first fallback that does.
+    fn for_char(&self, first: &FontArc, c: char) -> (usize, FontArc) {
+        if first.glyph_id(c).0 != 0 || c.is_whitespace() {
+            return (0, first.clone());
+        }
+        if self.main.glyph_id(c).0 != 0 {
+            return (1, self.main.clone());
+        }
+        match self.fallbacks.iter().position(|f| f.glyph_id(c).0 != 0) {
+            Some(i) => (2 + i, self.fallbacks[i].clone()),
+            None => (0, first.clone()),
+        }
+    }
+}
+
+/// Text as a picture.
+pub struct TextImage {
+    pub w: u32,
+    pub h: u32,
+    /// Straight (not premultiplied) RGBA, sRGB colors.
+    pub rgba: Vec<u8>,
+    /// The picture's pixels per game pixel.
+    pub scale: f32,
+    /// Empty space around the text, in the picture's pixels (for the outline).
+    pub pad: f32,
+}
+
+/// How to draw a piece of text.
+pub struct Style<'a> {
+    pub font: &'a str,
+    /// Size in game pixels.
+    pub size: f32,
+    /// Picture pixels per game pixel (zoom × resolution): text stays sharp when zoomed.
+    pub scale: f32,
+    /// The color where no tag sets one.
+    pub color: [u8; 4],
+    /// Lines line up: 0 left, 0.5 centered, 1 right.
+    pub align: f32,
+    /// Wrap lines longer than this (game pixels); 0 = no wrapping.
+    pub wrap: f32,
+    /// Outline width (game pixels) and color.
+    pub outline: f32,
+    pub outline_color: [u8; 4],
+}
+
+struct Placed {
+    font: FontArc,
+    glyph: Glyph,
+    color: [u8; 4],
+    italic: bool,
+    baseline: f32,
+}
+
+/// A rectangle to fill: x0, y0, x1, y1, color.
+type Fill = (f32, f32, f32, f32, [u8; 4]);
+
+/// Splits runs into lines: at line breaks, and (with `wrap`) at the last space that keeps a
+/// line within `wrap` picture pixels.
+fn lines_of(fonts: &Fonts, base: &FontArc, spans: &[Span], base_px: f32, scale: f32, wrap: f32) -> Vec<Vec<(Span, String)>> {
+    let mut rows: Vec<Vec<(Span, String)>> = vec![Vec::new()];
+    let mut x = 0.0f32;
+    let width = |s: &Span, t: &str| -> f32 {
+        let px = s.size.map_or(base_px, |n| (n * scale).max(1.0));
+        t.chars().map(|c| fonts.for_char(base, c).1.as_scaled(PxScale::from(px)).h_advance(fonts.for_char(base, c).1.glyph_id(c))).sum()
+    };
+    for s in spans {
+        for (i, part) in s.text.split('\n').enumerate() {
+            if i > 0 {
+                rows.push(Vec::new());
+                x = 0.0;
+            }
+            if wrap <= 0.0 {
+                if !part.is_empty() {
+                    rows.last_mut().unwrap().push((s.clone(), part.to_string()));
+                }
+                continue;
+            }
+            // Words, each with the spaces after it.
+            let mut words: Vec<&str> = Vec::new();
+            let mut st = 0;
+            for (j, c) in part.char_indices() {
+                if c == ' ' && part[j + 1..].chars().next().is_some_and(|n| n != ' ') {
+                    words.push(&part[st..j + 1]);
+                    st = j + 1;
+                }
+            }
+            if st < part.len() {
+                words.push(&part[st..]);
+            }
+            for w in words {
+                let ww = width(s, w.trim_end());
+                if x > 0.0 && x + ww > wrap {
+                    rows.push(Vec::new());
+                    x = 0.0;
+                }
+                let row = rows.last_mut().unwrap();
+                match row.last_mut() {
+                    Some((ls, lt)) if *ls == *s => lt.push_str(w),
+                    _ => row.push((s.clone(), w.to_string())),
+                }
+                x += width(s, w);
+            }
+        }
+    }
+    // Spaces at the end of a wrapped line don't count.
+    if wrap > 0.0 {
+        for r in &mut rows {
+            if let Some((_, t)) = r.last_mut() {
+                let k = t.trim_end_matches(' ').len();
+                t.truncate(k);
+            }
+        }
+    }
+    rows
+}
+
+/// Draws text into a picture.
+pub fn rasterize(fonts: &mut Fonts, vfs: &gex_assets::Vfs, text: &str, style: &Style, problems: &mut Vec<String>) -> TextImage {
+    let base = fonts.get(vfs, style.font, problems);
+    let scale = style.scale;
+    let spans = parse(text);
+    let outline = (style.outline * scale).max(0.0);
+    let pad = 2.0 + outline.ceil();
+    let base_px = (style.size * scale).max(1.0);
+    let rows = lines_of(fonts, &base, &spans, base_px, scale, style.wrap * scale);
+    let mut placed: Vec<Placed> = Vec::new();
+    let mut bgs: Vec<Fill> = Vec::new();
+    let mut lines: Vec<Fill> = Vec::new();
+    // Each line's width and where its glyphs and rectangles start (to line them up after).
+    let mut row_info: Vec<(f32, usize, usize, usize)> = Vec::new();
+    let mut y = pad;
+    let mut width = 0.0f32;
+    for row in &rows {
+        let (p0, b0, l0) = (placed.len(), bgs.len(), lines.len());
+        let m = base.as_scaled(PxScale::from(base_px));
+        let (mut asc, mut desc, mut gap) = (m.ascent(), m.descent(), m.line_gap());
+        for (s, _) in row {
+            let px = s.size.map_or(base_px, |n| (n * scale).max(1.0));
+            let sf = base.as_scaled(PxScale::from(px));
+            asc = asc.max(sf.ascent());
+            desc = desc.min(sf.descent());
+            gap = gap.max(sf.line_gap());
+        }
+        let baseline = y + asc;
+        let mut x = pad;
+        for (s, part) in row {
+            let px = s.size.map_or(base_px, |n| (n * scale).max(1.0));
+            let col = s.color.unwrap_or(style.color);
+            let x0 = x;
+            let mut last: Option<(ab_glyph::GlyphId, usize)> = None;
+            for c in part.chars() {
+                let (key, f) = fonts.for_char(&base, c);
+                let sf = f.as_scaled(PxScale::from(px));
+                let id = sf.glyph_id(c);
+                if let Some((prev, k)) = last {
+                    if k == key {
+                        x += sf.kern(prev, id);
+                    }
+                }
+                let g = id.with_scale_and_position(PxScale::from(px), ab_glyph::point(x, baseline));
+                x += sf.h_advance(id);
+                last = Some((id, key));
+                placed.push(Placed { font: f, glyph: g, color: col, italic: s.italic, baseline });
+            }
+            let thick = (px / 14.0).max(1.0);
+            let sf = base.as_scaled(PxScale::from(px));
+            if let Some(b) = s.bg {
+                bgs.push((x0, baseline - sf.ascent(), x, baseline - sf.descent(), b));
+            }
+            if s.underline {
+                lines.push((x0, baseline + thick * 1.5, x, baseline + thick * 2.5, col));
+            }
+            if s.strike {
+                let m = baseline - sf.ascent() * 0.32;
+                lines.push((x0, m - thick / 2.0, x, m + thick / 2.0, col));
+            }
+            if s.italic {
+                x += px * 0.08;
+            }
+        }
+        row_info.push((x - pad, p0, b0, l0));
+        width = width.max(x - pad);
+        y = baseline - desc + gap;
+    }
+    // Line each line up within the widest.
+    if style.align > 0.0 {
+        let ends: Vec<(usize, usize, usize)> = row_info.iter().skip(1).map(|r| (r.1, r.2, r.3)).chain(std::iter::once((placed.len(), bgs.len(), lines.len()))).collect();
+        for (r, end) in row_info.iter().zip(ends) {
+            let dx = (width - r.0) * style.align;
+            if dx == 0.0 {
+                continue;
+            }
+            for p in &mut placed[r.1..end.0] {
+                p.glyph.position.x += dx;
+            }
+            for f in bgs[r.2..end.1].iter_mut().chain(lines[r.3..end.2].iter_mut()) {
+                f.0 += dx;
+                f.2 += dx;
+            }
+        }
+    }
+    let w = (width + pad * 2.0).ceil().max(1.0) as u32;
+    let h = (y + pad).ceil().max(1.0) as u32;
+    let mut img = vec![0u8; (w * h * 4) as usize];
+    for r in bgs {
+        fill(&mut img, w, h, r);
+    }
+    for p in placed {
+        let Some(o) = p.font.outline_glyph(p.glyph) else { continue };
+        let bb = o.px_bounds();
+        o.draw(|gx, gy, cov| {
+            let py = bb.min.y + gy as f32;
+            // Slanted for [i]: higher pixels lean right.
+            let lean = if p.italic { (p.baseline - py) * 0.2 } else { 0.0 };
+            over(&mut img, w, h, (bb.min.x + gx as f32 + lean).round() as i32, py as i32, p.color, cov);
+        });
+    }
+    for r in lines {
+        fill(&mut img, w, h, r);
+    }
+    if outline > 0.0 {
+        img = outlined(&img, w, h, outline, style.outline_color);
+    }
+    TextImage { w, h, rgba: img, scale, pad }
+}
+
+/// Paints a color over a pixel, `cov` of the way (straight alpha).
+fn over(img: &mut [u8], w: u32, h: u32, px: i32, py: i32, c: [u8; 4], cov: f32) {
+    if px < 0 || py < 0 || px >= w as i32 || py >= h as i32 || cov <= 0.0 {
+        return;
+    }
+    let i = ((py as u32 * w + px as u32) * 4) as usize;
+    let sa = c[3] as f32 / 255.0 * cov.min(1.0);
+    let da = img[i + 3] as f32 / 255.0;
+    let oa = sa + da * (1.0 - sa);
+    if oa <= 0.0 {
+        return;
+    }
+    for k in 0..3 {
+        let v = (c[k] as f32 * sa + img[i + k] as f32 * da * (1.0 - sa)) / oa;
+        img[i + k] = v.round().clamp(0.0, 255.0) as u8;
+    }
+    img[i + 3] = (oa * 255.0).round() as u8;
+}
+
+fn fill(img: &mut [u8], w: u32, h: u32, r: Fill) {
+    for py in r.1.floor() as i32..r.3.ceil() as i32 {
+        for px in r.0.floor() as i32..r.2.ceil() as i32 {
+            over(img, w, h, px, py, r.4, 1.0);
+        }
+    }
+}
+
+/// The text with an outline of `r` pixels behind it.
+fn outlined(img: &[u8], w: u32, h: u32, r: f32, color: [u8; 4]) -> Vec<u8> {
+    let ri = r.ceil() as i32;
+    let (wi, hi) = (w as i32, h as i32);
+    let alpha = |x: i32, y: i32| -> f32 {
+        if x < 0 || y < 0 || x >= wi || y >= hi {
+            0.0
+        } else {
+            img[((y * wi + x) * 4 + 3) as usize] as f32 / 255.0
+        }
+    };
+    // The offsets within the circle (with a soft edge), once.
+    let mut ring: Vec<(i32, i32, f32)> = Vec::new();
+    for dy in -ri..=ri {
+        for dx in -ri..=ri {
+            let d = ((dx * dx + dy * dy) as f32).sqrt();
+            let k = (r + 0.5 - d).clamp(0.0, 1.0);
+            if k > 0.0 {
+                ring.push((dx, dy, k));
+            }
+        }
+    }
+    let mut out = vec![0u8; img.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut a = 0.0f32;
+            for &(dx, dy, k) in &ring {
+                a = a.max(alpha(x + dx, y + dy) * k);
+                if a >= 1.0 {
+                    break;
+                }
+            }
+            if a > 0.0 {
+                over(&mut out, w, h, x, y, color, a);
+            }
+            let i = ((y * wi + x) * 4) as usize;
+            let c = [img[i], img[i + 1], img[i + 2], 255];
+            let cov = img[i + 3] as f32 / 255.0;
+            over(&mut out, w, h, x, y, c, cov);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tags() {
+        let s = parse("a [color=red]b [i]c[/i][/color] [nope] d");
+        let t: String = s.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(t, "a b c [nope] d");
+        assert_eq!(s[0].color, None);
+        assert_eq!(s[1].color, Some([230, 51, 51, 255]));
+        assert!(s[2].italic && s[2].color.is_some());
+        assert!(!s.last().unwrap().italic && s.last().unwrap().color.is_none());
+    }
+
+    #[test]
+    fn draws_text() {
+        let vfs = gex_assets::Vfs::new(std::path::Path::new("."), &Default::default());
+        let mut fonts = Fonts::default();
+        let mut problems = Vec::new();
+        let st = |scale: f32, wrap: f32, outline: f32| Style { font: "", size: 16.0, scale, color: [255; 4], align: 0.5, wrap, outline, outline_color: [0, 0, 0, 255] };
+        let a = rasterize(&mut fonts, &vfs, "Hi", &st(1.0, 0.0, 0.0), &mut problems);
+        let b = rasterize(&mut fonts, &vfs, "Hi there\nsecond line", &st(2.0, 0.0, 0.0), &mut problems);
+        assert!(a.w > 10 && a.h >= 16 && a.rgba.chunks(4).any(|p| p[3] > 200));
+        assert!(b.w > a.w * 3 && b.h > a.h * 3);
+        // Wrapping makes it taller and narrower.
+        let c = rasterize(&mut fonts, &vfs, "one two three four five six", &st(1.0, 60.0, 0.0), &mut problems);
+        let d = rasterize(&mut fonts, &vfs, "one two three four five six", &st(1.0, 0.0, 0.0), &mut problems);
+        assert!(c.h > d.h * 2 && c.w < d.w / 2, "{}x{} vs {}x{}", c.w, c.h, d.w, d.h);
+        // An outline adds dark pixels around the white ones.
+        let e = rasterize(&mut fonts, &vfs, "Hi", &st(1.0, 0.0, 2.0), &mut problems);
+        assert!(e.rgba.chunks(4).any(|p| p[3] > 200 && p[0] < 30) && e.rgba.chunks(4).any(|p| p[0] > 220 && p[3] > 200));
+        assert!(problems.is_empty());
+    }
+}

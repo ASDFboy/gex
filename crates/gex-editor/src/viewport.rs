@@ -126,18 +126,8 @@ pub fn paint_list(ui: &egui::Ui, rs: &egui_wgpu::RenderState, renderer: &mut Opt
     let painter = ui.painter_at(rect);
     painter.image(tex_id.unwrap(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
     // Drawn pixels → points on screen.
-    let (kx, ky) = (rect.width() / cams.size[0].max(1) as f32, rect.height() / cams.size[1].max(1) as f32);
-    // Text: drawn by egui on top, at the label's 2D position.
-    if cams.draw_2d {
-        for l in &list.labels {
-            let s = cams.world_2d_to_screen(l.pos);
-            let zoom = (cams.view_proj_2d.x_axis.x * cams.size[0] as f32 / 2.0).abs();
-            let c = l.color;
-            let color = Color32::from_rgba_unmultiplied((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, (c[3] * 255.0) as u8);
-            let fam = crate::text::family(ui.ctx(), vfs, &l.font);
-            crate::text::paint(&painter, rect.min + egui::vec2(s.x * kx, s.y * ky), egui::Align2::LEFT_TOP, &l.text, egui::FontId::new((l.size * zoom * ky).max(4.0), fam), color, zoom * ky);
-        }
-    }
+    let ky = rect.height() / cams.size[1].max(1) as f32;
+    // (2D labels are drawn by the renderer, in layer order with the sprites.)
     // Label3D: text at a 3D point, facing the screen.
     if cams.draw_3d {
         for l in &list.labels_3d {
@@ -187,8 +177,8 @@ fn grid_3d(o: &mut Overlay) {
     }
 }
 
-fn corners(m: Mat4, size: Vec2, centered: bool) -> [[f32; 2]; 4] {
-    let off = if centered { -size / 2.0 } else { Vec2::ZERO };
+fn corners(m: Mat4, size: Vec2, pivot: Vec2) -> [[f32; 2]; 4] {
+    let off = -pivot * size;
     [Vec2::ZERO, Vec2::new(size.x, 0.0), size, Vec2::new(0.0, size.y)].map(|p| {
         let w = m.transform_point3((p + off).extend(0.0));
         [w.x, w.y]
@@ -265,7 +255,7 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
             o.quad2([[0.0, 0.0], [w as f32, 0.0], [w as f32, h as f32], [0.0, h as f32]], [0.6, 0.6, 0.9, 0.5]);
         }
         for c in list.colliders.iter().filter(|_| st.show_colliders) {
-            o.quad2(corners(c.model, c.size, true), [0.3, 0.9, 0.5, 0.8]);
+            o.quad2(corners(c.model, c.size, Vec2::splat(0.5)), [0.3, 0.9, 0.5, 0.8]);
         }
 
         for sel in st.selection.iter().copied().chain(st.selected).filter(|s| tree.contains(*s)) {
@@ -278,8 +268,8 @@ fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overla
             match n.kind {
                 ObjectKind::Sprite2D | ObjectKind::Collider2D => {
                     let size = Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
-                    let centered = n.kind == ObjectKind::Collider2D || n.prop("centered").is_none_or(|v| v.as_bool());
-                    o.quad2(corners(m, size + Vec2::splat(2.0), centered), SEL);
+                    let pivot = gex_core::render::pivot_of(n);
+                    o.quad2(corners(m * Mat4::from_translation(((Vec2::splat(0.5) - pivot) * size).extend(0.0)), size + Vec2::splat(2.0), Vec2::splat(0.5)), SEL);
                 }
                 _ => {
                     let p = m.w_axis.truncate().truncate();
@@ -320,13 +310,16 @@ fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Op
     }
     // Labels, then sprites from the top layer down, then point-like objects.
     for l in list.labels.iter().rev() {
-        let size = Vec2::new(l.text.chars().count() as f32 * l.size * 0.55, l.size * 1.2);
-        if w.x >= l.pos.x && w.y >= l.pos.y && w.x <= l.pos.x + size.x && w.y <= l.pos.y + size.y {
+        let lines = l.text.lines().count().max(1) as f32;
+        let longest = l.text.lines().map(|t| t.chars().count()).max().unwrap_or(0) as f32;
+        let size = Vec2::new(longest * l.size * 0.55, lines * l.size * 1.2);
+        let local = l.model.inverse().transform_point3(w.extend(0.0)).truncate() + l.anchor * size;
+        if local.x >= 0.0 && local.y >= 0.0 && local.x <= size.x && local.y <= size.y {
             return Some(l.object);
         }
     }
     for s in list.sprites.iter().rev() {
-        let off = if s.centered { -s.size / 2.0 } else { Vec2::ZERO };
+        let off = -s.pivot * s.size;
         let local = s.model.inverse().transform_point3(w.extend(0.0)).truncate() - off;
         if local.x >= 0.0 && local.y >= 0.0 && local.x <= s.size.x && local.y <= s.size.y {
             return Some(s.object);
@@ -724,7 +717,7 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         // Colliders stay visible while playing (unless switched off), as a debugging aid.
         let mut o = Overlay::default();
         for c in list.colliders.iter().filter(|_| st.show_colliders) {
-            o.quad2(corners(c.model, c.size, true), [0.3, 0.9, 0.5, 0.5]);
+            o.quad2(corners(c.model, c.size, Vec2::splat(0.5)), [0.3, 0.9, 0.5, 0.5]);
         }
         o
     } else {

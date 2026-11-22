@@ -40,6 +40,24 @@ pub fn load_image(vfs: &Vfs, path: &str) -> Result<Rgba, String> {
     Ok(Rgba { width: img.width(), height: img.height(), pixels: img.into_raw() })
 }
 
+/// An image's size in pixels, reading as little of the file as it can.
+pub fn image_size(vfs: &Vfs, path: &str) -> Result<[u32; 2], String> {
+    let lower = path.to_ascii_lowercase();
+    if !(lower.ends_with(".vmt") || lower.ends_with(".vtf") || lower.ends_with(".svg") || lower.ends_with(".psd")) {
+        let bytes = vfs.read(path)?;
+        let fmt = image::ImageFormat::from_path(crate::model::map_base(path)).ok();
+        let mut r = image::ImageReader::new(std::io::Cursor::new(&bytes));
+        match fmt {
+            Some(f) => r.set_format(f),
+            None => r = r.with_guessed_format().map_err(|e| e.to_string())?,
+        }
+        if let Ok((w, h)) = r.into_dimensions() {
+            return Ok([w, h]);
+        }
+    }
+    load_image(vfs, path).map(|i| [i.width, i.height])
+}
+
 pub fn is_image(path: &str) -> bool {
     crate::formats::is_image(path)
 }

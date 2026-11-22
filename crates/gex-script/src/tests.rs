@@ -1424,3 +1424,92 @@ fn timers_checkboxes_sliders_and_layout() {
     let list = g.render_list();
     assert_eq!(list.ui.iter().find(|u| u.object == id(&g, "R/List/L1")).unwrap().top_left(gex_core::glam::Vec2::ZERO).y, -20.0, "no further than the end");
 }
+
+fn errors_of(g: &mut Game) -> Vec<String> {
+    g.take_logs().into_iter().filter(|l| l.kind == LogKind::Error).map(|l| l.text).collect()
+}
+
+fn prop_of(g: &Game, name: &str, k: &str) -> Option<Variant> {
+    let t = g.tree();
+    let id = t.find_named(name)?;
+    t.objects[id].props.get(k).cloned()
+}
+
+/// GLOBALs last across CHANGE_BLUEPRINT (functions don't), events can come from an IMPORTed
+/// file, SPAWN hands starting values over before on_create, and LOCAL x @= GLOBAL.y.
+#[test]
+fn globals_imports_and_spawn_values() {
+    let a = r#"(root: (name: "A", kind: Some(Object2D), scripts: ["res://a.jlb"]))"#;
+    let b = r#"(root: (name: "B", kind: Some(Object2D), scripts: ["res://b.jlb"]))"#;
+    let kid = r#"(root: (name: "Kid", kind: Some(Sprite2D), scripts: ["res://kid.jlb"]))"#;
+    let a_jlb = "GLOBAL data = [n: 0, list: [[1, 2], [3, 4]]]\nGLOBAL steps = 0\nGLOBAL DEF helper() { RETURN 1 }\nDEF on_create() {\n    LOCAL d @= GLOBAL.data\n    d.n = 5\n    GLOBAL.data.list[2][1] = 9\n    SPAWN(\"res://kid.jblueprint\", 3, 4, [hp: 7, label: \"hi\"])\n}\n";
+    let events = "DEF on_step(dt) {\n    GLOBAL.steps += 1\n}\n";
+    let kid_jlb = "IMPORT \"events.jlb\"\nhp = 1\nseen = 0\nDEF on_create() {\n    self.seen_hp = hp\n}\n";
+    let b_jlb = "DEF on_create() {\n    self.n = GLOBAL.data.n\n    self.nine = GLOBAL.data.list[2][1]\n    self.steps = GLOBAL.steps\n}\n";
+    let p = project("carry", &[("a.jblueprint", a), ("b.jblueprint", b), ("kid.jblueprint", kid), ("a.jlb", a_jlb), ("events.jlb", events), ("kid.jlb", kid_jlb), ("b.jlb", b_jlb)]);
+    let mut g = Game::from_blueprint(p.clone(), "res://a.jblueprint", None).unwrap();
+    for _ in 0..3 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    }
+    assert!(errors_of(&mut g).is_empty());
+    assert_eq!(prop_of(&g, "Kid", "seen_hp"), Some(Variant::Num(7.0)));
+    assert_eq!(prop_of(&g, "Kid", "label"), Some(Variant::Text("hi".into())));
+    let tree = gex_core::blueprint::load(&p.read_text("res://b.jblueprint").unwrap(), &|x: &str| p.read_text(x)).unwrap();
+    let mut next = Game::new(p, tree, None);
+    next.carry_over(&mut g);
+    next.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    let errors = errors_of(&mut next);
+    assert!(errors.is_empty(), "{:#?}", errors);
+    assert_eq!(prop_of(&next, "B", "n"), Some(Variant::Num(5.0)));
+    assert_eq!(prop_of(&next, "B", "nine"), Some(Variant::Num(9.0)));
+    assert_eq!(prop_of(&next, "B", "steps"), Some(Variant::Num(3.0)));
+}
+
+/// The mouse on 2D objects: enter, click, leave; precise hits skip see-through pixels.
+#[test]
+fn mouse_events_on_objects() {
+    let blueprint = r#"(root: (name: "Root", kind: Some(Object2D), children: [
+        (name: "Card", kind: Some(Sprite2D), transform: Some((position: (100.0, 100.0, 0.0))), scripts: ["res://card.jlb"], props: {"width": Num(40.0), "height": Num(20.0), "pivot_x": Num(0.0), "pivot_y": Num(0.0)}),
+    ]))"#;
+    let card = "DEF on_mouse_enter() {\n    self.entered = TRUE\n}\nDEF on_mouse_leave() {\n    self.left = TRUE\n}\nDEF on_clicked(b) {\n    self.clicked = b\n}\nDEF on_step(dt) {\n    self.on = POINT_ON(NULL, 139, 119, FALSE)\n    self.off = POINT_ON(NULL, 99, 99, FALSE)\n}\n";
+    let p = project("mouse", &[("main.jblueprint", blueprint), ("card.jlb", card)]);
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    let left: HashSet<String> = ["left".to_string()].into();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    // Its pivot is its top-left corner: (100, 100) to (140, 120).
+    g.frame(1.0 / 60.0, HashSet::new(), [130.0, 115.0], HashSet::new());
+    assert_eq!(prop_of(&g, "Card", "entered"), Some(Variant::Bool(true)));
+    g.frame(1.0 / 60.0, HashSet::new(), [130.0, 115.0], left);
+    assert_eq!(prop_of(&g, "Card", "clicked"), Some(Variant::Text("left".into())));
+    assert_eq!(prop_of(&g, "Card", "left"), None);
+    g.frame(1.0 / 60.0, HashSet::new(), [90.0, 115.0], HashSet::new());
+    assert_eq!(prop_of(&g, "Card", "left"), Some(Variant::Bool(true)));
+    assert_eq!(prop_of(&g, "Card", "on"), Some(Variant::Bool(true)));
+    assert_eq!(prop_of(&g, "Card", "off"), Some(Variant::Bool(false)));
+    assert!(errors_of(&mut g).is_empty());
+}
+
+/// DRAW_SPRITE goes in among the blueprint's sprites by layer, with its options.
+#[test]
+fn drawn_sprites_take_layers_and_options() {
+    let blueprint = r#"(root: (name: "Root", kind: Some(Object2D), scripts: ["res://d.jlb"], children: [
+        (name: "Low", kind: Some(Sprite2D), props: {"layer": Num(1.0)}),
+        (name: "High", kind: Some(Sprite2D), props: {"layer": Num(10.0)}),
+    ]))"#;
+    let d = "DEF on_draw() {\n    DRAW_SPRITE(\"res://none.png\", 5, 6, [w: 10, h: 20, layer: 5, hframes: 4, frame: 2, hue: 90, pivot_x: 0.5, shader: \"res://s.wgsl\", values: [1, 2]])\n    DRAW_TEXT(0, 0, \"hi\", 16, \"#ffffff\", [layer: 2, align: \"center\"])\n}\n";
+    let p = project("draws", &[("main.jblueprint", blueprint), ("d.jlb", d)]);
+    let mut g = Game::from_blueprint(p, "res://main.jblueprint", None).unwrap();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    assert!(errors_of(&mut g).is_empty());
+    let list = g.render_list();
+    let layers: Vec<f32> = list.sprites.iter().map(|s| s.layer).collect();
+    assert_eq!(layers, vec![1.0, 5.0, 10.0]);
+    let s = &list.sprites[1];
+    assert_eq!(s.size, glam::Vec2::new(10.0, 20.0));
+    assert_eq!(s.region, gex_core::render::Region::Frame { h: 4, v: 1, frame: 2 });
+    assert_eq!(s.effects[1], 0.25);
+    assert_eq!(s.shader, "res://s.wgsl");
+    assert_eq!(s.values, [1.0, 2.0, 0.0, 0.0]);
+    assert_eq!(s.pivot, glam::Vec2::new(0.5, 0.0));
+    assert!(list.labels.iter().any(|l| l.layer == 2.0 && l.anchor.x == 0.5));
+}

@@ -18,6 +18,12 @@ struct Part {
     life: f32,
     rot: f32,
     spin: f32,
+    /// Its size, as a share of the emitter's (size_random).
+    scale: f32,
+    /// The frame it started on (animated textures).
+    frame: f32,
+    /// Where in its weave it is (direction_wiggle), 0 to 1.
+    phase: f32,
 }
 
 #[derive(Debug, Default)]
@@ -57,11 +63,20 @@ impl Emitter {
         let life = object.num("lifetime", 1.0).max(0.01) as f32;
         let area = object.num("area", 0.0) as f32;
         let spin = object.num("spin", 0.0) as f32;
+        let rot0 = object.num("start_rotation", 0.0) as f32;
+        let rot_rand = object.num("start_rotation_random", 360.0) as f32;
+        let size_rand = object.num("size_random", 0.0).clamp(0.0, 1.0) as f32;
+        let frames = frame_count(object) as f32;
+        let life_rand = object.num("lifetime_random", 0.2).clamp(0.0, 1.0) as f32;
+        let (aw, ah) = (object.num("area_width", 0.0) as f32, object.num("area_height", 0.0) as f32);
+        let frame_rand = object.prop("frame_random").is_some_and(|v| v.as_bool());
         let n = n.min(MAX_PER_EMITTER.saturating_sub(self.parts.len()));
         for _ in 0..n {
             let a = (dir + (self.rand() * 2.0 - 1.0) * spread).to_radians();
             let s = speed * (1.0 - speed_rand * self.rand());
-            let off = if area > 0.0 {
+            let off = if aw > 0.0 || ah > 0.0 {
+                Vec2::new((self.rand() - 0.5) * aw, (self.rand() - 0.5) * ah)
+            } else if area > 0.0 {
                 let t = self.rand() * std::f32::consts::TAU;
                 Vec2::new(t.cos(), t.sin()) * area * self.rand().sqrt()
             } else {
@@ -71,9 +86,12 @@ impl Emitter {
                 pos: Vec2::new(pos.x, pos.y) + off,
                 vel: Vec2::new(a.cos(), a.sin()) * s,
                 age: 0.0,
-                life: life * (0.8 + 0.4 * self.rand()),
-                rot: self.rand() * 360.0,
+                life: (life * (1.0 + life_rand * (self.rand() * 2.0 - 1.0))).max(0.01),
+                rot: rot0 + self.rand() * rot_rand,
                 spin: spin * (self.rand() * 2.0 - 1.0),
+                scale: 1.0 - size_rand * self.rand(),
+                frame: if frame_rand { (self.rand() * frames).floor().min(frames - 1.0) } else { 0.0 },
+                phase: self.rand(),
             };
             self.parts.push(p);
         }
@@ -92,10 +110,28 @@ pub fn update(tree: &BlueprintTree, emitters: &mut HashMap<ObjectId, Emitter>, d
         }
         let e = emitters.entry(id).or_insert_with(|| Emitter { seed: (id_bits(id) | 1).wrapping_mul(0x9E37_79B9), ..Default::default() });
         let gravity = n.num("gravity", 0.0) as f32;
+        let gd = (n.num("gravity_direction", 90.0) as f32).to_radians();
+        let pull = Vec2::new(gd.cos(), gd.sin()) * gravity;
+        let keep = (1.0 - n.num("damping", 0.0) as f32 * dt).max(0.0);
+        let accel = n.num("acceleration", 0.0) as f32;
+        let wiggle = (n.num("direction_wiggle", 0.0) as f32).to_radians();
         for p in &mut e.parts {
             p.age += dt;
-            p.vel.y += gravity * dt;
-            p.pos += p.vel * dt;
+            p.vel += pull * dt;
+            p.vel *= keep;
+            if accel != 0.0 {
+                let sp = p.vel.length();
+                if sp > 1e-4 {
+                    p.vel *= ((sp + accel * dt).max(0.0)) / sp;
+                }
+            }
+            let mut step = p.vel * dt;
+            if wiggle != 0.0 {
+                // Swings either side of its way, about twice a second.
+                let a = wiggle * ((p.age * 2.0 + p.phase) * std::f32::consts::TAU).sin();
+                step = Vec2::new(step.x * a.cos() - step.y * a.sin(), step.x * a.sin() + step.y * a.cos());
+            }
+            p.pos += step;
             p.rot += p.spin * dt;
         }
         e.parts.retain(|p| p.age < p.life);
@@ -108,6 +144,15 @@ pub fn update(tree: &BlueprintTree, emitters: &mut HashMap<ObjectId, Emitter>, d
         } else {
             e.owed = 0.0;
         }
+    }
+}
+
+/// How many frames a particle texture sheet has (frame_count, or every cell).
+fn frame_count(n: &gex_core::Object) -> u32 {
+    let cells = (n.num("hframes", 1.0).max(1.0) * n.num("vframes", 1.0).max(1.0)) as u32;
+    match n.num("frame_count", 0.0) as u32 {
+        0 => cells,
+        k => k.min(cells),
     }
 }
 
@@ -131,25 +176,47 @@ pub fn draw(tree: &BlueprintTree, emitters: &HashMap<ObjectId, Emitter>, list: &
         let blend = gex_core::render::Blend::from_name(n.text("blend"));
         let pixel = gex_core::render::filter_of(n);
         let lit = n.prop("lit").is_none_or(|v| v.as_bool());
+        let (hf, vf) = (n.num("hframes", 1.0).max(1.0) as u32, n.num("vframes", 1.0).max(1.0) as u32);
+        let frames = frame_count(n);
+        let three = n.prop("three_colors").is_some_and(|v| v.as_bool());
+        let cm = n.color("color_mid");
+        let aspect = n.num("aspect", 1.0) as f32;
+        let fps = n.num("anim_fps", 0.0) as f32;
+        let align = n.prop("align").is_some_and(|v| v.as_bool());
         for p in &e.parts {
             let t = (p.age / p.life).clamp(0.0, 1.0);
-            let size = s0 + (s1 - s0) * t;
-            let color = [0, 1, 2, 3].map(|i| (c0[i] + (c1[i] - c0[i]) * t) * tint[i]);
+            let size = (s0 + (s1 - s0) * t) * p.scale;
+            let color = if three {
+                let (a, b, k) = if t < 0.5 { (c0, cm, t * 2.0) } else { (cm, c1, t * 2.0 - 1.0) };
+                [0, 1, 2, 3].map(|i| (a[i] + (b[i] - a[i]) * k) * tint[i])
+            } else {
+                [0, 1, 2, 3].map(|i| (c0[i] + (c1[i] - c0[i]) * t) * tint[i])
+            };
+            let region = if frames > 1 {
+                // Played over the particle's life (anim_fps 0, or a fixed random frame), or at a rate.
+                // At a rate, or (anim_fps 0) once over its life; from its first frame.
+                let f = if fps > 0.0 { (p.frame + p.age * fps) as u32 % frames } else { (p.frame as u32 + ((t * frames as f32) as u32).min(frames - 1)) % frames };
+                Region::Frame { h: hf, v: vf, frame: f }
+            } else {
+                Region::Whole
+            };
+            let angle = if align { p.rot + p.vel.y.atan2(p.vel.x).to_degrees() } else { p.rot };
             list.sprites.push(Sprite {
                 object: *id,
-                model: Mat4::from_rotation_translation(Quat::from_rotation_z(p.rot.to_radians()), Vec3::new(p.pos.x, p.pos.y, 0.0)),
-                size: Vec2::splat(size),
-                centered: true,
+                model: Mat4::from_rotation_translation(Quat::from_rotation_z(angle.to_radians()), Vec3::new(p.pos.x, p.pos.y, 0.0)),
+                size: Vec2::new(size, size * aspect),
+                pivot: Vec2::splat(0.5),
                 color,
                 texture: tex.clone(),
                 layer,
-                region: Region::Whole,
+                region,
                 flip: [false, false],
                 parallax: Vec2::ONE,
                 repeat: [false; 2],
                 blend,
                 pixel,
                 lit,
+                ..Default::default()
             });
         }
     }

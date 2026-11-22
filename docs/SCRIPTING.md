@@ -68,8 +68,17 @@ DEF on_collide_start(other) {
 }
 ```
 
-`GLOBAL.name = value` also works without declaring it first. A `GLOBAL.name` nobody has set
-yet isn't defined. Globals start over each time the game runs.
+`GLOBAL.name = value` also works without declaring it first, and so does changing something
+inside one (`GLOBAL.save.decks[2][1] = 7`, `GLOBAL.stats.hp += 5`). A `GLOBAL.name` nobody has
+set yet isn't defined.
+
+Globals last for the whole run: `CHANGE_BLUEPRINT` keeps them (GLOBAL functions are left behind;
+the next blueprint's scripts make their own). A script that runs `GLOBAL score = 0` again sets it
+back to 0, so make whole-run values once (in the first blueprint, or behind a `RECALL` check).
+They start over each time the game runs.
+
+To work on a global table in place, give it another name with `@=`: `LOCAL d @= GLOBAL.save`,
+then `d.coins += 1` changes `GLOBAL.save.coins`.
 
 ## Variables set per instance: `$name`
 
@@ -103,6 +112,8 @@ scripts can read it with `GET(object, "speed")`.
 | `on_press_<key>()` / `on_release_<key>()` | one key, e.g. `on_press_space()`, `on_press_a()`, `on_press_pad_a()` |
 | `on_mouse_pressed(button, x, y)` | a click (`"left"`, `"right"`, `"middle"`) |
 | `on_mouse_moved(x, y)`, `on_mouse_wheel(amount)` | |
+| `on_mouse_enter()` / `on_mouse_leave()` | a 2D object: the mouse went over / off it (a Sprite2D by its picture, or only its visible pixels with `mouse_precise`; a Collider2D, Body2D or Label2D by its shape) |
+| `on_clicked(button)` / `on_click_held(button)` / `on_click_released(button)` | a 2D object: a mouse button went down / is held / came up with the mouse over it (every object under the mouse gets them, not just the top one) |
 | `on_collide_start(other)` / `on_collide(other)` / `on_collide_end(other)` | a Collider2D or a body touches another |
 | `on_timer(name)` / `on_timer_<name>()` | a `TIMER` finishing |
 | `on_pressed()` | on a Button's own scripts: it was clicked |
@@ -120,7 +131,8 @@ scripts can read it with `GET(object, "speed")`.
 | `on_disconnected(reason)` | multiplayer: the host left, or the connection broke |
 | `when_<name>()` → `on_<name>()` | a condition: `on_<name>` runs once each time `when_<name>` turns TRUE |
 
-The Events panel lists these; click one to add it to a script.
+The Events panel lists these; click one to add it to a script. Events can also come from a file
+the script IMPORTs: a shared `events.jlb` with an `on_step` works for every script that imports it.
 
 Collisions: a `Collider2D` reports for its parent (or for itself, if it has scripts), so a
 Sprite2D with a Collider2D child gets the events. Bodies (`Body2D`, `Body3D`) report for
@@ -161,7 +173,7 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 | `PARENT(object)` | an object's parent, or NULL |
 | `NAME_OF(object)` | an object's name |
 | `PATH_OF(object)` | an object's full path |
-| `SPAWN(blueprint, x, y, z, parent)` | adds an instance of a blueprint file; gives its id |
+| `SPAWN(blueprint, x, y, z, parent, [values])` | adds an instance of a blueprint file; gives its id. A table last (`[hp: 5, speed: 300]`) sets those variables of its scripts (or properties) before its `on_create` |
 | `DESTROY(object)` | removes an object (at the end of the frame); runs on_destroy |
 
 ### Events and timers
@@ -230,11 +242,17 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 
 | Command | |
 |---|---|
-| `DRAW_RECT(x, y, w, h, color, filled)` | draws a rectangle this frame (2D world) |
+| `DRAW_RECT(x, y, w, h, color, filled, [options])` | draws a rectangle this frame (2D world) |
 | `DRAW_LINE(x1, y1, x2, y2, color)` | draws a line this frame |
-| `DRAW_CIRCLE(x, y, radius, color, filled)` | draws a circle this frame |
-| `DRAW_TEXT(x, y, text, size, color)` | draws text this frame |
-| `DRAW_IMAGE(file, x, y, w, h)` | draws an image this frame |
+| `DRAW_CIRCLE(x, y, radius, color, filled, [options])` | draws a circle this frame |
+| `DRAW_TEXT(x, y, text, size, color, [options])` | draws text this frame (tags work); options `layer`, `font`, `align`, `valign`, `wrap`, `outline`, `outline_color`, `rotation`, `scale`, `alpha` |
+| `DRAW_IMAGE(file, x, y, w, h, [options])` | draws an image this frame |
+| `DRAW_SPRITE(file, x, y, [options])` | draws a picture at its own size, like GameMaker's `draw_sprite_ext`: `frame`/`hframes`/`vframes` or `region: [x, y, w, h]`, `w`, `h`, `scale`, `scale_x`, `scale_y`, `rotation`, `pivot_x`, `pivot_y`, `color`, `alpha`, `layer`, `blend`, `flip_h`, `flip_v`, `brightness`, `hue`, `saturation`, `invert`, `shader`, `values`, `filter`, `lit` |
+| `IMAGE_SIZE(file)` | a picture's size: `[w:, h:]` |
+| `POINT_ON(object, x, y, precise)` | TRUE when a 2D world point is on an object (a Sprite2D's picture; precise: only its visible pixels) |
+
+Drawings go on top (layer 1000) unless an option says `layer:`; then they go in among the
+blueprint's sprites and labels by layer, in the order they were drawn.
 
 ### Input and time
 

@@ -16,6 +16,8 @@ pub enum Region {
     Frame { h: u32, v: u32, frame: u32 },
     /// A tile of a tileset (tile sizes in texture pixels; ids count left to right, top down).
     Tile { w: f32, h: f32, id: u32 },
+    /// Any rectangle of the texture, in texture pixels.
+    Rect { x: f32, y: f32, w: f32, h: f32 },
 }
 
 /// How a picture mixes with what's behind it.
@@ -41,6 +43,19 @@ impl Blend {
 }
 
 /// An object's own texture filtering: None follows the project's setting.
+/// A Sprite2D's pivot (see Sprite::pivot): pivot_x / pivot_y when it's centered (the
+/// default; 0.5, 0.5 is the middle), its top-left corner when `centered` is off. Collider2D
+/// boxes are always centered.
+pub fn pivot_of(n: &crate::Object) -> Vec2 {
+    if n.kind == ObjectKind::Sprite2D && !n.prop("centered").is_none_or(|v| v.as_bool()) {
+        return Vec2::ZERO;
+    }
+    if n.kind != ObjectKind::Sprite2D {
+        return Vec2::splat(0.5);
+    }
+    Vec2::new(n.num("pivot_x", 0.5) as f32, n.num("pivot_y", 0.5) as f32)
+}
+
 pub fn filter_of(n: &crate::Object) -> Option<bool> {
     match n.text("filter") {
         "pixel" => Some(true),
@@ -86,7 +101,9 @@ pub struct Sprite {
     /// World transform of the object (2D: x, y in pixels, rotation about z).
     pub model: Mat4,
     pub size: Vec2,
-    pub centered: bool,
+    /// Which point of the picture sits at the object's position, as a fraction of its size:
+    /// (0.5, 0.5) the middle, (0, 0) the top-left corner.
+    pub pivot: Vec2,
     pub color: [f32; 4],
     pub texture: String,
     pub layer: f32,
@@ -101,6 +118,35 @@ pub struct Sprite {
     pub pixel: Option<bool>,
     /// Darkened by 2D lighting (false: drawn after it, at full brightness).
     pub lit: bool,
+    /// Color effects: brightness (added, -1 to 1), hue shift (turns), how far toward grey
+    /// (0 to 1), how far inverted (0 to 1). All 0 = none.
+    pub effects: [f32; 4],
+    /// A custom sprite shader (.wgsl with `fn sprite(...)`), or "".
+    pub shader: String,
+    /// The custom shader's four values (`values` in the shader).
+    pub values: [f32; 4],
+}
+
+impl Sprite {
+    /// The color effects of an object's properties: brightness, hue, saturation, invert.
+    pub fn effects_of(n: &crate::Object) -> [f32; 4] {
+        let inv = match n.prop("invert") {
+            Some(crate::Variant::Bool(b)) => *b as u8 as f32,
+            Some(v) => v.as_f64().unwrap_or(0.0) as f32,
+            None => 0.0,
+        };
+        [
+            n.num("brightness", 0.0) as f32,
+            (n.num("hue", 0.0) / 360.0) as f32,
+            (1.0 - n.num("saturation", 1.0)).clamp(-4.0, 1.0) as f32,
+            inv.clamp(0.0, 1.0),
+        ]
+    }
+
+    /// A custom shader's values from an object's properties (value_1 .. value_4).
+    pub fn values_of(n: &crate::Object) -> [f32; 4] {
+        [n.num("value_1", 0.0) as f32, n.num("value_2", 0.0) as f32, n.num("value_3", 0.0) as f32, n.num("value_4", 0.0) as f32]
+    }
 }
 
 impl Default for Sprite {
@@ -109,7 +155,7 @@ impl Default for Sprite {
             object: ObjectId::default(),
             model: Mat4::IDENTITY,
             size: Vec2::ONE,
-            centered: false,
+            pivot: Vec2::ZERO,
             color: [1.0; 4],
             texture: String::new(),
             layer: 0.0,
@@ -120,6 +166,9 @@ impl Default for Sprite {
             blend: Blend::Normal,
             pixel: None,
             lit: true,
+            effects: [0.0; 4],
+            shader: String::new(),
+            values: [0.0; 4],
         }
     }
 }
@@ -167,13 +216,39 @@ impl UiItem {
 #[derive(Clone, Debug)]
 pub struct Label {
     pub object: ObjectId,
+    /// Where its top-left corner is (world 2D).
     pub pos: Vec2,
+    /// Its whole transform (turning and scaling turn and scale the text).
+    pub model: Mat4,
     pub text: String,
     pub size: f32,
     pub color: [f32; 4],
     pub layer: f32,
     /// A .ttf / .otf font file, or "" for the default.
     pub font: String,
+    /// Which point of the text block sits at `pos`, as a fraction of its size (0, 0 its
+    /// top-left; 0.5, 0.5 its middle). Lines line up the same way (left, center, right).
+    pub anchor: Vec2,
+    /// Lines longer than this (game pixels) wrap at a space; 0 = no wrapping.
+    pub wrap: f32,
+    /// An outline around the letters: its width in game pixels (0 = none) and color.
+    pub outline: f32,
+    pub outline_color: [f32; 4],
+}
+
+/// A Label2D's anchor (see Label::anchor), from its align and valign.
+pub fn label_anchor(n: &crate::Object) -> Vec2 {
+    let x = match n.text("align") {
+        "center" | "middle" => 0.5,
+        "right" => 1.0,
+        _ => 0.0,
+    };
+    let y = match n.text("valign") {
+        "center" | "middle" => 0.5,
+        "bottom" => 1.0,
+        _ => 0.0,
+    };
+    Vec2::new(x, y)
 }
 
 #[derive(Clone, Debug)]
@@ -445,7 +520,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
         // A solid sprite's wall, outlined with the colliders.
         if n.kind == ObjectKind::Sprite2D && n.prop("solid").is_some_and(|v| v.as_bool()) {
             let (w, h) = (n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
-            let mid = if n.prop("centered").is_none_or(|v| v.as_bool()) { Vec2::ZERO } else { Vec2::new(w / 2.0, h / 2.0) };
+            let mid = (Vec2::splat(0.5) - pivot_of(n)) * Vec2::new(w, h);
             let size = if n.text("solid_shape") == "circle" { Vec2::splat(w.max(h)) } else { Vec2::new(w, h) };
             out.colliders.push(Rect2D { object: id, model: model * Mat4::from_translation(mid.extend(0.0)), size });
         }
@@ -454,7 +529,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 object: id,
                 model,
                 size: Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32),
-                centered: n.prop("centered").is_none_or(|v| v.as_bool()),
+                pivot: pivot_of(n),
                 color: tinted(tree, id, n.color("color")),
                 blend,
                 pixel,
@@ -468,6 +543,9 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                 flip: [n.prop("flip_h").is_some_and(|v| v.as_bool()), n.prop("flip_v").is_some_and(|v| v.as_bool())],
                 parallax: Vec2::new(n.num("parallax_x", 1.0) as f32, n.num("parallax_y", 1.0) as f32),
                 repeat: [n.prop("repeat_x").is_some_and(|v| v.as_bool()), n.prop("repeat_y").is_some_and(|v| v.as_bool())],
+                effects: Sprite::effects_of(n),
+                shader: n.text("shader").to_string(),
+                values: Sprite::values_of(n),
             }),
             ObjectKind::TileMap2D => {
                 let grid = crate::tiles::parse(n.text("tiles"));
@@ -486,7 +564,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                             object: id,
                             model: model * local,
                             size: Vec2::new(tw, th),
-                            centered: false,
+                            pivot: Vec2::ZERO,
                             color,
                             texture: tex.clone(),
                             layer,
@@ -497,6 +575,7 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                             blend,
                             pixel,
                             lit,
+                            ..Default::default()
                         });
                     }
                 }
@@ -512,11 +591,16 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
             ObjectKind::Label2D => out.labels.push(Label {
                 object: id,
                 pos: model.w_axis.truncate().truncate(),
+                model,
                 text: n.text("text").to_string(),
                 size: n.num("size", 16.0) as f32,
                 color: tinted(tree, id, n.color("color")),
                 layer: n.num("layer", 10.0) as f32 + z,
                 font: n.text("font").to_string(),
+                anchor: label_anchor(n),
+                wrap: n.num("wrap_width", 0.0) as f32,
+                outline: n.num("outline", 0.0) as f32,
+                outline_color: n.color("outline_color"),
             }),
             ObjectKind::Collider2D => out.colliders.push(Rect2D {
                 object: id,

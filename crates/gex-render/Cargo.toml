@@ -10,6 +10,9 @@ gex-core.workspace = true
 gex-assets.workspace = true
 egui-wgpu.workspace = true
 bytemuck.workspace = true
+# Label2D text drawn into textures (free, MIT/Apache): the fonts egui ships, and a rasterizer.
+ab_glyph = "0.2"
+epaint_default_fonts = "0.36"
 
 [dev-dependencies]
 pollster = "1"

@@ -230,9 +230,9 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
                 if let Some(res) = next {
                     let mut logs = game.take_logs();
                     // Settings scripts changed last for the whole run, across blueprints.
-                    let (shared, fade, title, graphics, display, physics, actions) = {
+                    let (fade, title, graphics, display, physics, actions) = {
                         let st = game.st.borrow();
-                        (st.shared.clone(), st.fade.clone(), st.window_title.clone(), st.project.config.graphics.clone(), st.project.config.display.clone(), st.physics.settings.clone(), st.input.actions.clone())
+                        (st.fade.clone(), st.window_title.clone(), st.project.config.graphics.clone(), st.project.config.display.clone(), st.physics.settings.clone(), st.input.actions.clone())
                     };
                     // A multiplayer game carries on in the next blueprint.
                     let net = {
@@ -245,10 +245,11 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
                     };
                     match project.read_text(&res).map_err(|e| e).and_then(|t| blueprint::load(&t, &|p: &str| project.read_text(p)).map_err(|e| e.0)) {
                         Ok(t) => {
-                            game = Game::new(project.clone(), t, Some(cancel.clone()));
+                            let mut next = Game::new(project.clone(), t, Some(cancel.clone()));
+                            next.carry_over(&mut game);
+                            game = next;
                             game.set_pause_hook(pause_hook(bp.clone(), tx.clone(), debug.clone(), cancel.clone()));
                             let mut st = game.st.borrow_mut();
-                            st.shared = shared;
                             st.window_title = title;
                             st.project.config.graphics = graphics;
                             st.project.config.display = display;

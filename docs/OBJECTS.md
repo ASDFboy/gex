@@ -22,14 +22,14 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | Kind | What it is | Main properties |
 |---|---|---|
 | `Object2D` | an empty 2D object to group others | |
-| `Sprite2D` | a picture or a colored rectangle | `texture`, `width`, `height`, `color` (tint), `layer` (higher draws on top), `flip_h`, `flip_v`, `parallax_x/y`, `repeat_x/y`, `solid` (a wall its own size, turning with it) and `solid_shape` (box or circle) |
-| `Label2D` | text in the world (moves with the camera) | `text`, `size`, `color`, `font` |
+| `Sprite2D` | a picture or a colored rectangle | `texture`, `width`, `height`, `color` (tint), `layer` (higher draws on top), `pivot_x/y` (the point at its position that it turns around: 0.5, 0.5 the middle), `flip_h`, `flip_v`, `parallax_x/y`, `repeat_x/y`, `solid` (a wall its own size, turning with it) and `solid_shape` (box or circle), `mouse_precise`; effects `brightness`, `hue`, `saturation`, `invert`, and a custom `shader` with `value_1`–`value_4` (see SHADERS.md) |
+| `Label2D` | text in the world (moves with the camera), in layer order with sprites | `text`, `size`, `color`, `font`, `layer`, `align` (left, center, right), `valign` (top, middle, bottom), `wrap_width`, `outline` and `outline_color`; turns and scales with its transform |
 | `Camera2D` | what the game shows; follows its parent | `zoom`, `current`, `smoothing` (0 = locked on, higher = catches up faster), `limits` with `limit_left/top/right/bottom` (the view stays inside), `ambient` (below white darkens the blueprint for Light2Ds) |
 | `Light2D` | a light in a dark 2D blueprint | `color`, `energy`, `radius`, `texture` (a soft glow if empty) |
 | `Collider2D` | an area that reports overlaps (pickups, triggers) with other colliders and bodies | `width`, `height`, `layer`, `mask` |
 | `Body2D` | a physics object | `body` (dynamic / kinematic / static), `shape` (box / circle), `width`, `height`, `radius`, `friction`, `bounce`, `density`, `gravity_scale`, `fixed_rotation`; live: `vx`, `vy`, `on_floor` |
 | `TileMap2D` | a grid of tiles from one tileset picture | `tileset`, `tile_width`, `tile_height`, `solid`, `solid_tiles` |
-| `Particles2D` | sparks, smoke, dust, trails | `emitting`, `rate` (per second), `lifetime`, `direction` (degrees, -90 = up), `spread`, `speed`, `speed_random`, `gravity`, `size` → `size_end`, `color` → `color_end`, `spin`, `area` (radius they start in), `texture` (a soft dot if empty) |
+| `Particles2D` | sparks, smoke, dust, trails | `emitting`, `rate` (per second), `lifetime`, `direction` (degrees, -90 = up), `spread`, `speed`, `speed_random`, `gravity`, `size` → `size_end`, `color` → `color_end`, `spin`, `area` (radius they start in) or `area_width`/`area_height` (a rectangle), `texture` (a soft dot if empty); also `three_colors` with `color_mid`, `size_random`, `aspect`, `lifetime_random`, `acceleration`, `damping`, `gravity_direction`, `direction_wiggle`, `start_rotation` and `start_rotation_random`, `align` (face the way they fly), and animated textures: `hframes`, `vframes`, `frame_count`, `anim_fps` (0: once over their life), `frame_random` |
 
 **Sprite animation.** A sprite sheet is one picture cut into `hframes` × `vframes` cells; `frame`
 picks one. Name animations in `animations`, like `idle=0; walk=1-5; jump=6,7,8`, then

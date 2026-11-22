@@ -1,0 +1,11 @@
+>> LOCAL x @= y: a local that shares y.
+save = [coins: 1, decks: [[1, 2], [3, 4]]]
+DEF add() {
+    LOCAL s @= save
+    s.coins += 4
+    LOCAL d @= save.decks[2]
+    d[1] = 9
+}
+add()
+PRINT(save.coins)
+PRINT(save.decks[2][1])

@@ -3085,8 +3085,8 @@ pub fn viewport(painter: &egui::Painter, st: &mut EditorState, to_screen: &dyn F
                     continue;
                 }
                 let (w, h) = (n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
-                let centered = n.kind == ObjectKind::Collider2D || n.prop("centered").is_none_or(|v| v.as_bool());
-                let (x0, y0) = if centered { (-w / 2.0, -h / 2.0) } else { (0.0, 0.0) };
+                let pv = gex_core::render::pivot_of(n);
+                let (x0, y0) = (-pv.x * w, -pv.y * h);
                 let pts: Vec<egui::Pos2> = [(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)].iter().filter_map(|(x, y)| to_screen(m.transform_point3(gex_core::glam::Vec3::new(*x, *y, 0.0)))).collect();
                 if pts.len() == 4 {
                     painter.add(egui::Shape::closed_line(pts, egui::Stroke::new(1.5, c)));

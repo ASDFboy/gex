@@ -67,6 +67,8 @@ DEF count_enemies() {
 >> outside, count is still 3
 ```
 
+`LOCAL x @= y` makes a local that shares `y` (see [copying and sharing](07-tables-and-text.md#copying-and-sharing)): `LOCAL d @= GLOBAL.save` then `d.coins += 1` changes `GLOBAL.save.coins`.
+
 `LOCAL` can only be used inside a function.
 
 ### What counts as local

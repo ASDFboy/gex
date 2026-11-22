@@ -87,6 +87,11 @@ impl Interp {
     }
 
     /// The names and values of a loaded file's outside variables, in the order they were made.
+    /// The names of a loaded file's functions (its own and those it IMPORTed).
+    pub fn env_funcs(env: &Env) -> Vec<Rc<str>> {
+        env.borrow().iter().filter(|(_, s)| s.borrow().is_func()).map(|(k, _)| k.clone()).collect()
+    }
+
     pub fn env_vars(env: &Env) -> Vec<(Rc<str>, Value)> {
         crate::interp::vars_of(&env.borrow())
     }

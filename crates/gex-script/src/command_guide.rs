@@ -57,8 +57,9 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
     ("SPAWN", "Objects",
      "Makes a new instance of a blueprint file while the game runs and gives its id: SPAWN(\"res://bullet.jblueprint\", x, y, z, parent).\n\n\
       x, y, z place it (missing ones keep the blueprint's own position). parent is where it goes in the tree; leave it out (or NULL) to put it at the top of the blueprint, where its position is a world position.\n\n\
-      Its scripts are loaded and its on_create() runs before the next event.",
-     "DEF on_press_space() {\n\tb = SPAWN(\"res://bullet.jblueprint\", x, y)\n\tSET(b, \"vx\", 600)\n}"),
+      Its scripts are loaded and its on_create() runs before the next event.\n\n\
+      Starting values: put a table last, SPAWN(\"res://bullet.jblueprint\", x, y, [speed: 600, owner: self.id]). Each value goes to the variable of that name in the new object's scripts (after their outside code, so it replaces the default written there, and before on_create, which already sees it), or, when no script has that variable, to its property of that name.",
+     "DEF on_press_space() {\n\tb = SPAWN(\"res://bullet.jblueprint\", x, y, [speed: 600, angle: rotation])\n}"),
     ("DESTROY", "Objects",
      "Removes an object and everything inside it: DESTROY(object), or DESTROY() for this object.\n\n\
       It happens at the end of the frame, after on_destroy() runs on it, so code after DESTROY in the same event still runs.",
@@ -244,7 +245,8 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
 
     // ---------------------------------------------------------------- drawing
     ("DRAW_RECT", "Drawing",
-     "Draws a rectangle for this frame: DRAW_RECT(x, y, w, h, color, filled). x, y is its top-left corner in the 2D world. filled defaults to TRUE; FALSE draws an outline. Call it from on_draw() every frame you want it shown.",
+     "Draws a rectangle for this frame: DRAW_RECT(x, y, w, h, color, filled). x, y is its top-left corner in the 2D world. filled defaults to TRUE; FALSE draws an outline. Call it from on_draw() every frame you want it shown.\n\n\
+      Every DRAW_ command but DRAW_LINE takes a table of options last. layer: where it goes among the blueprint's sprites and labels (drawings go on top, at layer 1000, unless you say); rotation: degrees around x, y; blend: \"add\" or \"multiply\"; alpha.",
      "DEF on_draw() {\n\tDRAW_RECT(x - 20, y - 30, 40 * hp / 100, 4, \"#a6e22e\")\n}"),
     ("DRAW_LINE", "Drawing",
      "Draws a line for this frame from (x1, y1) to (x2, y2).",
@@ -253,11 +255,23 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
      "Draws a circle for this frame around (x, y). filled defaults to TRUE.",
      "DEF on_draw() {\n\tDRAW_CIRCLE(x, y, 64, \"#66d9ef\", FALSE)\n}"),
     ("DRAW_TEXT", "Drawing",
-     "Draws text for this frame at (x, y): DRAW_TEXT(x, y, text, size, color). size defaults to 16. Anything given as text is shown as it would PRINT.",
+     "Draws text for this frame at (x, y): DRAW_TEXT(x, y, text, size, color). size defaults to 16. Anything given as text is shown as it would PRINT, and tags work as in a Label2D: [color=red]..[/color], [size=24], [i], [u], [s], [bg=#000000].\n\n\
+      Options (a table last): layer, font (a .ttf/.otf), align (\"left\", \"center\", \"right\": which point of the text is at x), valign (\"top\", \"middle\", \"bottom\"), wrap (break lines longer than this many pixels), outline (pixels) and outline_color, rotation, scale, alpha.",
      "DEF on_draw() {\n\tDRAW_TEXT(10, 10, \"Score: \" + GLOBAL.score, 24, \"#ffffff\")\n}"),
     ("DRAW_IMAGE", "Drawing",
      "Draws a picture for this frame: DRAW_IMAGE(file, x, y, w, h). w and h default to 64.",
      "DEF on_draw() {\n\tDRAW_IMAGE(\"res://ui/heart.png\", 10, 40, 24, 24)\n}"),
+    ("DRAW_SPRITE", "Drawing",
+     "Draws a picture for this frame at its own size, the way GameMaker's draw_sprite_ext does: DRAW_SPRITE(file, x, y, [options]).\n\n\
+      Options: frame with hframes and vframes (a sheet of frames), or region: [x, y, w, h] (a part of the picture, in its pixels); w and h (the size to draw; its own size otherwise); scale, scale_x, scale_y; rotation (degrees); pivot_x and pivot_y (the point at x, y, and turned around: 0 the left/top edge, 0.5 the middle; 0 when left out); color and alpha; layer (1000 when left out: on top); blend; flip_h and flip_v; the effects brightness, hue, saturation, invert; shader and values: [a, b, c, d] (a custom sprite shader); filter (\"pixel\" or \"smooth\"); lit.",
+     "DEF on_draw() {\n\tDRAW_SPRITE(\"res://cards.png\", x, y, [hframes: 8, frame: 3, pivot_x: 0.5, pivot_y: 0.5, rotation: 15, scale: 0.5, layer: 20])\n}"),
+    ("IMAGE_SIZE", "Drawing",
+     "A picture's size in pixels: [w:, h:], or NULL when it can't be read. Read once per file and remembered.",
+     "s = IMAGE_SIZE(\"res://cards.png\")\nPRINT(s.w + \" x \" + s.h)"),
+    ("POINT_ON", "Input",
+     "TRUE when a point in the 2D world is on an object: POINT_ON(object, x, y, precise). A Sprite2D counts by its picture as it's drawn (turned, scaled, its pivot); with precise TRUE only where the picture isn't see-through. A Collider2D or Body2D counts by its shape, a Label2D by its text.\n\n\
+      For the mouse there are events too: on_mouse_enter(), on_mouse_leave(), on_clicked(button), on_click_held(button), on_click_released(button).",
+     "IF POINT_ON(\"Card\", MOUSE_X(), MOUSE_Y(), TRUE) {\n\tself.scale_x = 1.1\n}"),
 
     // ---------------------------------------------------------------- saving
     ("SAVE_DATA", "Saving and remembering",
@@ -393,7 +407,7 @@ This object: inside its scripts, its properties are plain names (x, y, speed) or
 Colors: a table [r: 1, g: 0.5, b: 0, a: 1] (0 to 1) or a text like \"#ff8800\".\n\n\
 Files: res://... is your project, hl2://... a mounted Half-Life 2.\n\n\
 Keys: \"a\"-\"z\", \"0\"-\"9\", \"space\", \"enter\", \"escape\", \"left\", \"right\", \"up\", \"down\", \"shift\", \"ctrl\", \"alt\", \"tab\", \"f1\"..., mouse buttons \"mouse_left\", \"mouse_right\", \"mouse_middle\", gamepad \"pad_a\", \"pad_b\", \"pad_x\", \"pad_y\", \"pad_lb\", \"pad_rb\", \"pad_start\", \"pad_select\", \"pad_up\"... and input actions named in Project settings.\n\n\
-Variables for the whole game: GLOBAL score = 0 makes one; every script reads and changes it as GLOBAL.score.";
+Variables for the whole game: GLOBAL score = 0 makes one; every script reads and changes it as GLOBAL.score, even inside tables (GLOBAL.save.decks[2] = 7). They last for the whole run, across CHANGE_BLUEPRINT (a script that runs GLOBAL score = 0 again sets it back to 0).";
 
 /// (event, when it runs): the functions the engine calls in your scripts.
 pub const EVENTS: &[(&str, &str)] = &[
@@ -407,6 +421,8 @@ pub const EVENTS: &[(&str, &str)] = &[
     ("on_press_<key>() / on_release_<key>()", "one key or input action: on_press_space(), on_press_a(), on_press_jump()"),
     ("on_mouse_pressed(button, x, y)", "a click: button is \"left\", \"right\" or \"middle\""),
     ("on_mouse_moved(x, y) / on_mouse_wheel(amount)", "the mouse moved / the wheel turned"),
+    ("on_mouse_enter() / on_mouse_leave()", "a 2D object (a Sprite2D's picture, a Collider2D, Body2D or Label2D): the mouse went over it / off it. A Sprite2D with mouse_precise counts only its visible pixels"),
+    ("on_clicked(button) / on_click_held(button) / on_click_released(button)", "a 2D object: a mouse button went down / is held / came up while the mouse is over it. Every object under the mouse gets them, not just the top one"),
     ("on_collide_start(other)", "started touching another body or collider (other is its id)"),
     ("on_collide(other)", "every frame while touching"),
     ("on_collide_end(other)", "stopped touching"),

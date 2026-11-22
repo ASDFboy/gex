@@ -133,8 +133,9 @@ impl Fade {
 pub(crate) enum Pending {
     /// Run `handler` on one object's scripts, or on every object's when `target` is None.
     Event { target: Option<ObjectId>, handler: String, args: Vec<Value> },
-    /// An object (and its subtree) just appeared: attach scripts, then on_create.
-    Created(ObjectId),
+    /// An object (and its subtree) just appeared: attach scripts, then on_create. The
+    /// values SPAWN was given go to the object first.
+    Created(ObjectId, Vec<(String, Value)>),
     Destroy(ObjectId),
 }
 
@@ -205,6 +206,8 @@ pub struct WorldState {
     pub blueprint: String,
     /// A multiplayer game (HOST_GAME / JOIN_GAME).
     pub net: Option<crate::net::Net>,
+    /// Pictures' sizes and see-through parts (DRAW_SPRITE, precise mouse hits).
+    pub(crate) images: crate::hit::Images,
 }
 
 impl WorldState {
@@ -254,6 +257,8 @@ pub struct Game {
     started: bool,
     /// Per script file: its change stamp, its events and its $variables.
     script_info: HashMap<PathBuf, ScriptInfoEntry>,
+    /// Objects the mouse is over (for on_mouse_enter / on_mouse_leave).
+    hovered: HashSet<ObjectId>,
 }
 
 type ScriptInfoEntry = ((Option<std::time::SystemTime>, u64), Rc<(HashSet<String>, Vec<String>)>);
@@ -326,13 +331,27 @@ impl Game {
             shake_seed: 12345,
             blueprint: String::new(),
             net: None,
+            images: Default::default(),
         }));
         let mut it = Interp::embedded(project.dir.clone());
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
         it.host = Some(Box::new(EngineHost { st: st.clone() }));
         it.cancel = cancel;
         Game { stats: FrameStats::default(), it, st, scripts: HashMap::new(), physics_acc: 0.0,
-            script_info: HashMap::new(), started: false }
+            script_info: HashMap::new(), started: false, hovered: HashSet::new() }
+    }
+
+    /// Moving to the next blueprint (CHANGE_BLUEPRINT): what lasts for the whole run comes
+    /// along from the game that's ending: REMEMBER values and GLOBAL variables. GLOBAL
+    /// functions are left behind; the new blueprint's scripts make their own.
+    pub fn carry_over(&mut self, old: &mut Game) {
+        let shared = std::mem::take(&mut old.st.borrow_mut().shared);
+        self.st.borrow_mut().shared = shared;
+        for (k, s) in old.it.shared.drain() {
+            if !matches!(&*s.borrow(), jlb::Value::Func(_) | jlb::Value::Builtin(_) | jlb::Value::Task(_)) {
+                self.it.shared.insert(k, s);
+            }
+        }
     }
 
     /// Loads a blueprint file as a fresh game.
@@ -540,6 +559,7 @@ impl Game {
         match self.it.load_module(&path, &[("self", me)]) {
             Ok(env) => {
                 self.read_self_back(id, &env, &before);
+                let handlers = with_imported_handlers(&env, handlers);
                 self.scripts.entry(id).or_default().push(ScriptInst {
                     res: res.to_string(),
                     env,
@@ -583,8 +603,8 @@ impl Game {
                     }
                     // (The script's own code may have destroyed its object meanwhile.)
                     if let Some(s) = self.scripts.get_mut(&id).and_then(|l| l.get_mut(i)) {
+                        s.handlers = with_imported_handlers(&env, handlers.clone());
                         s.env = env;
-                        s.handlers = handlers.clone();
                         s.dead = false;
                         done += 1;
                     }
@@ -971,6 +991,7 @@ impl Game {
         if input.wheel != 0.0 {
             self.broadcast("on_mouse_wheel", vec![num(input.wheel as f64)]);
         }
+        self.object_mouse();
         self.tile_statics();
         // Fixed-rate physics and collisions.
         if !paused {
@@ -1104,7 +1125,7 @@ impl Game {
                         n.sender = None;
                     }
                 }
-                crate::net::Action::Created(id) => self.st.borrow_mut().queue.push_back(Pending::Created(id)),
+                crate::net::Action::Created(id) => self.st.borrow_mut().queue.push_back(Pending::Created(id, Vec::new())),
                 crate::net::Action::Destroy(id) => self.st.borrow_mut().queue.push_back(Pending::Destroy(id)),
             }
         }
@@ -1306,7 +1327,7 @@ impl Game {
             // The sprite's own box (or circle), turned and scaled the way it is.
             let m = st.tree.global_matrix(id);
             let (w, h) = (n.num("width", 32.0) as f32, n.num("height", 32.0) as f32);
-            let mid = if n.prop("centered").is_none_or(|v| v.as_bool()) { glam::Vec2::ZERO } else { glam::Vec2::new(w / 2.0, h / 2.0) };
+            let mid = (glam::Vec2::splat(0.5) - gex_core::render::pivot_of(n)) * glam::Vec2::new(w, h);
             let center = m.transform_point3(mid.extend(0.0)).truncate();
             let (sx, sy) = (m.x_axis.truncate().length(), m.y_axis.truncate().length());
             let half = glam::Vec2::new(w * sx / 2.0, h * sy / 2.0);
@@ -1679,6 +1700,89 @@ impl Game {
         }
     }
 
+    /// SPAWN(..., [hp: 5, speed: 300]): each value goes to the variable of that name in
+    /// the new object's scripts (after their outside code ran, before on_create), or, when
+    /// no script has one, to the object's property of that name.
+    fn give_vars(&mut self, id: ObjectId, vars: Vec<(String, Value)>) {
+        for (k, v) in vars {
+            let mut found = false;
+            if let Some(list) = self.scripts.get(&id) {
+                for s in list {
+                    if !s.dead && Interp::env_get(&s.env, &k).is_some_and(|old| !old.is_func()) {
+                        Interp::env_set(&s.env, &k, v.clone());
+                        found = true;
+                    }
+                }
+            }
+            if !found {
+                let mut st = self.st.borrow_mut();
+                if st.tree.contains(id) {
+                    if let Err(f) = crate::commands::set_prop(&mut st, id, &k, &v) {
+                        let msg = match f { jlb::Fault::Error(e) | jlb::Fault::TaskError(e) => e.msg.clone(), _ => String::new() };
+                        st.log(LogKind::Error, format!("SPAWN's {}: {}", k, msg));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The mouse on 2D objects: on_mouse_enter() and on_mouse_leave() as it goes over and off
+    /// one, and while it's over one, on_clicked(button) when a button goes down,
+    /// on_click_held(button) each frame it's held and on_click_released(button) when it's let
+    /// go. Every object under the mouse gets them (not just the top one), like GameMaker.
+    fn object_mouse(&mut self) {
+        const EVENTS: [&str; 5] = ["on_mouse_enter", "on_mouse_leave", "on_clicked", "on_click_held", "on_click_released"];
+        let ids: HashSet<ObjectId> = self
+            .scripts
+            .iter()
+            .filter(|(_, l)| l.iter().any(|s| !s.dead && EVENTS.iter().any(|e| s.handlers.contains(*e))))
+            .map(|(id, _)| *id)
+            .collect();
+        if ids.is_empty() && self.hovered.is_empty() {
+            return;
+        }
+        let (order, now, pressed, down, released) = {
+            let mut st = self.st.borrow_mut();
+            let st = &mut *st;
+            let p = glam::Vec2::new(st.input.mouse[0], st.input.mouse[1]);
+            let mut now = HashSet::new();
+            for id in &ids {
+                let precise = st.tree.get(*id).is_some_and(|n| n.prop("mouse_precise").is_some_and(|v| v.as_bool()));
+                if crate::hit::point_on(st, *id, p, precise) {
+                    now.insert(*id);
+                }
+            }
+            let sorted = |h: &HashSet<String>| {
+                let mut v: Vec<String> = h.iter().cloned().collect();
+                v.sort();
+                v
+            };
+            (st.tree.walk(), now, sorted(&st.input.mouse_pressed), sorted(&st.input.mouse_down), sorted(&st.input.mouse_released))
+        };
+        let was = std::mem::take(&mut self.hovered);
+        for id in order {
+            let (on, before) = (now.contains(&id), was.contains(&id));
+            if on && !before {
+                self.run(id, "on_mouse_enter", vec![]);
+            }
+            if before && !on {
+                self.run(id, "on_mouse_leave", vec![]);
+            }
+            if on {
+                for b in &pressed {
+                    self.run(id, "on_clicked", vec![Value::text(b)]);
+                }
+                for b in &down {
+                    self.run(id, "on_click_held", vec![Value::text(b)]);
+                }
+                for b in &released {
+                    self.run(id, "on_click_released", vec![Value::text(b)]);
+                }
+            }
+        }
+        self.hovered = now;
+    }
+
     /// Handles queued events, spawns and destroys (scripts' requests), in order.
     fn drain(&mut self) {
         for _ in 0..10_000 {
@@ -1686,10 +1790,11 @@ impl Game {
             match p {
                 Pending::Event { target: Some(t), handler, args } => self.run(t, &handler, args),
                 Pending::Event { target: None, handler, args } => self.broadcast(&handler, args),
-                Pending::Created(id) => {
+                Pending::Created(id, vars) => {
                     let mut ids = Vec::new();
                     self.st.borrow().tree.walk_from(id, &mut ids);
                     self.attach_all(&ids);
+                    self.give_vars(id, vars);
                     self.autoplay(&ids);
                     for i in ids {
                         self.run(i, "on_create", vec![]);
@@ -1813,6 +1918,17 @@ pub fn aabb(tree: &BlueprintTree, id: ObjectId) -> [f32; 4] {
         r[3] = r[3].max(p.y);
     }
     r
+}
+
+/// A loaded script's events: the ones its own file defines, plus those that came in with
+/// IMPORT (a shared file of events, used by many objects' scripts).
+fn with_imported_handlers(env: &jlb::Env, mut own: HashSet<String>) -> HashSet<String> {
+    for k in Interp::env_funcs(env) {
+        if (k.starts_with("on_") || k.starts_with("when_")) && !own.contains(&*k) {
+            own.insert(k.to_string());
+        }
+    }
+    own
 }
 
 /// The `on_...` and `when_...` functions a script file defines (top-level DEFs).

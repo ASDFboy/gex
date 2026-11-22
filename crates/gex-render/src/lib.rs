@@ -1,13 +1,15 @@
 #![allow(deprecated)] // glam 0.33 moved the camera helpers; the old names still work.
 //! gex-render: draws a `RenderList` into an offscreen texture with wgpu. The editor
-//! shows that texture in its viewport; the game player shows it full-window. Labels
-//! (text) are left to the caller, who draws them with egui on top.
+//! shows that texture in its viewport; the game player shows it full-window. 2D labels
+//! are drawn here as pictures of their text, in layer order with the sprites; 3D labels
+//! are left to the caller, who draws them with egui on top.
 //!
 //! 3D: sky → shadow map (the first directional light) → opaque meshes → sorted
 //! transparent meshes → 3D lines. 2D: sprites in layer order, then 2D lines.
 
 pub mod camera;
 pub mod mesh;
+pub mod text;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -185,8 +187,19 @@ enum Geo {
     Skinned(ObjectId, String, usize),
 }
 
-/// Sprites drawn together: texture, pixel filtering, blend, first instance, count.
-type SpriteBatch = (String, bool, Blend, u32, u32);
+/// Sprites drawn together: texture, pixel filtering, blend, first instance, count, custom
+/// shader ("" for none).
+type SpriteBatch = (String, bool, Blend, u32, u32, String);
+
+/// A label's text picture, kept while it's shown: the texture, its size and scale, and the
+/// frame it was last used in.
+struct TextTex {
+    tex: Tex,
+    size: [u32; 2],
+    scale: f32,
+    pad: f32,
+    used: u64,
+}
 
 struct Draw3 {
     /// In the view (off-screen draws still cast shadows).
@@ -229,6 +242,12 @@ pub struct Renderer {
     applied: (u32, bool, u32),
     /// Custom material shaders by file: the pipeline, or why it didn't build.
     custom: HashMap<String, Result<wgpu::RenderPipeline, String>>,
+    /// Custom sprite shaders by file and blend.
+    sprite_custom: HashMap<(String, Blend), Result<wgpu::RenderPipeline, String>>,
+    /// Fonts for 2D labels, and their text pictures by what they show.
+    fonts: text::Fonts,
+    texts: HashMap<String, TextTex>,
+    frame_no: u64,
     mesh_pl: wgpu::PipelineLayout,
     mat_layout: wgpu::BindGroupLayout,
     /// (texture, normal map, lightmap's model, pixel filtering) → the bind group meshes draw with.
@@ -634,12 +653,19 @@ impl Renderer {
             target: None,
             mipmaps: true,
             problems: Vec::new(),
+            sprite_custom: HashMap::new(),
+            fonts: text::Fonts::default(),
+            texts: HashMap::new(),
+            frame_no: 0,
         }
     }
 
     /// Forgets loaded textures and models (after files change on disk).
     pub fn reload_textures(&mut self) {
         self.textures.clear();
+        self.texts.clear();
+        self.fonts = text::Fonts::default();
+        self.sprite_custom.clear();
         self.materials.clear();
         self.normals.clear();
         self.custom.clear();
@@ -747,6 +773,89 @@ impl Renderer {
         self.custom.insert(path.to_string(), r);
     }
 
+    /// A custom sprite shader's pipeline for one blend (built once; errors are reported).
+    fn ensure_sprite_shader(&mut self, device: &wgpu::Device, vfs: &Vfs, path: &str, blend: Blend) {
+        let key = (path.to_string(), blend);
+        if path.is_empty() || self.sprite_custom.contains_key(&key) {
+            return;
+        }
+        let r = (|| -> Result<wgpu::RenderPipeline, String> {
+            let user = vfs.read_text(path)?;
+            let src = format!(
+                "{}\n// ---- {} ----\n{}\n\n@fragment\nfn fs_sprite_custom(o: SpriteOut) -> @location(0) vec4<f32> {{\n    let c = clamp(sprite(sprite_base(o), o.uv, o.world, g.post.z, o.values), vec4<f32>(0.0), vec4<f32>(1.0));\n    if (c.a < 0.004) {{\n        discard;\n    }}\n    return c;\n}}\n\n@fragment\nfn fs_sprite_custom_mul(o: SpriteOut) -> @location(0) vec4<f32> {{\n    let c = clamp(sprite(sprite_base(o), o.uv, o.world, g.post.z, o.values), vec4<f32>(0.0), vec4<f32>(1.0));\n    return vec4<f32>(c.rgb * c.a, c.a);\n}}\n",
+                include_str!("shaders.wgsl"),
+                path,
+                user
+            );
+            let module = wgpu::naga::front::wgsl::parse_str(&src).map_err(|e| e.emit_to_string(&src))?;
+            wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+                .validate(&module)
+                .map_err(|e| e.emit_to_string(&src))?;
+            let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(path), source: wgpu::ShaderSource::Wgsl(src.into()) });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("gex sprite shader"),
+                bind_group_layouts: &[Some(&self.globals_layout), Some(&self.tex_layout)],
+                immediate_size: 0,
+            });
+            let sprite_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+            let bufs = [
+                Some(wgpu::VertexBufferLayout { array_stride: 16, step_mode: wgpu::VertexStepMode::Vertex, attributes: &sprite_attrs }),
+                Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Instance>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &INSTANCE_ATTRS }),
+            ];
+            let (state, fs) = match blend {
+                Blend::Normal => (wgpu::BlendState::ALPHA_BLENDING, "fs_sprite_custom"),
+                Blend::Add => (
+                    wgpu::BlendState {
+                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                    },
+                    "fs_sprite_custom",
+                ),
+                Blend::Multiply => (
+                    wgpu::BlendState {
+                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Dst, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                    },
+                    "fs_sprite_custom_mul",
+                ),
+            };
+            let targets = [Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend: Some(state), write_mask: wgpu::ColorWrites::ALL })];
+            Ok(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(path),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_sprite"), compilation_options: Default::default(), buffers: &bufs },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState { format: DEPTH_FORMAT, depth_write_enabled: Some(false), depth_compare: Some(wgpu::CompareFunction::Always), stencil: Default::default(), bias: Default::default() }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState { module: &sm, entry_point: Some(fs), compilation_options: Default::default(), targets: &targets }),
+                multiview_mask: None,
+                cache: None,
+            }))
+        })();
+        if let Err(e) = &r {
+            self.problems.push(format!("shader {}: {}", path, e));
+        }
+        self.sprite_custom.insert(key, r);
+    }
+
+    /// The picture of a label's text at a scale (made once; kept while it's shown).
+    fn ensure_text(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vfs: &Vfs, l: &gex_core::render::Label, scale: f32, tinted: bool) -> String {
+        let base = if tinted { [255u8; 4] } else { l.color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8) };
+        let base = [base[0], base[1], base[2], 255];
+        let oc = l.outline_color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let key = format!("@text:{}\u{1}{}\u{1}{}\u{1}{:?}\u{1}{}\u{1}{}\u{1}{}\u{1}{:?}\u{1}{}", l.font, l.size, scale, base, l.anchor.x, l.wrap, l.outline, oc, l.text);
+        let frame = self.frame_no;
+        if let Some(t) = self.texts.get_mut(&key) {
+            t.used = frame;
+            return key;
+        }
+        let style = text::Style { font: &l.font, size: l.size, scale, color: base, align: l.anchor.x, wrap: l.wrap, outline: l.outline, outline_color: oc };
+        let img = text::rasterize(&mut self.fonts, vfs, &l.text, &style, &mut self.problems);
+        let tex = make_tex(device, queue, &self.tex_layout, &self.linear, img.w, img.h, &img.rgba, false, TEX_FORMAT);
+        self.texts.insert(key.clone(), TextTex { tex, size: [img.w, img.h], scale: img.scale, pad: img.pad, used: frame });
+        key
+    }
+
     fn tex(&self, path: &str, pixel: bool) -> &Tex {
         if path.is_empty() {
             return if pixel { &self.white_nearest } else { &self.white_linear };
@@ -756,6 +865,9 @@ impl Renderer {
         }
         if path == "@glow" {
             return &self.glow;
+        }
+        if path.starts_with("@text:") {
+            return self.texts.get(path).map(|t| &t.tex).unwrap_or(&self.missing);
         }
         match self.textures.get(&(path.to_string(), pixel)) {
             Some(Ok(t)) => t,
@@ -913,15 +1025,21 @@ impl Renderer {
         pass.set_vertex_buffer(0, self.quad.vb.slice(..));
         pass.set_vertex_buffer(1, self.instances.as_ref().unwrap().slice(..));
         pass.set_index_buffer(self.quad.ib.slice(..), wgpu::IndexFormat::Uint32);
-        let mut current = None;
-        for (tex, px, blend, start, count) in batches {
-            if current != Some(*blend) {
-                pass.set_pipeline(match blend {
+        let mut current: Option<(Blend, &str)> = None;
+        for (tex, px, blend, start, count, shader) in batches {
+            if current != Some((*blend, shader.as_str())) {
+                let builtin = match blend {
                     Blend::Normal => &self.sprite_pipe,
                     Blend::Add => &self.sprite_add_pipe,
                     Blend::Multiply => &self.sprite_mul_pipe,
-                });
-                current = Some(*blend);
+                };
+                // A custom shader that didn't build draws as a plain sprite.
+                let p = match self.sprite_custom.get(&(shader.clone(), *blend)) {
+                    Some(Ok(p)) if !shader.is_empty() => p,
+                    _ => builtin,
+                };
+                pass.set_pipeline(p);
+                current = Some((*blend, shader.as_str()));
             }
             pass.set_bind_group(1, &self.tex(tex, *px).bind, &[]);
             pass.draw_indexed(0..self.quad.count, 0, *start..start + count);
@@ -957,9 +1075,56 @@ impl Renderer {
         let sprite_pixel = gs.sprite_filter != "smooth";
         let mesh_pixel = gs.texture_filter == "pixel";
         // Load what this frame needs.
+        self.frame_no += 1;
         for s in &list.sprites {
             self.ensure_texture(device, queue, vfs, &s.texture, s.pixel.unwrap_or(sprite_pixel));
+            if !s.shader.is_empty() {
+                self.ensure_sprite_shader(device, vfs, &s.shader, s.blend);
+            }
         }
+        // 2D labels become pictures of their text, drawn with the sprites (in layer order).
+        let mut text_sprites: Vec<gex_core::render::Sprite> = Vec::new();
+        if cams.draw_2d {
+            // Picture pixels per world pixel: the view's zoom times the resolution.
+            let zoom = (cams.view_proj_2d.x_axis.x * size[0] as f32 / 2.0).abs().max(1e-4);
+            for l in &list.labels {
+                if l.text.is_empty() || l.color[3] <= 0.0 {
+                    continue;
+                }
+                let k = l.model.x_axis.truncate().length().max(l.model.y_axis.truncate().length()).max(1e-4);
+                // Kept to steps (a quarter octave), so zooming doesn't make a new picture every frame.
+                let want = (zoom * k).clamp(0.05, 16.0);
+                let mut scale = 2f32.powf((want.log2() * 4.0).round() / 4.0);
+                // At most 4096 pixels across.
+                let longest = l.text.lines().map(|t| t.chars().count()).max().unwrap_or(1).max(1) as f32;
+                if longest * l.size * 0.7 * scale > 4096.0 {
+                    scale = 4096.0 / (longest * l.size * 0.7);
+                }
+                let tinted = !l.text.contains("[color=");
+                let key = self.ensure_text(device, queue, vfs, l, scale, tinted);
+                let t = &self.texts[&key];
+                let (w, h) = (t.size[0] as f32 / t.scale, t.size[1] as f32 / t.scale);
+                let pad = t.pad / t.scale;
+                // The anchor point of the text block (without the padding) sits at the label's position.
+                let inner = gex_core::glam::Vec2::new(w - pad * 2.0, h - pad * 2.0);
+                let off = -(l.anchor * inner) - gex_core::glam::Vec2::splat(pad);
+                let color = if tinted { l.color } else { [1.0, 1.0, 1.0, l.color[3]] };
+                text_sprites.push(gex_core::render::Sprite {
+                    object: l.object,
+                    model: l.model * Mat4::from_translation(off.extend(0.0)),
+                    size: gex_core::glam::Vec2::new(w, h),
+                    color,
+                    texture: key,
+                    layer: l.layer,
+                    pixel: Some(false),
+                    lit: false,
+                    ..Default::default()
+                });
+            }
+        }
+        // Text pictures not shown for a while go (text that changes often would pile up).
+        let now = self.frame_no;
+        self.texts.retain(|_, t| now - t.used < 120);
         for l in &list.lights_2d {
             self.ensure_texture(device, queue, vfs, &l.texture, true);
         }
@@ -1250,17 +1415,40 @@ impl Renderer {
                 vis_hi = vis_hi.max(p);
             }
             let cam_c = list.camera2d.map(|c| c.center).unwrap_or_default();
-            let push = |inst: &mut Vec<Instance>, batches: &mut Vec<SpriteBatch>, model: Mat4, color: [f32; 4], uv: [f32; 4], tex: &str, pixel: bool, blend: Blend| {
+            let push = |inst: &mut Vec<Instance>, batches: &mut Vec<SpriteBatch>, model: Mat4, color: [f32; 4], uv: [f32; 4], tex: &str, pixel: bool, blend: Blend, fx: ([f32; 4], [f32; 4], &str)| {
                 let start = inst.len() as u32;
-                inst.push(Instance::flat(model, color, uv));
+                let mut i = Instance::flat(model, color, uv);
+                i.mat = fx.0;
+                i.extra0 = fx.1;
+                inst.push(i);
                 match batches.last_mut() {
-                    Some(b) if b.0 == tex && b.1 == pixel && b.2 == blend => b.4 += 1,
-                    _ => batches.push((tex.to_string(), pixel, blend, start, 1)),
+                    Some(b) if b.0 == tex && b.1 == pixel && b.2 == blend && b.5 == fx.2 => b.4 += 1,
+                    _ => batches.push((tex.to_string(), pixel, blend, start, 1, fx.2.to_string())),
                 }
             };
-            for s in &list.sprites {
+            // The sprites and the text pictures, merged in layer order (text after sprites of
+            // the same layer).
+            let mut merged: Vec<&gex_core::render::Sprite> = Vec::with_capacity(list.sprites.len() + text_sprites.len());
+            {
+                let (mut a, mut b) = (list.sprites.iter().peekable(), text_sprites.iter().peekable());
+                loop {
+                    match (a.peek(), b.peek()) {
+                        (Some(x), Some(y)) => {
+                            if x.layer <= y.layer {
+                                merged.push(a.next().unwrap());
+                            } else {
+                                merged.push(b.next().unwrap());
+                            }
+                        }
+                        (Some(_), None) => merged.push(a.next().unwrap()),
+                        (None, Some(_)) => merged.push(b.next().unwrap()),
+                        (None, None) => break,
+                    }
+                }
+            }
+            for s in merged {
                 // Unit quad → sprite rectangle (optionally centered), then the object's transform.
-                let off = if s.centered { Vec3::new(-0.5 * s.size.x, -0.5 * s.size.y, 0.0) } else { Vec3::ZERO };
+                let off = (-s.pivot * s.size).extend(0.0);
                 let local = Mat4::from_translation(off) * Mat4::from_scale(Vec3::new(s.size.x, s.size.y, 1.0));
                 let pixel = s.pixel.unwrap_or(sprite_pixel);
                 let tex_size = self.tex(&s.texture, pixel).size;
@@ -1298,18 +1486,18 @@ impl Renderer {
                     for ky in y0..=y1 {
                         for kx in x0..=x1 {
                             let t = Mat4::from_translation(Vec3::new(kx as f32 * size.x, ky as f32 * size.y, 0.0));
-                            push(&mut inst, batches, t * model, color, uv, &s.texture, pixel, s.blend);
+                            push(&mut inst, batches, t * model, color, uv, &s.texture, pixel, s.blend, (s.effects, s.values, &s.shader));
                         }
                     }
                 } else {
-                    push(&mut inst, batches, model, color, uv, &s.texture, pixel, s.blend);
+                    push(&mut inst, batches, model, color, uv, &s.texture, pixel, s.blend, (s.effects, s.values, &s.shader));
                 }
             }
             if lit_2d {
                 for l in &list.lights_2d {
                     let model = Mat4::from_translation(Vec3::new(l.pos.x - l.radius, l.pos.y - l.radius, 0.0)) * Mat4::from_scale(Vec3::new(l.radius * 2.0, l.radius * 2.0, 1.0));
                     let tex = if l.texture.is_empty() { "@glow" } else { l.texture.as_str() };
-                    push(&mut inst, &mut light_batches, model, srgb_to_linear(l.color), [0.0, 0.0, 1.0, 1.0], tex, true, Blend::Add);
+                    push(&mut inst, &mut light_batches, model, srgb_to_linear(l.color), [0.0, 0.0, 1.0, 1.0], tex, true, Blend::Add, ([0.0; 4], [0.0; 4], ""));
                 }
             }
         }
@@ -1415,7 +1603,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.quad.vb.slice(..));
                 pass.set_vertex_buffer(1, self.instances.as_ref().unwrap().slice(..));
                 pass.set_index_buffer(self.quad.ib.slice(..), wgpu::IndexFormat::Uint32);
-                for (tex, px, _, start, count) in &light_batches {
+                for (tex, px, _, start, count, _) in &light_batches {
                     pass.set_bind_group(1, &self.tex(tex, *px).bind, &[]);
                     pass.draw_indexed(0..self.quad.count, 0, *start..start + count);
                 }
@@ -1666,6 +1854,10 @@ fn region_uv(r: gex_core::render::Region, tex: [u32; 2]) -> [f32; 4] {
             // A hair inside the tile, so neighbours don't bleed in.
             let e = 0.01;
             [(c * w + e) / tw, (r * h + e) / th, ((c + 1.0) * w - e) / tw, ((r + 1.0) * h - e) / th]
+        }
+        Region::Rect { x, y, w, h } => {
+            let (tw, th) = (tex[0].max(1) as f32, tex[1].max(1) as f32);
+            [x / tw, y / th, (x + w) / tw, (y + h) / th]
         }
     }
 }
