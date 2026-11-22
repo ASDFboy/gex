@@ -1,11 +1,17 @@
-**Windows:** download `GEX.zip`, unzip it and run `GEX.exe`. It's one file with no installer; the docs, templates and a demo game are built in. GEX updates itself when it starts (View → Updates).
+**Windows:** download `GEX.zip`, unzip it and run `GEX.exe`. It's one file with no installer; the docs and templates are built in. GEX updates itself when it starts (Settings → Updates).
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
+
+New in 0.4.0 (GitHub for the whole of GEX):
+- GEX settings (Settings on the start screen, File → GEX settings in a project): sign in to GitHub once, for every project; and the update settings, which used to be in the View menu.
+- New projects can be kept on GitHub: tick "Keep it on GitHub" (on by default once signed in; changeable in GEX settings). An existing project: Project settings → GitHub. A project kept on GitHub stays linked and saves to and loads from it by itself whenever it's open.
+- Projects on your GitHub that aren't on this computer yet are listed on the start screen with your own; one click gets and opens them. The separate "From GitHub" window is gone.
+- New projects start empty: the sample 2D game, 3D game and demo games are gone.
 
 New in 0.3.9 (polish):
 - Tabs: the one showing is taller and darker, the others shorter and lighter. The 2D/3D buttons are one switch (blueprints with only 2D things in them stay in 2D).
 - Arrows (→) and other symbols show everywhere instead of empty boxes.
-- Start screen: projects listed by when they were last worked on; new projects can start as a 2D game or a 3D game (a player that moves and jumps), as well as empty or the demo games.
+- Start screen: projects listed by when they were last worked on.
 - Inspector: property names in words ("Border color"; scripts' names in the tooltip), numbers without stray decimals, rotation as "45°", colors with an edge and their hex value. Selected UI objects are outlined. The object list gets more room.
 - Rename objects with F2 or a double-click; Cut, Copy, Paste and Select all in the Edit menu and the right-click menu, with their shortcuts. Shortcuts (Delete, F2, Ctrl+C...) work right after clicking in the object list.
 - File → Open project (recent ones, or a folder); closing or switching projects saves first.

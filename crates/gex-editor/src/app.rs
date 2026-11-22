@@ -35,8 +35,11 @@ pub struct EditorApp {
     collab_panel: crate::collab::Panel,
     /// Joining someone's project: its files are on their way.
     joining: Option<crate::collab::Session>,
-    /// File → Sync with GitHub (and From GitHub on the start screen).
+    /// GitHub: the account (GEX settings), linking (Project settings → GitHub), the projects
+    /// on GitHub (the start screen).
     github: crate::github::Panel,
+    /// The GEX settings window, open at a page (0 GitHub, 1 Updates).
+    gex_settings: Option<usize>,
     /// The open project's syncing with GitHub (when it's linked), and the project it was
     /// looked for in.
     syncer: Option<crate::github::Syncer>,
@@ -66,6 +69,9 @@ pub fn mouse_motion(i: &egui::InputState) -> [f32; 2] {
     }
     d
 }
+
+/// Project settings' GitHub page.
+const GITHUB_TAB: usize = 6;
 
 #[derive(Default)]
 struct SettingsForm {
@@ -110,6 +116,7 @@ impl EditorApp {
             collab_panel: Default::default(),
             joining: None,
             github: Default::default(),
+            gex_settings: None,
             syncer: None,
             sync_looked: None,
         };
@@ -128,17 +135,25 @@ impl EditorApp {
         self.sync_looked = None;
     }
 
-    /// Syncing with GitHub: started for a linked project, results in, the window.
+    /// Syncing with GitHub: started for a linked project, and results in.
     fn github(&mut self, ctx: &egui::Context) {
-        let Some(st) = &mut self.st else {
-            self.github.show_start(ctx, std::path::Path::new(self.launcher.location.trim()));
-            if let Some(d) = self.github.got.take() {
-                self.open_project(&d);
+        self.github.update(ctx, self.st.as_mut(), &mut self.syncer);
+        if let Some(d) = self.github.got.take() {
+            if let Some(st) = &mut self.st {
+                st.stop();
+                st.save_all();
+                self.ws.save(&st.project.dir);
             }
-            return;
-        };
+            self.open_project(&d);
+        }
+        let Some(st) = &mut self.st else { return };
+        if std::mem::take(&mut self.github.link_failed) {
+            st.show_settings = true;
+            self.settings.tab = GITHUB_TAB;
+        }
         if self.sync_looked.as_deref() != Some(st.project.dir.as_path()) {
             self.sync_looked = Some(st.project.dir.clone());
+            self.github.project_changed();
             // (A copy joined through Work together is the sharer's to sync, not this computer's.)
             let joined = st.collab.as_ref().is_some_and(|c| !c.host);
             self.syncer = crate::github::link_of(&st.project.dir).filter(|_| !joined).map(|l| crate::github::Syncer::start(ctx, &st.project.dir, l));
@@ -146,11 +161,12 @@ impl EditorApp {
         if let Some(s) = &mut self.syncer {
             s.tick(ctx, st);
         }
-        self.github.show_project(ctx, st, &mut self.syncer);
     }
 
     fn open_project(&mut self, dir: &std::path::Path) {
         self.stop_sync();
+        // (The start screen lists it first when it's back.)
+        self.launcher.refresh();
         match Project::open(dir) {
             Ok(mut p) => {
                 // Half-Life 2, mounted once, is mounted in every project.
@@ -182,19 +198,20 @@ impl EditorApp {
     }
 
     fn launcher(&mut self, ui: &mut egui::Ui) {
-        if let Some(dir) = self.launcher.show(ui) {
+        if let Some(dir) = self.launcher.show(ui, &mut self.github) {
             self.open_project(&dir);
+            // Made to be kept on GitHub: linked in the background, then it syncs.
+            if let Some((d, name)) = self.launcher.link.take() {
+                if self.st.as_ref().is_some_and(|st| st.project.dir == d) {
+                    self.github.link(ui.ctx(), &d, &name);
+                }
+            }
         }
         if std::mem::take(&mut self.launcher.join) {
             self.collab_panel.open = true;
         }
-        if std::mem::take(&mut self.launcher.updates) {
-            self.updater.window = true;
-        }
-        if std::mem::take(&mut self.launcher.github) {
-            self.github.open = true;
-            self.github.error.clear();
-            self.github.repos = None;
+        if std::mem::take(&mut self.launcher.settings) {
+            self.gex_settings = Some(0);
         }
     }
 
@@ -239,7 +256,7 @@ impl EditorApp {
     }
 
     /// Updates: a bar when there's a new version (to install, or installed), and the Updates
-    /// window (View → Updates).
+    /// page (GEX settings → Updates).
     fn update_bar(&mut self, ui: &mut egui::Ui) {
         use crate::update::State;
         let progress = self.updater.poll();
@@ -248,7 +265,7 @@ impl EditorApp {
             State::Downloading(_) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)),
             _ => {}
         }
-        self.updates_window(ui.ctx());
+        self.gex_settings_window(ui.ctx());
         let (rel, ready) = match self.updater.state.clone() {
             State::Available(r) => (r, false),
             State::Downloading(r) => (r, false),
@@ -296,15 +313,28 @@ impl EditorApp {
         });
     }
 
-    fn updates_window(&mut self, ctx: &egui::Context) {
+    /// GEX settings (the start screen's Settings, File → GEX settings): for every project on
+    /// this computer. Its Updates page is also where the update bar's "What's new" goes.
+    fn gex_settings_window(&mut self, ctx: &egui::Context) {
         use crate::update::{Mode, State};
-        if !self.updater.window {
-            return;
+        if std::mem::take(&mut self.updater.window) {
+            self.gex_settings = Some(1);
         }
+        let Some(mut tab) = self.gex_settings else {
+            self.updater.notes = false;
+            return;
+        };
         let mut open = true;
-        egui::Window::new("Updates").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
-            ui.set_width(420.0);
+        egui::Window::new("GEX settings").open(&mut open).resizable(false).collapsible(false).default_width(460.0).show(ctx, |ui| {
+            theme::fade_in(ui);
+            ui.set_width(460.0);
+            theme::tab_row(ui, &["GitHub", "Updates"], &mut tab);
+            if tab == 0 {
+                self.github.account_page(ui);
+                return;
+            }
             let u = &mut self.updater;
+            theme::title(ui, "Updates");
             ui.label(RichText::new(format!("GEX {}", crate::update::VERSION)).strong().color(theme::TEXT));
             let status = match &u.state {
                 State::Off => "Not checked.".to_string(),
@@ -324,7 +354,7 @@ impl EditorApp {
             if u.settings.mode != before {
                 u.settings.save();
             }
-            ui.label(RichText::new("GEX checks GitHub (ASDFboy/gex) when it starts and every 6 hours. Downloads are checked against the release's SHA-256 list before they're used. For every project on this computer.").small().color(theme::TEXT_DIM));
+            ui.label(RichText::new("GEX checks GitHub (ASDFboy/gex) when it starts and every 6 hours. Downloads are checked against the release's SHA-256 list before they're used. The old version is removed once the new one runs.").small().color(theme::TEXT_DIM));
             ui.horizontal(|ui| {
                 if ui.add_enabled(!matches!(u.state, State::Checking | State::Downloading(_) | State::Ready(_)), egui::Button::new("Check now")).clicked() {
                     u.settings.skip = None;
@@ -349,10 +379,7 @@ impl EditorApp {
                 });
             }
         });
-        if !open {
-            self.updater.window = false;
-            self.updater.notes = false;
-        }
+        self.gex_settings = open.then_some(tab);
     }
 
     fn menu(&mut self, ui: &mut egui::Ui) {
@@ -417,7 +444,7 @@ impl EditorApp {
                         }
                         ui.close();
                     }
-                    if ui.button("Start screen (new project, From GitHub…)").clicked() {
+                    if ui.button("Start screen").tip("Your projects (and the ones on your GitHub), and making a new one").clicked() {
                         st.stop();
                         close = true;
                         ui.close();
@@ -435,8 +462,9 @@ impl EditorApp {
                     self.collab_panel.open = true;
                     ui.close();
                 }
-                if ui.button("Sync with GitHub…").tip("Keep this project the same on all your computers, through a private repository on your GitHub account").clicked() {
-                    self.github.open = true;
+                if ui.button(if self.syncer.is_some() { "Kept on GitHub…" } else { "Keep on GitHub…" }).tip("Keep this project the same on all your computers, through a private repository on your GitHub account (Project settings → GitHub)").clicked() {
+                    st.show_settings = true;
+                    self.settings.tab = GITHUB_TAB;
                     ui.close();
                 }
                 if ui.button("Export game…").tip("A folder with the game, ready to run or share").clicked() {
@@ -447,6 +475,11 @@ impl EditorApp {
                     st.show_settings = true;
                     ui.close();
                 }
+                if ui.button("GEX settings…").tip("For every project on this computer: your GitHub sign-in, and updates").clicked() {
+                    self.gex_settings = Some(0);
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Close project").tip("Saves what's changed and goes back to the start screen.").clicked() {
                     st.stop();
                     close = true;
@@ -512,10 +545,6 @@ impl EditorApp {
                 ui.checkbox(&mut self.ws.show_assets, "Assets").tip("Shows or hides the Assets panel.");
                 ui.checkbox(&mut self.ws.show_console, "Console").tip("Shows or hides the Console panel.");
                 ui.separator();
-                if ui.button("Updates…").tip("Whether GEX updates itself, and checking for a new version now").clicked() {
-                    self.updater.window = true;
-                    ui.close();
-                }
                 for t in ["Timeline", "Profiler"] {
                     if ui.button(t).clicked() {
                         self.ws.open_tool(t);
@@ -570,7 +599,8 @@ impl EditorApp {
                         _ => format!("Kept in sync through github.com/{}/{}. Click for more.", s.link.owner, s.link.repo),
                     };
                     if ui.add(egui::Label::new(RichText::new(word).small().color(color)).sense(egui::Sense::click())).tip(tip).clicked() {
-                        self.github.open = true;
+                        st.show_settings = true;
+                        self.settings.tab = GITHUB_TAB;
                     }
                 }
                 if crate::collab::people_bar(ui, st) {
@@ -607,8 +637,7 @@ impl EditorApp {
             self.st = None;
             // The project's windows go with it.
             self.collab_panel.open = false;
-            self.github.open = false;
-            self.updater.window = false;
+            self.github.project_changed();
         }
     }
 
@@ -799,6 +828,7 @@ impl EditorApp {
             return;
         }
         let f = &mut self.settings;
+        let (gh, syncer) = (&mut self.github, &mut self.syncer);
         if !f.loaded {
             f.loaded = true;
             f.before = Some(st.project.config.clone());
@@ -824,7 +854,11 @@ impl EditorApp {
         let mut cancel = false;
         egui::Window::new("Project settings").collapsible(false).open(&mut open).default_width(560.0).default_height(560.0).show(ctx, |ui| {
             theme::fade_in(ui);
-            theme::tab_row(ui, &["General", "Display", "Graphics", "Physics", "Input", "Half-Life 2"], &mut f.tab);
+            theme::tab_row(ui, &["General", "Display", "Graphics", "Physics", "Input", "Half-Life 2", "GitHub"], &mut f.tab);
+            if f.tab == GITHUB_TAB {
+                gh.project_page(ui, st, syncer);
+                return;
+            }
             if (1..=3).contains(&f.tab) {
                 let (display, graphics) = (f.tab == 1, f.tab == 2);
                 ui.label(

@@ -10,10 +10,10 @@ By ASDFboy. **[Website](https://asdfboy.github.io/gex/) · [Download](https://gi
 ## Run it
 
 On Windows, download `GEX.zip` from [Releases](https://github.com/ASDFboy/gex/releases/latest), unzip it and run
-`GEX.exe`. It's one file with no installer; the docs, templates and demo game are inside it.
+`GEX.exe`. It's one file with no installer; the docs and templates are inside it.
 
 ```
-gex                       the project library (new / open / demo)
+gex                       the start screen (your projects, new, open)
 gex <project folder>      open a project in the editor
 gex --play <folder>       run a project's main blueprint, no editor
 ```
@@ -22,7 +22,7 @@ Build from source (Rust 1.85+):
 
 ```
 cargo run --release -p gex-editor              # the editor
-cargo test --workspace                         # everything's tests, including the demo game
+cargo test --workspace                         # everything's tests
 ```
 
 To export games for other systems, put their GEX players in a `players` folder next to the
@@ -32,20 +32,23 @@ to each release as `gex-linux`.
 
 GEX keeps itself up to date: when the editor starts (and every 6 hours) it checks this
 repository's latest release; a newer one is downloaded, checked against the release's SHA-256
-list, put in place and a restart offered. View → Updates chooses whether it installs by itself,
+list, put in place and a restart offered. Settings → Updates (on the start screen, or File → GEX settings) chooses whether it installs by itself,
 asks first or doesn't check; the old version is removed once the new one starts. It uses the system's `curl`,
 which Windows 10 and later have.
 
-**On several computers.** File → Sync with GitHub keeps a project the same everywhere: GEX
-keeps it in a private repository on your GitHub account, sends what you save (checked every 20
-seconds) and brings in what you did on your other computers (when the project opens, every two
-minutes, and when it closes). On the other computer, From GitHub on the start screen gets it.
-It uses Git (Git for Windows signs in to GitHub once, in the browser; GEX can install it with
-winget). GEX's own per-computer state (`.gex/`), `export/` and files over 95 MB stay on each
-computer; changes from elsewhere wait while something here is unsaved; and when both computers
-changed the same lines without syncing, the newer change is kept and the other is put in
-"<project> (sync conflicts)" beside the project. Each computer keeps its own Half-Life 2 and
-asset-folder locations.
+**On several computers.** Sign in to GitHub once in Settings (on the start screen, or File →
+GEX settings), and tick **Keep it on GitHub** when making a project (or use Project settings →
+GitHub for one you have). That project then lives in a private repository on your GitHub
+account and saves to and loads from it by itself whenever it's open: what you save goes up
+(checked every 20 seconds) and what you did on your other computers comes in (when the project
+opens, every two minutes, and when it closes). On your other computers, signed in to the same
+account, it's listed on the start screen; one click gets it. It uses Git (Git for Windows
+signs in to GitHub in the browser and keeps the sign-in; GEX only remembers who you are, and
+can install Git with winget). GEX's own per-computer state (`.gex/`), `export/` and files over
+95 MB stay on each computer; changes from elsewhere wait while something here is unsaved; and
+when both computers changed the same lines without syncing, the newer change is kept and the
+other is put in "<project> (sync conflicts)" beside the project. Each computer keeps its own
+Half-Life 2 and asset-folder locations.
 
 New releases are built by GitHub: raise the version in `Cargo.toml` and push to `main` (or push the
 `release` branch, or run Actions → Release) and it builds Windows and Linux, runs the tests, and

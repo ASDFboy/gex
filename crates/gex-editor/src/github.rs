@@ -131,12 +131,13 @@ fn why(e: &str) -> String {
     let l = e.to_ascii_lowercase();
     if l.contains("authentication") || l.contains("could not read username") || l.contains("terminal prompts disabled") || l.contains("403") || l.contains("401") || l.contains("logon failed") {
         format!("{}{}", SIGN_IN, e.lines().last().unwrap_or(""))
-    } else if l.contains("repository not found") || l.contains("not found") && l.contains("repository") {
+    } else if l.contains("repository not found") || l.contains("not found") && l.contains("repository") || l.contains("does not appear to be a git repository") {
         "the repository isn't on GitHub any more (deleted or renamed?)".into()
     } else if l.contains("could not resolve host") || l.contains("unable to access") || l.contains("timed out") || l.contains("connection") || l.contains("network") {
         format!("{}{}", OFFLINE, e.lines().last().unwrap_or(""))
     } else {
-        e.lines().last().unwrap_or(e).to_string()
+        // The line that says what failed (git's "fatal: ..."), not the advice after it.
+        e.lines().find_map(|l| l.strip_prefix("fatal: ")).or_else(|| e.lines().last()).unwrap_or(e).to_string()
     }
 }
 
@@ -159,8 +160,9 @@ fn git_ok(dir: &Path, args: &[&str]) -> bool {
 }
 
 /// The GitHub sign-in Git keeps (Git Credential Manager signs in, in the browser, the first time).
-fn token() -> Result<String, String> {
-    let mut c = git_signin_cmd(&std::env::temp_dir())?;
+/// `ask`: may open the sign-in (for what the person asked for); otherwise only what Git has.
+fn token(ask: bool) -> Result<String, String> {
+    let mut c = if ask { git_signin_cmd(&std::env::temp_dir())? } else { git_cmd(&std::env::temp_dir())? };
     let mut child = c.args(["credential", "fill"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't run git: {}", e))?;
     {
         use std::io::Write;
@@ -175,7 +177,7 @@ fn token() -> Result<String, String> {
         .find_map(|l| l.strip_prefix("password="))
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| "couldn't sign in to GitHub (Git for Windows signs in through the browser; elsewhere, set up a Git credential helper, e.g. with `gh auth setup-git`)".to_string())?;
+        .ok_or_else(|| if !ask { format!("{}Git has no GitHub sign-in", SIGN_IN) } else { "couldn't sign in to GitHub (Git for Windows signs in through the browser; elsewhere, set up a Git credential helper, e.g. with `gh auth setup-git`)".to_string() })?;
     *SIGNED_IN.lock().unwrap_or_else(|e| e.into_inner()) = user;
     Ok(t)
 }
@@ -474,8 +476,11 @@ fn settle(dir: &Path, l: &Link, theirs: &str) -> Result<Vec<String>, String> {
 /// Links a project to a new private repository (or an empty one with that name) and sends it.
 fn link(dir: &Path, name: &str, say: &dyn Fn(&str)) -> Result<Link, String> {
     say("Signing in to GitHub (a browser window may open)…");
-    let t = token()?;
+    let t = token(true)?;
     let (login, email) = account(&t)?;
+    if signed_in().is_none_or(|a| a.login != login) {
+        save_account(&Account { login: login.clone(), email: email.clone(), new_projects: true });
+    }
     say("Making the private repository…");
     let (code, body) = api_body(&t, "POST", "/user/repos", &serde_json::json!({"name": name, "private": true, "description": "A GEX project", "has_issues": false, "has_wiki": false, "has_projects": false}))?;
     match code {
@@ -486,7 +491,7 @@ fn link(dir: &Path, name: &str, say: &dyn Fn(&str)) -> Result<Link, String> {
             // Or this project's own (linked before, then syncing was stopped here).
             let ours = git(dir, &["remote", "get-url", REMOTE]).is_ok_and(|u| u.trim().trim_end_matches(".git").eq_ignore_ascii_case(&format!("https://github.com/{}/{}", login, name)));
             if !ours && (c != 200 || r.get("size").and_then(|s| s.as_u64()).unwrap_or(1) > 0) {
-                return Err(format!("you already have a repository called {} with something in it: pick another name (or, to get that one, use From GitHub on the start screen)", name));
+                return Err(format!("you already have a repository called {} with something in it: pick another name (to get that one, it's listed on the start screen)", name));
             }
         }
         _ => return Err(api_error("couldn't make the repository", code, &body)),
@@ -521,7 +526,7 @@ fn link(dir: &Path, name: &str, say: &dyn Fn(&str)) -> Result<Link, String> {
     Ok(l)
 }
 
-/// A GEX project on GitHub (for From GitHub).
+/// A GEX project on GitHub.
 #[derive(Clone, Debug)]
 pub struct Repo {
     pub owner: String,
@@ -529,11 +534,10 @@ pub struct Repo {
     pub pushed: String,
 }
 
-fn list_repos(say: &dyn Fn(&str)) -> Result<(Vec<Repo>, String), String> {
-    say("Signing in to GitHub (a browser window may open)…");
-    let t = token()?;
+/// The GEX projects on the signed-in account (`ask`: may open the sign-in), and its email.
+fn list_repos(ask: bool) -> Result<(Vec<Repo>, String), String> {
+    let t = token(ask)?;
     let (_, email) = account(&t)?;
-    say("Looking for your GEX projects…");
     let mut out = Vec::new();
     for page in 1..=10 {
         let (code, list) = api(&t, "GET", &format!("/user/repos?per_page=100&page={}&affiliation=owner&sort=pushed", page))?;
@@ -753,30 +757,105 @@ fn can_merge(st: &EditorState) -> bool {
     !unsaved(st) && !st.collab.as_ref().is_some_and(|c| c.unsaved_shared(st))
 }
 
-// ---------- windows ----------
+// ---------- the GitHub account GEX is signed in to ----------
 
-/// The Sync with GitHub window (and From GitHub on the start screen).
-#[derive(Default)]
+/// Who GEX is signed in to GitHub as, for every project on this computer. The sign-in itself
+/// stays with Git (Git Credential Manager keeps it safe); this only remembers who it is.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Account {
+    pub login: String,
+    pub email: String,
+    /// New projects are kept on GitHub unless unticked.
+    #[serde(default)]
+    pub new_projects: bool,
+}
+
+fn account_path() -> PathBuf {
+    crate::state::config_dir().join(LINK_FILE)
+}
+
+/// The account GEX is signed in to, if it is.
+pub fn signed_in() -> Option<Account> {
+    ron::from_str(&std::fs::read_to_string(account_path()).ok()?).ok()
+}
+
+pub fn save_account(a: &Account) {
+    let _ = std::fs::create_dir_all(crate::state::config_dir());
+    if let Ok(s) = ron::ser::to_string_pretty(a, Default::default()) {
+        let _ = std::fs::write(account_path(), s);
+    }
+}
+
+/// Signs in (Git opens GitHub's sign-in in the browser when it has none) and remembers who.
+fn sign_in(say: &dyn Fn(&str)) -> Result<Account, String> {
+    say("Signing in to GitHub (a browser window may open)…");
+    let t = token(true)?;
+    let (login, email) = account(&t)?;
+    Ok(signed_in().filter(|a| a.login == login).unwrap_or(Account { login, email, new_projects: true }))
+}
+
+/// Signs out: GEX forgets the account and Git forgets the sign-in (so the next one can be another
+/// account). Projects stay linked; they sync again once signed in.
+fn sign_out() {
+    let who = signed_in().map(|a| a.login).unwrap_or_default();
+    let _ = std::fs::remove_file(account_path());
+    if let Ok(mut c) = git_cmd(&std::env::temp_dir()) {
+        if let Ok(mut child) = c.args(["credential", "reject"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            if let Some(mut i) = child.stdin.take() {
+                use std::io::Write;
+                let user = if who.is_empty() { String::new() } else { format!("username={}\n", who) };
+                let _ = i.write_all(format!("protocol=https\nhost=github.com\n{}\n", user).as_bytes());
+            }
+            let _ = child.wait();
+        }
+    }
+}
+
+// ---------- GitHub in the editor: the account, linking, the projects on GitHub ----------
+
+/// How often the start screen looks again for GEX projects on GitHub.
+const LIST_EVERY: Duration = Duration::from_secs(180);
+
+/// GitHub for the whole editor: the signed-in account (GEX settings), linking the open project
+/// (its settings' GitHub page), and the projects on GitHub not on this computer yet (listed on
+/// the start screen, got with a click).
 pub struct Panel {
-    pub open: bool,
-    name: String,
+    pub account: Option<Account>,
+    /// What the person asked for (signing in, linking, getting a project), one at a time.
     job: Option<Receiver<Msg>>,
     pub status: String,
     pub error: String,
-    pub repos: Option<(Vec<Repo>, String)>,
     installing: bool,
-    /// Got from GitHub: the project to open.
+    /// The repository name typed for linking the open project.
+    name: String,
+    /// The GEX projects on GitHub (looked for in the background while the start screen shows).
+    pub remote: Vec<Repo>,
+    /// Why they couldn't be listed.
+    pub remote_error: String,
+    listing: Option<Receiver<Msg>>,
+    listed: Option<Instant>,
+    /// Which one is being got.
+    pub getting: Option<String>,
+    /// Got from GitHub, or made and linked: the project to open.
     pub got: Option<PathBuf>,
+    /// Linking the open project failed: its GitHub page shows why (and tries again).
+    pub link_failed: bool,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Panel { account: signed_in(), job: None, status: String::new(), error: String::new(), installing: false, name: String::new(), remote: Vec::new(), remote_error: String::new(), listing: None, listed: None, getting: None, got: None, link_failed: false }
+    }
 }
 
 enum Msg {
     Say(String),
-    Linked(Result<Link, String>),
+    Linked(PathBuf, Result<Link, String>),
     Repos(Result<(Vec<Repo>, String), String>),
     Got(Result<PathBuf, String>),
     #[cfg_attr(not(windows), allow(dead_code))]
     Installed(Result<(), String>),
-    SignedIn(Result<(), String>),
+    SignedIn(Result<Account, String>),
 }
 
 fn run(ctx: &egui::Context, f: impl FnOnce(&dyn Fn(&str)) -> Msg + Send + 'static) -> Receiver<Msg> {
@@ -795,21 +874,148 @@ fn run(ctx: &egui::Context, f: impl FnOnce(&dyn Fn(&str)) -> Msg + Send + 'stati
 }
 
 impl Panel {
-    fn poll(&mut self) -> Vec<Msg> {
-        let mut out = Vec::new();
+    /// Another project opened (or none): what was typed and shown for the last one goes.
+    pub fn project_changed(&mut self) {
+        self.name.clear();
+        if self.job.is_none() {
+            self.error.clear();
+        }
+    }
+
+    pub fn busy(&self) -> bool {
+        self.job.is_some()
+    }
+
+    /// Every frame: results in. A project linked while open starts syncing.
+    pub fn update(&mut self, ctx: &egui::Context, st: Option<&mut EditorState>, syncer: &mut Option<Syncer>) {
+        let mut msgs = Vec::new();
         if let Some(rx) = &self.job {
             while let Ok(m) = rx.try_recv() {
                 match m {
                     Msg::Say(s) => self.status = s,
-                    m => out.push(m),
+                    m => msgs.push(m),
                 }
             }
+            if !msgs.is_empty() {
+                self.job = None;
+                self.status.clear();
+            }
         }
-        if !out.is_empty() {
-            self.job = None;
-            self.status.clear();
+        if let Some(rx) = &self.listing {
+            if let Ok(m) = rx.try_recv() {
+                self.listing = None;
+                msgs.push(m);
+            }
         }
-        out
+        let mut st = st;
+        for m in msgs {
+            match m {
+                Msg::Say(_) => {}
+                Msg::Linked(dir, r) => match r {
+                    Ok(l) => {
+                        self.account = signed_in();
+                        self.listed = None;
+                        if let Some(st) = st.as_deref_mut().filter(|st| st.project.dir == dir) {
+                            *syncer = Some(Syncer::start(ctx, &dir, l));
+                            st.status = "Linked to GitHub".into();
+                        }
+                    }
+                    Err(e) => {
+                        self.error = format!("Couldn't keep it on GitHub: {}", e);
+                        if let Some(st) = st.as_deref_mut().filter(|st| st.project.dir == dir) {
+                            self.link_failed = true;
+                            st.log(gex_script::LogKind::Info, format!("Couldn't link this project to GitHub: {}. Try again in Project settings → GitHub.", e));
+                        }
+                    }
+                },
+                Msg::Repos(Ok((list, email))) => {
+                    self.remote = list;
+                    self.remote_error.clear();
+                    if let Some(a) = self.account.as_mut().filter(|a| a.email != email && !email.is_empty()) {
+                        a.email = email;
+                        save_account(a);
+                    }
+                }
+                Msg::Repos(Err(e)) => {
+                    self.remote_error = if e.starts_with(SIGN_IN) || e.starts_with("GitHub didn't accept") { "GitHub wants you to sign in again (Settings → GitHub)".into() } else { e };
+                }
+                Msg::Got(r) => {
+                    self.getting = None;
+                    match r {
+                        Ok(d) => self.got = Some(d),
+                        Err(e) => self.error = e,
+                    }
+                }
+                Msg::Installed(r) => {
+                    self.installing = false;
+                    if let Err(e) = r {
+                        self.error = e;
+                    }
+                }
+                Msg::SignedIn(r) => match r {
+                    Ok(a) => {
+                        save_account(&a);
+                        self.account = Some(a);
+                        self.error.clear();
+                        self.listed = None;
+                        if let (Some(s), Some(st)) = (syncer.as_mut(), st.as_deref()) {
+                            s.problem = None;
+                            s.now(can_merge(st));
+                        }
+                    }
+                    Err(e) => self.error = e,
+                },
+            }
+        }
+    }
+
+    /// While the start screen shows: the GEX projects on GitHub, looked for now and then (only
+    /// when signed in; never opens a sign-in window).
+    pub fn keep_listing(&mut self, ctx: &egui::Context) {
+        if self.account.is_none() || self.listing.is_some() || self.listed.is_some_and(|t| t.elapsed() < LIST_EVERY) || git_exe().is_none() {
+            return;
+        }
+        self.listed = Some(Instant::now());
+        #[cfg(debug_assertions)]
+        if let Ok(f) = std::env::var("GEX_FAKE_REMOTE") {
+            let list = f.split(',').filter_map(|r| r.split_once('/')).map(|(o, n)| Repo { owner: o.into(), name: n.into(), pushed: "2026-11-20".into() }).collect();
+            self.listing = Some(run(ctx, move |_| Msg::Repos(Ok((list, String::new())))));
+            return;
+        }
+        self.listing = Some(run(ctx, |_| Msg::Repos(list_repos(false))));
+    }
+
+    pub fn listing(&self) -> bool {
+        self.listing.is_some()
+    }
+
+    /// Gets a project from GitHub into `base` (then it opens).
+    pub fn get(&mut self, ctx: &egui::Context, r: Repo, base: &Path) {
+        if self.job.is_some() {
+            return;
+        }
+        self.error.clear();
+        let email = self.account.as_ref().map(|a| a.email.clone()).unwrap_or_default();
+        self.getting = Some(format!("{}/{}", r.owner, r.name));
+        let base = base.to_path_buf();
+        self.job = Some(run(ctx, move |say| Msg::Got(get(&r, &email, &base, say))));
+    }
+
+    /// Links a project (just made, or open) to a new private repository, in the background.
+    pub fn link(&mut self, ctx: &egui::Context, dir: &Path, name: &str) {
+        if self.job.is_some() {
+            return;
+        }
+        self.error.clear();
+        let (dir, name) = (dir.to_path_buf(), repo_name(name));
+        self.job = Some(run(ctx, move |say| Msg::Linked(dir.clone(), link(&dir, &name, say))));
+    }
+
+    pub fn start_sign_in(&mut self, ctx: &egui::Context) {
+        if self.job.is_none() {
+            self.error.clear();
+            self.job = Some(run(ctx, |say| Msg::SignedIn(sign_in(say))));
+        }
     }
 
     fn git_missing(&mut self, ui: &mut egui::Ui) {
@@ -849,179 +1055,124 @@ impl Panel {
         }
     }
 
-    /// File → Sync with GitHub: link the open project, or see how its syncing goes.
-    pub fn show_project(&mut self, ctx: &egui::Context, st: &mut EditorState, syncer: &mut Option<Syncer>) {
-        for m in self.poll() {
-            match m {
-                Msg::Linked(Ok(l)) => {
-                    *syncer = Some(Syncer::start(ctx, &st.project.dir, l));
-                }
-                Msg::Linked(Err(e)) | Msg::SignedIn(Err(e)) => self.error = e,
-                Msg::SignedIn(Ok(())) => {
-                    if let Some(s) = syncer.as_mut() {
-                        s.problem = None;
-                        s.now(can_merge(st));
-                    }
-                }
-                Msg::Installed(r) => {
-                    self.installing = false;
-                    if let Err(e) = r {
-                        self.error = e;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if !self.open {
+    /// GEX settings → GitHub: signing in and out, for every project on this computer.
+    pub fn account_page(&mut self, ui: &mut egui::Ui) {
+        theme::title(ui, "GitHub");
+        ui.label(RichText::new("Signed in, GEX can keep projects in private repositories on your GitHub account, so each one is the same on all your computers: what you save goes up on its own, and what you did on another computer comes in when the project opens and every couple of minutes. Projects on your GitHub that aren't on this computer yet are listed on the start screen.").small().color(theme::TEXT_DIM));
+        ui.add_space(6.0);
+        if git_exe().is_none() {
+            self.git_missing(ui);
+            self.progress(ui);
             return;
         }
-        let mut open = true;
-        let mut stop = false;
-        egui::Window::new("Sync with GitHub").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
-            ui.set_width(440.0);
-            match syncer {
-                Some(s) => {
-                    ui.horizontal(|ui| {
-                        ui.label("Linked to");
-                        ui.hyperlink_to(format!("{}/{}", s.link.owner, s.link.repo), s.link.url());
-                    });
-                    let (word, color) = s.status();
-                    ui.label(RichText::new(match (&s.problem, s.last_ok) {
-                        (Some(p), _) => format!("{}: {}", word, p),
-                        (None, Some(t)) if !s.syncing() => format!("Synced {} ago.", ago(t.elapsed())),
-                        _ => word,
-                    }).color(color));
-                    if s.waiting {
-                        ui.label(RichText::new("Changes from your other computer are waiting: save what's open here and they come in.").small().color(theme::TEXT_DIM));
-                    }
-                    if !s.too_big.is_empty() {
-                        ui.label(RichText::new(format!("Too big for GitHub (over 95 MB), kept on this computer only: {}", s.too_big.join(", "))).small().color(theme::WARN));
-                    }
-                    if !s.conflicts.is_empty() {
-                        ui.label(RichText::new(format!("Changed on both computers (the other versions are in \"(sync conflicts)\" beside the project): {}", s.conflicts.join(", "))).small().color(theme::WARN));
-                    }
-                    ui.label(RichText::new("What you save goes up on its own, and what you did on your other computers comes in when the project opens and every couple of minutes. On another computer: From GitHub on the start screen.").small().color(theme::TEXT_DIM));
-                    ui.horizontal(|ui| {
-                        if s.problem.as_deref().is_some_and(|p| p.starts_with(SIGN_IN)) {
-                            if ui.add_enabled(self.job.is_none(), egui::Button::new("Sign in to GitHub")).tip("Git opens GitHub's sign-in in your browser").clicked() {
-                                self.error.clear();
-                                self.job = Some(run(ctx, |say| {
-                                    say("Signing in to GitHub (a browser window may open)…");
-                                    Msg::SignedIn(token().and_then(|t| account(&t).map(|_| ())))
-                                }));
-                            }
-                        } else if ui.add_enabled(!s.busy, egui::Button::new("Sync now")).clicked() {
-                            s.now(can_merge(st));
-                        }
-                        if ui.button("Stop syncing").tip("This computer stops syncing this project (the repository and the other computers' copies stay as they are)").clicked() {
-                            stop = true;
-                        }
-                    });
+        let mut out = false;
+        match &mut self.account {
+            Some(a) => {
+                ui.horizontal(|ui| {
+                    ui.label("Signed in as");
+                    ui.hyperlink_to(RichText::new(&a.login).strong(), format!("https://github.com/{}", a.login));
+                });
+                if ui.checkbox(&mut a.new_projects, "Keep new projects on GitHub").tip("Ticks \"Keep it on GitHub\" for new projects (you can still untick it for one)").changed() {
+                    save_account(a);
                 }
-                None => {
-                    ui.label("Keep this project the same on all your computers: GEX keeps it in a private repository on your GitHub account, sends what you save, and brings in what you did elsewhere.");
-                    ui.add_space(4.0);
-                    if git_exe().is_none() {
-                        self.git_missing(ui);
-                    } else {
-                        if self.name.is_empty() {
-                            self.name = repo_name(&st.project.config.name);
-                        }
-                        ui.horizontal(|ui| {
-                            ui.label("Repository");
-                            ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(220.0));
-                            ui.label(RichText::new("(private)").small().color(theme::TEXT_DIM));
-                        });
-                        let busy = self.job.is_some();
-                        if ui.add_enabled(!busy && !self.name.trim().is_empty(), egui::Button::new("Link to GitHub")).clicked() {
-                            st.save_all();
-                            self.error.clear();
-                            let (dir, name) = (st.project.dir.clone(), repo_name(&self.name));
-                            self.job = Some(run(ctx, move |say| Msg::Linked(link(&dir, &name, say))));
-                        }
-                        ui.label(RichText::new("The first time, Git asks you to sign in to GitHub in your browser. Then, on your other computer: From GitHub on the start screen.").small().color(theme::TEXT_DIM));
-                    }
+                if ui.add_enabled(self.job.is_none(), egui::Button::new("Sign out")).tip("GEX and Git on this computer forget the sign-in (so you can sign in as someone else). Linked projects stay linked and sync again once you sign in.").clicked() {
+                    out = true;
                 }
             }
-            self.progress(ui);
-        });
-        if stop {
-            let _ = std::fs::remove_file(link_path(&st.project.dir));
-            *syncer = None;
+            None => {
+                ui.label("Not signed in.");
+                if ui.add_enabled(self.job.is_none(), egui::Button::new("Sign in to GitHub")).tip("Git opens GitHub's sign-in in your browser; the sign-in stays with Git, never in GEX's files").clicked() {
+                    self.start_sign_in(ui.ctx());
+                }
+            }
         }
-        if !open {
-            self.open = false;
+        if out {
+            sign_out();
+            self.account = None;
+            self.remote.clear();
+            self.listed = None;
         }
+        self.progress(ui);
     }
 
-    /// From GitHub, on the start screen: the GEX projects on your GitHub, to get one.
-    pub fn show_start(&mut self, ctx: &egui::Context, base: &Path) {
-        for m in self.poll() {
-            match m {
-                Msg::Repos(Ok(r)) => self.repos = Some(r),
-                Msg::Repos(Err(e)) | Msg::Got(Err(e)) | Msg::Linked(Err(e)) => self.error = e,
-                Msg::Got(Ok(d)) => {
-                    self.got = Some(d);
-                    self.open = false;
-                }
-                Msg::Installed(r) => {
-                    self.installing = false;
-                    if let Err(e) = r {
-                        self.error = e;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if !self.open {
+    /// Project settings → GitHub: link the open project, or see how its syncing goes.
+    pub fn project_page(&mut self, ui: &mut egui::Ui, st: &mut EditorState, syncer: &mut Option<Syncer>) {
+        theme::title(ui, "GitHub");
+        let joined = st.collab.as_ref().is_some_and(|c| !c.host);
+        if joined {
+            ui.label("This is a copy of someone else's project you joined: keeping it on GitHub is up to them.");
             return;
         }
-        let mut open = true;
-        egui::Window::new("From GitHub").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
-            ui.set_width(440.0);
-            if base.as_os_str().is_empty() {
-                ui.label(RichText::new("Choose where projects go first (\"Made in\", under New project).").color(theme::WARN));
-                return;
-            }
-            ui.label("Your projects synced with GitHub (File → Sync with GitHub on the computer that has them). Getting one here keeps it in sync on this computer too.");
-            ui.add_space(4.0);
-            if git_exe().is_none() {
-                self.git_missing(ui);
-            } else if self.repos.is_none() && self.job.is_none() && self.error.is_empty() {
-                self.job = Some(run(ctx, |say| Msg::Repos(list_repos(say))));
-            }
-            let mut pick = None;
-            if let Some((list, _)) = &self.repos {
-                if list.is_empty() {
-                    ui.label(RichText::new("None yet.").color(theme::TEXT_DIM));
+        let ctx = ui.ctx().clone();
+        let mut stop = false;
+        match syncer {
+            Some(s) => {
+                ui.horizontal(|ui| {
+                    ui.label("Kept on GitHub in");
+                    ui.hyperlink_to(format!("{}/{}", s.link.owner, s.link.repo), s.link.url());
+                });
+                let (word, color) = s.status();
+                ui.label(RichText::new(match (&s.problem, s.last_ok) {
+                    (Some(p), _) => format!("{}: {}", word, p),
+                    (None, Some(t)) if !s.syncing() => format!("Synced {} ago.", ago(t.elapsed())),
+                    _ => word,
+                }).color(color));
+                if s.waiting {
+                    ui.label(RichText::new("Changes from your other computer are waiting: save what's open here and they come in.").small().color(theme::TEXT_DIM));
                 }
-                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                    for r in list {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&r.name).strong());
-                            ui.label(RichText::new(format!("changed {}", r.pushed)).small().color(theme::TEXT_DIM));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add_enabled(self.job.is_none(), egui::Button::new("Get")).tip(format!("Into {}", base.display())).clicked() {
-                                    pick = Some(r.clone());
-                                }
-                            });
-                        });
+                if !s.too_big.is_empty() {
+                    ui.label(RichText::new(format!("Too big for GitHub (over 95 MB), kept on this computer only: {}", s.too_big.join(", "))).small().color(theme::WARN));
+                }
+                if !s.conflicts.is_empty() {
+                    ui.label(RichText::new(format!("Changed on both computers (the other versions are in \"(sync conflicts)\" beside the project): {}", s.conflicts.join(", "))).small().color(theme::WARN));
+                }
+                ui.label(RichText::new("It saves to and loads from GitHub by itself whenever it's open, on every computer signed in to your GitHub account (the start screen lists it there). These changes take effect at once.").small().color(theme::TEXT_DIM));
+                ui.horizontal(|ui| {
+                    if s.problem.as_deref().is_some_and(|p| p.starts_with(SIGN_IN)) || self.account.is_none() {
+                        if ui.add_enabled(self.job.is_none(), egui::Button::new("Sign in to GitHub")).tip("Git opens GitHub's sign-in in your browser").clicked() {
+                            self.start_sign_in(&ctx);
+                        }
+                    } else if ui.add_enabled(!s.busy, egui::Button::new("Sync now")).clicked() {
+                        s.now(can_merge(st));
+                    }
+                    if ui.button("Stop keeping it on GitHub").tip("This computer stops syncing this project (the repository and your other computers' copies stay as they are)").clicked() {
+                        stop = true;
                     }
                 });
             }
-            if let (Some(r), Some((_, email))) = (pick, &self.repos) {
-                self.error.clear();
-                let (email, base) = (email.clone(), base.to_path_buf());
-                self.job = Some(run(ctx, move |say| Msg::Got(get(&r, &email, &base, say))));
+            None => {
+                ui.label("Keep this project on GitHub, so it's the same on all your computers: it saves to and loads from a private repository on your GitHub account by itself whenever it's open.");
+                ui.add_space(4.0);
+                if git_exe().is_none() {
+                    self.git_missing(ui);
+                } else if self.account.is_none() {
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(self.job.is_none(), egui::Button::new("Sign in to GitHub")).tip("Git opens GitHub's sign-in in your browser (also in GEX settings)").clicked() {
+                            self.start_sign_in(&ctx);
+                        }
+                        ui.label(RichText::new("first (for every project).").small().color(theme::TEXT_DIM));
+                    });
+                } else {
+                    if self.name.is_empty() {
+                        self.name = repo_name(&st.project.config.name);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Repository");
+                        ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(220.0));
+                        ui.label(RichText::new("(private)").small().color(theme::TEXT_DIM));
+                    });
+                    if ui.add_enabled(self.job.is_none() && !self.name.trim().is_empty(), egui::Button::new("Keep it on GitHub")).clicked() {
+                        st.save_all();
+                        let name = self.name.clone();
+                        self.link(&ctx, &st.project.dir.clone(), &name);
+                    }
+                }
             }
-            if !self.error.is_empty() && self.job.is_none() && ui.button("Try again").clicked() {
-                self.error.clear();
-                self.repos = None;
-            }
-            self.progress(ui);
-        });
-        if !open {
-            self.open = false;
+        }
+        self.progress(ui);
+        if stop {
+            let _ = std::fs::remove_file(link_path(&st.project.dir));
+            *syncer = None;
         }
     }
 }

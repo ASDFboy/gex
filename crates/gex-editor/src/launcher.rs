@@ -14,6 +14,8 @@ struct Entry {
     name: Result<String, String>,
     /// When it was last worked on.
     used: Option<std::time::SystemTime>,
+    /// The GitHub repository it's kept in ("owner/repo", lowercase).
+    repo: Option<String>,
 }
 
 #[derive(Clone)]
@@ -28,7 +30,8 @@ pub struct Launcher {
     name: String,
     /// The folder new projects are made in (each in its own folder inside).
     pub location: String,
-    start: templates::Start,
+    /// Keep the new project on GitHub (when signed in).
+    on_github: Option<bool>,
     #[cfg_attr(windows, allow(dead_code))]
     open_path: String,
     dialog: Option<Dialog>,
@@ -36,10 +39,10 @@ pub struct Launcher {
     pub error: String,
     /// "Join someone" was clicked.
     pub join: bool,
-    /// From GitHub… was clicked.
-    pub github: bool,
-    /// "Updates" was clicked.
-    pub updates: bool,
+    /// "Settings" was clicked.
+    pub settings: bool,
+    /// A project made to be kept on GitHub: (folder, name), to link once it's open.
+    pub link: Option<(PathBuf, String)>,
 }
 
 impl Default for Launcher {
@@ -47,7 +50,7 @@ impl Default for Launcher {
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
         // Where the last project was made, or a "GEX Projects" folder.
         let location = std::fs::read_to_string(state::config_dir().join("projects_dir.txt")).ok().map(|s| s.trim().to_string()).filter(|s| Path::new(s).is_dir()).unwrap_or_else(|| home.join("GEX Projects").to_string_lossy().into_owned());
-        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, start: templates::Start::Starter2D, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false, github: false, updates: false }
+        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, on_github: None, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false, settings: false, link: None }
     }
 }
 
@@ -83,7 +86,8 @@ fn load() -> Vec<Entry> {
         .into_iter()
         .map(|dir| {
             let used = [dir.join(".gex").join("layout.ron"), dir.join(PROJECT_FILE)].iter().filter_map(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok()).max();
-            Entry { name: Project::peek(&dir).map(|c| c.name), dir, used }
+            let repo = crate::github::link_of(&dir).map(|l| format!("{}/{}", l.owner, l.repo).to_lowercase());
+            Entry { name: Project::peek(&dir).map(|c| c.name), dir, used, repo }
         })
         .collect();
     // Last worked on first (the date shown beside each), so the list reads in order; projects
@@ -104,27 +108,25 @@ fn tile(ui: &mut egui::Ui, name: &str, size: f32) {
 }
 
 impl Launcher {
+    /// Reads the project list again next time it shows.
+    pub fn refresh(&mut self) {
+        self.entries = None;
+    }
+
     /// The folder a new project with the typed name would get (never one that's taken).
     fn new_dir(&self) -> PathBuf {
         let base = Path::new(&self.location).join(slug(&self.name));
         (1..1000).map(|i| if i == 1 { base.clone() } else { PathBuf::from(format!("{}-{}", base.display(), i)) }).find(|p| !p.exists()).unwrap_or(base)
     }
 
-    fn create(&mut self) -> Option<PathBuf> {
+    fn create(&mut self, on_github: bool) -> Option<PathBuf> {
         let dir = self.new_dir();
         let name = self.name.trim().to_string();
-        use templates::Start;
-        let made = match self.start {
-            Start::Demo => templates::create_demo(&dir).and_then(|mut p| {
-                p.config.name = name;
-                p.save().map(|_| p)
-            }),
-            Start::Starter2D => templates::create_starter(&dir, &name, false),
-            Start::Starter3D => templates::create_starter(&dir, &name, true),
-            Start::Nothing => templates::create_project(&dir, &name),
-        };
-        match made {
+        match templates::create_project(&dir, &name) {
             Ok(p) => {
+                if on_github {
+                    self.link = Some((p.dir.clone(), name));
+                }
                 let _ = std::fs::create_dir_all(state::config_dir());
                 let _ = std::fs::write(state::config_dir().join("projects_dir.txt"), &self.location);
                 Some(p.dir)
@@ -137,8 +139,10 @@ impl Launcher {
     }
 
     /// Draws the screen. Gives a project folder to open.
-    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<PathBuf> {
+    pub fn show(&mut self, ui: &mut egui::Ui, gh: &mut crate::github::Panel) -> Option<PathBuf> {
         let mut open: Option<PathBuf> = None;
+        gh.keep_listing(ui.ctx());
+        let mut get: Option<crate::github::Repo> = None;
         // A project folder dropped on the window opens.
         if let Some(p) = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).find(|p| !p.as_os_str().is_empty())) {
             let dir = if p.is_dir() { p } else { p.parent().map(Path::to_path_buf).unwrap_or(p) };
@@ -175,16 +179,32 @@ impl Launcher {
                     ui.label(RichText::new("2D and 3D game engine, scripted in JLB").color(theme::TEXT_DIM));
                     ui.label(RichText::new(format!("version {}", env!("CARGO_PKG_VERSION"))).small().color(theme::TEXT_DIM));
                 });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Settings").tip("GEX's own settings, for every project: your GitHub sign-in, and updates").clicked() {
+                        self.settings = true;
+                    }
+                    if let Some(a) = &gh.account {
+                        ui.label(RichText::new(format!("GitHub: {}", a.login)).small().color(theme::TEXT_DIM));
+                    }
+                });
             });
             ui.add_space(22.0);
             let side = 330.0;
             let list_w = ui.available_width() - side - 28.0;
+            // Projects on GitHub that aren't on this computer yet.
+            let remote: Vec<crate::github::Repo> = gh.remote.iter().filter(|r| {
+                let key = format!("{}/{}", r.owner, r.name).to_lowercase();
+                !entries.iter().any(|e| e.repo.as_deref() == Some(key.as_str()))
+            }).cloned().collect();
             ui.horizontal_top(|ui| {
                 // ---- your projects
                 ui.vertical(|ui| {
                     ui.set_width(list_w);
                     ui.horizontal(|ui| {
-                        theme::title(ui, &format!("Projects ({})", entries.len()));
+                        theme::title(ui, &format!("Projects ({})", entries.len() + remote.len()));
+                        if gh.listing() {
+                            ui.spinner().tip("Looking for your projects on GitHub");
+                        }
                         if entries.len() > 4 {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search").desired_width(160.0));
@@ -192,11 +212,11 @@ impl Launcher {
                         }
                     });
                     ui.add_space(6.0);
-                    if entries.is_empty() {
+                    if entries.is_empty() && remote.is_empty() {
                         egui::Frame::new().fill(theme::glass_fill()).stroke(theme::glass_edge()).inner_margin(18.0).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.label("No projects yet.");
-                            ui.label(RichText::new("Make one on the right. \"Demo games\" gives you five small games with commented scripts to read and change.").color(theme::TEXT_DIM));
+                            ui.label(RichText::new(if gh.account.is_some() { "Make one on the right. Projects you keep on GitHub show up here on every computer." } else { "Make one on the right. Signed in to GitHub (Settings), projects you keep there show up here on every computer." }).color(theme::TEXT_DIM));
                         });
                     }
                     let needle = self.filter.trim().to_lowercase();
@@ -248,6 +268,9 @@ impl Launcher {
                                 if let Some(t) = e.used {
                                     ui.label(RichText::new(ago(t)).small().color(theme::TEXT_DIM));
                                 }
+                                if let Some(r) = &e.repo {
+                                    ui.label(RichText::new("GitHub").small().color(theme::ACCENT)).tip(format!("Kept on GitHub (github.com/{}): saves to and loads from there by itself", r));
+                                }
                                 if row.clicked() && !more.contains_pointer() {
                                     act.set(Some((i, "open")));
                                 }
@@ -255,7 +278,44 @@ impl Launcher {
                             row.on_hover_cursor(egui::CursorIcon::PointingHand);
                             ui.add_space(4.0);
                         }
+                        for r in &remote {
+                            if !needle.is_empty() && !r.name.to_lowercase().contains(&needle) {
+                                continue;
+                            }
+                            let key = format!("{}/{}", r.owner, r.name);
+                            let busy = gh.getting.as_deref() == Some(key.as_str());
+                            let (rect, row) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::click());
+                            let hot = ui.ctx().animate_bool_with_time(row.id, row.hovered(), 0.08);
+                            ui.painter().rect(rect, 0.0, theme::mix(theme::glass_fill(), Color32::from_rgb(0x2c, 0x2c, 0x2c), hot), egui::Stroke::new(1.0, theme::alpha(theme::ACCENT_DIM, 120)), egui::StrokeKind::Inside);
+                            let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 10.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                            tile(&mut inner, &r.name, 36.0);
+                            inner.add_space(6.0);
+                            inner.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                ui.label(RichText::new(&r.name).size(15.0).strong());
+                                ui.add(egui::Label::new(RichText::new(format!("On GitHub ({}), not on this computer yet: click to get it", key)).small().color(theme::TEXT_DIM)).truncate());
+                            });
+                            inner.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if busy {
+                                    ui.spinner();
+                                    ui.label(RichText::new("Getting…").small().color(theme::TEXT_DIM));
+                                } else {
+                                    ui.label(RichText::new("GitHub").small().color(theme::ACCENT));
+                                    if !r.pushed.is_empty() {
+                                        ui.label(RichText::new(format!("changed {}", r.pushed)).small().color(theme::TEXT_DIM));
+                                    }
+                                }
+                            });
+                            if row.clicked() && !gh.busy() {
+                                get = Some(r.clone());
+                            }
+                            row.on_hover_cursor(egui::CursorIcon::PointingHand).tip(format!("Gets it into {} and opens it; from then on it saves to and loads from GitHub by itself", Path::new(&self.location).display()));
+                            ui.add_space(4.0);
+                        }
                     });
+                    if !gh.remote_error.is_empty() && gh.account.is_some() {
+                        ui.label(RichText::new(format!("Couldn't look for your projects on GitHub: {}", gh.remote_error)).small().color(theme::WARN));
+                    }
                 });
                 ui.add_space(28.0);
                 // ---- a new one, or one from elsewhere
@@ -286,29 +346,19 @@ impl Launcher {
                         let dir = self.new_dir();
                         ui.add(egui::Label::new(RichText::new(format!("Folder: {}", dir.display())).small().color(theme::TEXT_DIM)).truncate()).tip(dir.to_string_lossy());
                         ui.add_space(8.0);
-                        ui.label(RichText::new("Starts with").small().color(theme::TEXT_DIM));
-                        use templates::Start;
-                        for (start, label, what) in [
-                            (Start::Starter2D, "2D game", "A player that runs and jumps, ground, a script to change."),
-                            (Start::Starter3D, "3D game", "Ground, a sun, and a player that walks and jumps."),
-                            (Start::Nothing, "Nothing", "An empty project."),
-                            (Start::Demo, "Demo games", "Five small games with commented scripts."),
-                        ] {
-                            let on = self.start == start;
-                            let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
-                            let fill = if on { theme::alpha(theme::ACCENT_DIM, 60) } else if r.hovered() { Color32::from_rgb(0x2a, 0x2a, 0x2a) } else { Color32::from_rgb(0x1c, 0x1c, 0x1c) };
-                            ui.painter().rect(rect, 0.0, fill, egui::Stroke::new(1.0, if on { theme::ACCENT } else { Color32::from_gray(0x38) }), egui::StrokeKind::Inside);
-                            ui.painter().text(rect.left_top() + egui::vec2(10.0, 5.0), egui::Align2::LEFT_TOP, label, egui::FontId::proportional(13.5), theme::TEXT);
-                            ui.painter().text(rect.left_top() + egui::vec2(10.0, 22.0), egui::Align2::LEFT_TOP, what, egui::FontId::proportional(11.0), theme::TEXT_DIM);
-                            if r.clicked() {
-                                self.start = start;
-                            }
+                        let mut keep = false;
+                        if let Some(a) = &gh.account {
+                            let on = self.on_github.get_or_insert(a.new_projects);
+                            ui.checkbox(on, "Keep it on GitHub").tip(format!("In a private repository on {}'s GitHub: it saves to and loads from there by itself, and shows up on the start screen of your other computers", a.login));
+                            keep = *on;
+                        } else {
+                            ui.label(RichText::new("Sign in to GitHub in Settings to keep projects there (the same on all your computers).").small().color(theme::TEXT_DIM));
                         }
                         ui.add_space(10.0);
                         let ok = !self.name.trim().is_empty() && !self.location.trim().is_empty();
                         let go = ui.add_enabled_ui(ok, |ui| theme::primary_button(ui, "Create project", theme::ACCENT_DIM)).inner.clicked();
                         if ok && (go || enter) {
-                            open = self.create();
+                            open = self.create(keep);
                         }
                     });
                     ui.add_space(18.0);
@@ -328,26 +378,29 @@ impl Launcher {
                         }
                     });
                     ui.label(RichText::new("Or drop a project folder on this window.").small().color(theme::TEXT_DIM));
-                    if ui.button("From GitHub…").tip("A project you sync with GitHub on another computer (File → Sync with GitHub there): get it here, kept in sync").clicked() {
-                        self.github = true;
-                    }
                     ui.add_space(18.0);
                     theme::title(ui, "Work on someone's project");
                     ui.add_space(6.0);
                     if ui.button("Join someone…").tip("Someone shares their project (File → Work together); join it with their address and invite code to work on it together, live.").clicked() {
                         self.join = true;
                     }
-                    ui.add_space(18.0);
-                    if ui.button("Updates…").tip("Whether GEX updates itself, and checking for a new version now").clicked() {
-                        self.updates = true;
-                    }
-                    if !self.error.is_empty() {
-                        ui.add_space(10.0);
-                        ui.label(RichText::new(&self.error).color(theme::BAD));
+                    for e in [&self.error, &gh.error] {
+                        if !e.is_empty() {
+                            ui.add_space(10.0);
+                            ui.label(RichText::new(e.as_str()).color(theme::BAD));
+                        }
                     }
                 });
             });
         });
+        if let Some(r) = get {
+            if self.location.trim().is_empty() {
+                self.error = "Choose where projects go first (\"Made in\", under New project).".into();
+            } else {
+                self.error.clear();
+                gh.get(ui.ctx(), r, Path::new(self.location.trim()));
+            }
+        }
         let mut reload = false;
         if let Some((i, what)) = act.get() {
             let e = &entries[i];

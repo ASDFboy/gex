@@ -4,14 +4,11 @@ This walks through making a tiny game from an empty project: a player that moves
 pick up, a score, and a menu. It takes about half an hour. Every step uses things that are in
 the editor today.
 
-If you'd rather read working code first, the launcher's **Create the demo project** makes a
-project with five small games in it (coins, a platformer, a 3D physics toy, first person, and a
-menu that ties them together). Every script in it is commented.
-
 ## 1. Make a project
 
 1. Start `gex`. The launcher shows your recent projects on the left.
-2. Under **NEW PROJECT**, type a name and a folder, then **Create empty project**.
+2. Under **NEW PROJECT**, type a name and a folder, then **Create project**. (Signed in to
+   GitHub in Settings, you can tick **Keep it on GitHub** to have it on all your computers.)
 3. The project starts with nothing in it. Press **New 2D blueprint**: it makes `main.jblueprint`
    (the first blueprint is where the game starts) and opens it. It holds one object, `Main`.
 
