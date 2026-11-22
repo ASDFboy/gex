@@ -36,6 +36,17 @@ list, put in place and a restart offered. View → Updates chooses whether it in
 asks first or doesn't check; the old version is removed once the new one starts. It uses the system's `curl`,
 which Windows 10 and later have.
 
+**On several computers.** File → Sync with GitHub keeps a project the same everywhere: GEX
+keeps it in a private repository on your GitHub account, sends what you save (checked every 20
+seconds) and brings in what you did on your other computers (when the project opens, every two
+minutes, and when it closes). On the other computer, From GitHub on the start screen gets it.
+It uses Git (Git for Windows signs in to GitHub once, in the browser; GEX can install it with
+winget). GEX's own per-computer state (`.gex/`), `export/` and files over 95 MB stay on each
+computer; changes from elsewhere wait while something here is unsaved; and when both computers
+changed the same lines without syncing, the newer change is kept and the other is put in
+"<project> (sync conflicts)" beside the project. Each computer keeps its own Half-Life 2 and
+asset-folder locations.
+
 New releases are built by GitHub: raise the version in `Cargo.toml` and push to `main` (or push the
 `release` branch, or run Actions → Release) and it builds Windows and Linux, runs the tests, and
 publishes `GEX.zip`, `gex-windows.exe`, `gex-linux` and `SHA256SUMS` under that version.

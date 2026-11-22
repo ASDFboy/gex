@@ -31,6 +31,7 @@ mod viewport;
 mod workspace;
 mod sprites;
 mod update;
+mod github;
 mod collab;
 mod firewall;
 

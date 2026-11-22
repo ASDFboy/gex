@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.7:
+- Sync with GitHub (File menu): keeps a project the same on all your computers through a private repository on your GitHub account. What you save goes up on its own; what you did elsewhere comes in when the project opens, every two minutes and when it closes, and open scripts and blueprints update in place. From GitHub on the start screen gets a synced project onto another computer. Conflicting changes keep the newer version and put the other aside; each computer keeps its own Half-Life 2 location. Uses Git (GEX can install it on Windows); the GitHub sign-in stays with Git.
+
 New in 0.3.6:
 - Timer object: counts down from wait_time and runs on_timeout(name) on itself and its parent (and on_timeout_<name>() everywhere); repeats or runs once; PLAY / STOP start it over or stop it.
 - UI layout: Row, Column and Grid place the UI under them (sized to fit, so anchors center whole groups); ScrollBox stacks UI in a box you scroll with the wheel or its bar, clipping what's outside.

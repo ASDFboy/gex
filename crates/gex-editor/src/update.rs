@@ -210,6 +210,11 @@ pub fn newer(a: &str, b: &str) -> bool {
     false
 }
 
+/// curl, https only (also for GitHub's API).
+pub(crate) fn curl_cmd() -> Command {
+    curl()
+}
+
 fn curl() -> Command {
     #[allow(unused_mut)]
     let mut c = Command::new("curl");

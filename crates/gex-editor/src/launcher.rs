@@ -27,7 +27,7 @@ pub struct Launcher {
     filter: String,
     name: String,
     /// The folder new projects are made in (each in its own folder inside).
-    location: String,
+    pub location: String,
     demo: bool,
     #[cfg_attr(windows, allow(dead_code))]
     open_path: String,
@@ -36,6 +36,8 @@ pub struct Launcher {
     pub error: String,
     /// "Join someone" was clicked.
     pub join: bool,
+    /// From GitHub… was clicked.
+    pub github: bool,
     /// "Updates" was clicked.
     pub updates: bool,
 }
@@ -45,7 +47,7 @@ impl Default for Launcher {
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
         // Where the last project was made, or a "GEX Projects" folder.
         let location = std::fs::read_to_string(state::config_dir().join("projects_dir.txt")).ok().map(|s| s.trim().to_string()).filter(|s| Path::new(s).is_dir()).unwrap_or_else(|| home.join("GEX Projects").to_string_lossy().into_owned());
-        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, demo: false, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false, updates: false }
+        Launcher { entries: None, filter: String::new(), name: "My Game".into(), location, demo: false, open_path: String::new(), dialog: None, focus_name: true, error: String::new(), join: false, github: false, updates: false }
     }
 }
 
@@ -314,6 +316,9 @@ impl Launcher {
                         }
                     });
                     ui.label(RichText::new("Or drop a project folder on this window.").small().color(theme::TEXT_DIM));
+                    if ui.button("From GitHub…").tip("A project you sync with GitHub on another computer (File → Sync with GitHub there): get it here, kept in sync").clicked() {
+                        self.github = true;
+                    }
                     ui.add_space(18.0);
                     theme::title(ui, "Work on someone's project");
                     ui.add_space(6.0);

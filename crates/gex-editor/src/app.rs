@@ -35,6 +35,12 @@ pub struct EditorApp {
     collab_panel: crate::collab::Panel,
     /// Joining someone's project: its files are on their way.
     joining: Option<crate::collab::Session>,
+    /// File → Sync with GitHub (and From GitHub on the start screen).
+    github: crate::github::Panel,
+    /// The open project's syncing with GitHub (when it's linked), and the project it was
+    /// looked for in.
+    syncer: Option<crate::github::Syncer>,
+    sync_looked: Option<std::path::PathBuf>,
 }
 
 /// Hides the mouse and holds it in the window (or gives it back).
@@ -101,6 +107,9 @@ impl EditorApp {
             updater: crate::update::Updater::start(),
             collab_panel: Default::default(),
             joining: None,
+            github: Default::default(),
+            syncer: None,
+            sync_looked: None,
         };
         if let Some(p) = project {
             app.open_project(&p);
@@ -108,7 +117,35 @@ impl EditorApp {
         app
     }
 
+    /// The project closing: its last changes go to GitHub (when it's linked).
+    fn stop_sync(&mut self) {
+        if let Some(mut s) = self.syncer.take() {
+            s.finish(std::time::Duration::from_secs(15));
+        }
+        self.sync_looked = None;
+    }
+
+    /// Syncing with GitHub: started for a linked project, results in, the window.
+    fn github(&mut self, ctx: &egui::Context) {
+        let Some(st) = &mut self.st else {
+            self.github.show_start(ctx, std::path::Path::new(self.launcher.location.trim()));
+            if let Some(d) = self.github.got.take() {
+                self.open_project(&d);
+            }
+            return;
+        };
+        if self.sync_looked.as_deref() != Some(st.project.dir.as_path()) {
+            self.sync_looked = Some(st.project.dir.clone());
+            self.syncer = crate::github::link_of(&st.project.dir).map(|l| crate::github::Syncer::start(ctx, &st.project.dir, l));
+        }
+        if let Some(s) = &mut self.syncer {
+            s.tick(ctx, st);
+        }
+        self.github.show_project(ctx, st, &mut self.syncer);
+    }
+
     fn open_project(&mut self, dir: &std::path::Path) {
+        self.stop_sync();
         match Project::open(dir) {
             Ok(mut p) => {
                 // Half-Life 2, mounted once, is mounted in every project.
@@ -148,6 +185,11 @@ impl EditorApp {
         }
         if std::mem::take(&mut self.launcher.updates) {
             self.updater.window = true;
+        }
+        if std::mem::take(&mut self.launcher.github) {
+            self.github.open = true;
+            self.github.error.clear();
+            self.github.repos = None;
         }
     }
 
@@ -358,6 +400,10 @@ impl EditorApp {
                     self.collab_panel.open = true;
                     ui.close();
                 }
+                if ui.button("Sync with GitHub…").tip("Keep this project the same on all your computers, through a private repository on your GitHub account").clicked() {
+                    self.github.open = true;
+                    ui.close();
+                }
                 if ui.button("Export game…").tip("A folder with the game, ready to run or share").clicked() {
                     st.show_export = true;
                     ui.close();
@@ -450,6 +496,17 @@ impl EditorApp {
                 theme::window_buttons(ui);
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
+                if let Some(s) = &self.syncer {
+                    let (word, color) = s.status();
+                    let tip = match (&s.problem, s.busy) {
+                        (Some(p), _) => format!("Sync with GitHub: {}", p),
+                        (None, true) => "Sending what you saved and bringing in what you did on your other computers".into(),
+                        _ => format!("Kept in sync through github.com/{}/{}. Click for more.", s.link.owner, s.link.repo),
+                    };
+                    if ui.add(egui::Label::new(RichText::new(word).small().color(color)).sense(egui::Sense::click())).tip(tip).clicked() {
+                        self.github.open = true;
+                    }
+                }
                 if crate::collab::people_bar(ui, st) {
                     self.collab_panel.open = true;
                 }
@@ -466,6 +523,7 @@ impl EditorApp {
         crate::docs::mark(ui, full, "ui:menubar");
         ui.painter().set(bar_bg, theme::header(full, false));
         if close {
+            self.stop_sync();
             self.st = None;
         }
     }
@@ -1076,6 +1134,7 @@ impl eframe::App for EditorApp {
         theme::window_resize(&ctx);
         self.update_bar(ui);
         self.collab(&ctx);
+        self.github(&ctx);
         if self.st.is_none() {
             egui::Panel::top("launcher bar").frame(egui::Frame::NONE).show(ui, |ui| {
                 let top = ui.cursor().top();
@@ -1142,6 +1201,10 @@ impl eframe::App for EditorApp {
         if let Some(st) = &mut self.st {
             self.ws.save(&st.project.dir);
             st.stop();
+            // Synced with GitHub: the last changes go up.
+            if let Some(mut s) = self.syncer.take() {
+                s.finish(std::time::Duration::from_secs(15));
+            }
             // Working together: others are told it ended (a moment for that to go out).
             if st.collab.take().is_some() {
                 std::thread::sleep(std::time::Duration::from_millis(150));

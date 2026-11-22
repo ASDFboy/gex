@@ -538,6 +538,51 @@ impl EditorState {
         }
     }
 
+    /// Files changed on disk by something else (syncing from another computer): what's open
+    /// and has no unsaved changes of its own is read again. `rels`: project-relative paths.
+    pub fn reload_changed(&mut self, rels: &[String]) {
+        let mut textures = false;
+        for rel in rels {
+            let res = format!("res://{}", rel);
+            if rel == gex_core::project::PROJECT_FILE {
+                // The settings, keeping this computer's own mounts (its Half-Life 2, its folders).
+                if let Ok(p) = Project::open(&self.project.dir) {
+                    let mounts = std::mem::take(&mut self.project.config.mounts);
+                    self.project.config = p.config;
+                    self.project.config.mounts = mounts;
+                }
+            } else if let Some(sc) = self.scripts.get_mut(&res) {
+                if !sc.dirty() {
+                    if let Ok(t) = self.project.read_text(&res) {
+                        sc.text = t.clone();
+                        sc.saved = t;
+                    }
+                }
+            } else if !rel.ends_with(".jblueprint") && !rel.ends_with(".jlb") {
+                self.previews.forget(&res);
+                textures = true;
+            }
+        }
+        if textures {
+            if let Some(r) = &mut self.renderer {
+                r.reload_textures();
+            }
+        }
+        if self.playing.is_some() {
+            return;
+        }
+        // Other open blueprints that changed are read again when they're next shown.
+        let changed = |r: &Option<String>| r.as_deref().is_some_and(|r| rels.iter().any(|x| r == format!("res://{}", x)));
+        let project = &self.project;
+        self.docs.retain(|d| !changed(&d.blueprint_res) || blueprint::save(&d.tree, &|p: &str| project.read_text(p)).ok().is_some_and(|t| t != d.blueprint_saved));
+        if changed(&self.blueprint_res) && !self.blueprint_dirty() {
+            let res = self.blueprint_res.clone().unwrap();
+            let (cam2, cam3, mode) = (self.cam2, self.cam3, self.mode_3d);
+            self.load_blueprint(&res);
+            (self.cam2, self.cam3, self.mode_3d, self.cam_fitted) = (cam2, cam3, mode, true);
+        }
+    }
+
     // ---------- undo ----------
 
     /// Call before changing the tree. Changes to the same thing within a second share one
