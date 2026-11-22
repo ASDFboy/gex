@@ -119,8 +119,9 @@ impl EditorApp {
 
     /// The project closing: its last changes go to GitHub (when it's linked).
     fn stop_sync(&mut self) {
-        if let Some(mut s) = self.syncer.take() {
-            s.finish(std::time::Duration::from_secs(15));
+        // (In the background: the editor goes on while it's sent.)
+        if let Some(s) = self.syncer.take() {
+            std::thread::spawn(move || s.finish(std::time::Duration::from_secs(120)));
         }
         self.sync_looked = None;
     }
@@ -136,7 +137,9 @@ impl EditorApp {
         };
         if self.sync_looked.as_deref() != Some(st.project.dir.as_path()) {
             self.sync_looked = Some(st.project.dir.clone());
-            self.syncer = crate::github::link_of(&st.project.dir).map(|l| crate::github::Syncer::start(ctx, &st.project.dir, l));
+            // (A copy joined through Work together is the sharer's to sync, not this computer's.)
+            let joined = st.collab.as_ref().is_some_and(|c| !c.host);
+            self.syncer = crate::github::link_of(&st.project.dir).filter(|_| !joined).map(|l| crate::github::Syncer::start(ctx, &st.project.dir, l));
         }
         if let Some(s) = &mut self.syncer {
             s.tick(ctx, st);
@@ -498,7 +501,7 @@ impl EditorApp {
                 ui.label(RichText::new(&st.project.config.name).strong().color(theme::ACCENT));
                 if let Some(s) = &self.syncer {
                     let (word, color) = s.status();
-                    let tip = match (&s.problem, s.busy) {
+                    let tip = match (&s.problem, s.syncing()) {
                         (Some(p), _) => format!("Sync with GitHub: {}", p),
                         (None, true) => "Sending what you saved and bringing in what you did on your other computers".into(),
                         _ => format!("Kept in sync through github.com/{}/{}. Click for more.", s.link.owner, s.link.repo),
@@ -1202,8 +1205,8 @@ impl eframe::App for EditorApp {
             self.ws.save(&st.project.dir);
             st.stop();
             // Synced with GitHub: the last changes go up.
-            if let Some(mut s) = self.syncer.take() {
-                s.finish(std::time::Duration::from_secs(15));
+            if let Some(s) = self.syncer.take() {
+                s.finish(std::time::Duration::from_secs(8));
             }
             // Working together: others are told it ended (a moment for that to go out).
             if st.collab.take().is_some() {

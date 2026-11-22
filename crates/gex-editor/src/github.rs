@@ -76,9 +76,23 @@ fn quiet(c: &mut Command) {
     let _ = c;
 }
 
+/// Where git is, once found (and when it was last looked for, while it isn't).
+static GIT: std::sync::Mutex<(Option<PathBuf>, Option<Instant>)> = std::sync::Mutex::new((None, None));
+
+/// Where git is. Once found it's remembered; until then it's looked for again every few
+/// seconds at most (it may have just been installed).
+pub fn git_exe() -> Option<PathBuf> {
+    let mut g = GIT.lock().unwrap_or_else(|e| e.into_inner());
+    if g.0.is_none() && g.1.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+        g.0 = find_git();
+        g.1 = Some(Instant::now());
+    }
+    g.0.clone()
+}
+
 /// Where git is: on the PATH, or where Git for Windows installs it (just installed, the PATH
 /// GEX started with doesn't have it yet).
-pub fn git_exe() -> Option<PathBuf> {
+fn find_git() -> Option<PathBuf> {
     #[allow(unused_mut)]
     let mut list = vec![PathBuf::from("git")];
     #[cfg(windows)]
@@ -94,16 +108,40 @@ pub fn git_exe() -> Option<PathBuf> {
     })
 }
 
+/// git for the background: never asks anything (no terminal prompt, no sign-in window: a sign-in
+/// that's needed shows as a problem with a button instead), gives up on a stalled network, and
+/// keeps files' line endings exactly as GEX writes them.
 fn git_cmd(dir: &Path) -> Result<Command, String> {
+    let mut c = git_signin_cmd(dir)?;
+    c.env("GIT_TERMINAL_PROMPT", "0").env("GCM_INTERACTIVE", "never");
+    Ok(c)
+}
+
+/// git that may sign in (Git Credential Manager's window), for what the person asked for.
+fn git_signin_cmd(dir: &Path) -> Result<Command, String> {
     let exe = git_exe().ok_or("Git isn't installed")?;
     let mut c = Command::new(exe);
     quiet(&mut c);
-    c.current_dir(dir)
-        // Never wait for typing in a terminal nobody sees; give up on a stalled network.
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .args(["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "-c", "core.quotepath=off"]);
+    c.current_dir(dir).args(["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "-c", "core.quotepath=off", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false"]);
     Ok(c)
 }
+
+/// What a git failure means for syncing.
+fn why(e: &str) -> String {
+    let l = e.to_ascii_lowercase();
+    if l.contains("authentication") || l.contains("could not read username") || l.contains("terminal prompts disabled") || l.contains("403") || l.contains("401") || l.contains("logon failed") {
+        format!("{}{}", SIGN_IN, e.lines().last().unwrap_or(""))
+    } else if l.contains("repository not found") || l.contains("not found") && l.contains("repository") {
+        "the repository isn't on GitHub any more (deleted or renamed?)".into()
+    } else if l.contains("could not resolve host") || l.contains("unable to access") || l.contains("timed out") || l.contains("connection") || l.contains("network") {
+        format!("{}{}", OFFLINE, e.lines().last().unwrap_or(""))
+    } else {
+        e.lines().last().unwrap_or(e).to_string()
+    }
+}
+
+const OFFLINE: &str = "offline: ";
+const SIGN_IN: &str = "sign in to GitHub again: ";
 
 /// Runs git; its output, or what went wrong.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
@@ -122,7 +160,7 @@ fn git_ok(dir: &Path, args: &[&str]) -> bool {
 
 /// The GitHub sign-in Git keeps (Git Credential Manager signs in, in the browser, the first time).
 fn token() -> Result<String, String> {
-    let mut c = git_cmd(&std::env::temp_dir())?;
+    let mut c = git_signin_cmd(&std::env::temp_dir())?;
     let mut child = c.args(["credential", "fill"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("couldn't run git: {}", e))?;
     {
         use std::io::Write;
@@ -131,11 +169,33 @@ fn token() -> Result<String, String> {
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout);
-    text.lines()
+    let user = text.lines().find_map(|l| l.strip_prefix("username=")).unwrap_or("").trim().to_string();
+    let t = text
+        .lines()
         .find_map(|l| l.strip_prefix("password="))
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| "couldn't sign in to GitHub (Git for Windows signs in through the browser; elsewhere, set up a Git credential helper, e.g. with `gh auth setup-git`)".to_string())
+        .ok_or_else(|| "couldn't sign in to GitHub (Git for Windows signs in through the browser; elsewhere, set up a Git credential helper, e.g. with `gh auth setup-git`)".to_string())?;
+    *SIGNED_IN.lock().unwrap_or_else(|e| e.into_inner()) = user;
+    Ok(t)
+}
+
+/// Who Git signed in as (to tell it the sign-in worked, so it's kept).
+static SIGNED_IN: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Tells Git a sign-in worked (`approve`: keep it) or didn't (`reject`: forget it, ask next time).
+fn tell(what: &str, token: &str) {
+    let user = SIGNED_IN.lock().map(|u| u.clone()).unwrap_or_default();
+    if let Ok(mut c) = git_cmd(&std::env::temp_dir()) {
+        if let Ok(mut child) = c.args(["credential", what]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            if let Some(mut i) = child.stdin.take() {
+                use std::io::Write;
+                let user = if user.is_empty() { String::new() } else { format!("username={}\n", user) };
+                let _ = i.write_all(format!("protocol=https\nhost=github.com\n{}password={}\n\n", user, token).as_bytes());
+            }
+            let _ = child.wait();
+        }
+    }
 }
 
 /// Calls GitHub's API: (status, body). The sign-in goes to curl on its standard input.
@@ -181,7 +241,7 @@ fn rand_tag() -> u64 {
 fn api_error(what: &str, code: u16, body: &serde_json::Value) -> String {
     let msg = body.get("message").and_then(|m| m.as_str()).unwrap_or("");
     match code {
-        401 => "GitHub didn't accept the sign-in; sign in again (Git will ask)".into(),
+        401 => "GitHub didn't accept the sign-in: try again, and Git asks you to sign in".into(),
         _ => format!("{} (GitHub said {}{}{})", what, code, if msg.is_empty() { "" } else { ": " }, msg),
     }
 }
@@ -189,11 +249,15 @@ fn api_error(what: &str, code: u16, body: &serde_json::Value) -> String {
 /// The signed-in account: (login, noreply email).
 fn account(token: &str) -> Result<(String, String), String> {
     let (code, me) = api(token, "GET", "/user")?;
+    if code == 401 {
+        tell("reject", token);
+    }
     if code != 200 {
         return Err(api_error("couldn't read your GitHub account", code, &me));
     }
     let login = me.get("login").and_then(|l| l.as_str()).ok_or("GitHub didn't say who you are")?.to_string();
     let id = me.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
+    tell("approve", token);
     Ok((login.clone(), format!("{}+{}@users.noreply.github.com", id, login)))
 }
 
@@ -295,12 +359,41 @@ pub struct Synced {
 
 /// One sync: commit what's saved here, bring in what's new there (when `merge`), send it all.
 pub fn sync(dir: &Path, l: &Link, merge: bool) -> Result<Synced, String> {
+    // A merge cut short (GEX closed in the middle): finished first.
+    if dir.join(".git").join("MERGE_HEAD").exists() {
+        let _ = git(dir, &["add", "-A"]);
+        let _ = git_as(dir, l, &["commit", "-q", "--no-edit"]);
+    }
+    ignore_file(dir);
     let mut out = Synced { too_big: keep_big_files_here(dir), ..Default::default() };
     git(dir, &["add", "-A"])?;
     if !git_ok(dir, &["diff", "--cached", "--quiet"]) {
         git_as(dir, l, &["commit", "-q", "-m", &format!("Saved on {}", computer())])?;
     }
-    git(dir, &["fetch", "-q", REMOTE]).map_err(|e| format!("offline: {}", e.lines().last().unwrap_or("")))?;
+    for attempt in 0..3 {
+        bring_in(dir, l, merge, &mut out)?;
+        match push(dir) {
+            Ok(()) => break,
+            // The other computer sent something meanwhile: bring that in too, and again.
+            Err(e) if attempt < 2 && merge && e.contains("rejected") => continue,
+            Err(e) if e.contains("rejected") => {
+                out.waiting = true;
+                break;
+            }
+            Err(e) => return Err(why(&e)),
+        }
+    }
+    Ok(out)
+}
+
+/// Changes as a list of paths (NUL-separated output: any name comes through as it is).
+fn paths(out: &str) -> Vec<String> {
+    out.split('\0').filter(|p| !p.is_empty()).map(|p| p.to_string()).collect()
+}
+
+/// Brings in what's new on GitHub (when `merge`; otherwise notes that it's waiting).
+fn bring_in(dir: &Path, l: &Link, merge: bool, out: &mut Synced) -> Result<(), String> {
+    git(dir, &["fetch", "-q", REMOTE]).map_err(|e| why(&e))?;
     let theirs = format!("{}/{}", REMOTE, BRANCH);
     let has_theirs = git_ok(dir, &["rev-parse", "-q", "--verify", &theirs]);
     if has_theirs {
@@ -310,15 +403,25 @@ pub fn sync(dir: &Path, l: &Link, merge: bool) -> Result<Synced, String> {
             if !merge {
                 out.waiting = true;
             } else {
-                let changed = git(dir, &["diff", "--name-only", "HEAD", &theirs])?;
-                out.pulled = changed.lines().map(|l| l.to_string()).filter(|l| !l.is_empty()).collect();
-                if git_as(dir, l, &["merge", "-q", "--no-edit", &theirs]).is_err() {
-                    out.conflicts = settle(dir, l, &theirs)?;
+                for p in paths(&git(dir, &["diff", "-z", "--name-only", "HEAD", &theirs])?) {
+                    if !out.pulled.contains(&p) {
+                        out.pulled.push(p);
+                    }
                 }
+                if git_as(dir, l, &["merge", "-q", "--no-edit", &theirs]).is_err() {
+                    out.conflicts.extend(settle(dir, l, &theirs)?);
+                }
+                out.waiting = false;
             }
         }
     }
-    let ahead = if has_theirs {
+    Ok(())
+}
+
+/// Sends what's new here (nothing to do when GitHub already has it).
+fn push(dir: &Path) -> Result<(), String> {
+    let theirs = format!("{}/{}", REMOTE, BRANCH);
+    let ahead = if git_ok(dir, &["rev-parse", "-q", "--verify", &theirs]) {
         git(dir, &["rev-list", "--count", &format!("{}..HEAD", theirs)])?.trim().parse::<u64>().unwrap_or(0) > 0
     } else {
         git_ok(dir, &["rev-parse", "-q", "--verify", "HEAD"])
@@ -326,13 +429,13 @@ pub fn sync(dir: &Path, l: &Link, merge: bool) -> Result<Synced, String> {
     if ahead {
         git(dir, &["push", "-q", REMOTE, &format!("HEAD:{}", BRANCH)])?;
     }
-    Ok(out)
+    Ok(())
 }
 
 /// A merge where both sides changed the same lines: the side changed last wins each file; the
 /// other side's version is kept in "<project> (sync conflicts)".
 fn settle(dir: &Path, l: &Link, theirs: &str) -> Result<Vec<String>, String> {
-    let files: Vec<String> = git(dir, &["diff", "--name-only", "--diff-filter=U"])?.lines().map(|s| s.to_string()).filter(|s| !s.is_empty()).collect();
+    let files = paths(&git(dir, &["diff", "-z", "--name-only", "--diff-filter=U"])?);
     if files.is_empty() {
         let _ = git(dir, &["merge", "--abort"]);
         return Err("couldn't bring in the other computer's changes".into());
@@ -345,7 +448,14 @@ fn settle(dir: &Path, l: &Link, theirs: &str) -> Result<Vec<String>, String> {
         // The version that loses, kept beside the project.
         if let Ok(b) = git_cmd(dir)?.args(["show", &format!("{}{}", stage, f)]).output() {
             if b.status.success() {
-                let to = aside_dir.join(format!("{} ({})", f, aside));
+                // "scripts/player (other computer).jlb": the name says whose, the ending stays.
+                let p = Path::new(f);
+                let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                let name = match p.extension() {
+                    Some(e) => format!("{} ({}).{}", stem, aside, e.to_string_lossy()),
+                    None => format!("{} ({})", stem, aside),
+                };
+                let to = aside_dir.join(p.with_file_name(name));
                 let _ = std::fs::create_dir_all(to.parent().unwrap_or(&aside_dir));
                 let _ = std::fs::write(to, &b.stdout);
             }
@@ -373,7 +483,9 @@ fn link(dir: &Path, name: &str, say: &dyn Fn(&str)) -> Result<Link, String> {
         422 => {
             // Already there: fine if it's empty (made earlier and never filled).
             let (c, r) = api(&t, "GET", &format!("/repos/{}/{}", login, name))?;
-            if c != 200 || r.get("size").and_then(|s| s.as_u64()).unwrap_or(1) > 0 {
+            // Or this project's own (linked before, then syncing was stopped here).
+            let ours = git(dir, &["remote", "get-url", REMOTE]).is_ok_and(|u| u.trim().trim_end_matches(".git").eq_ignore_ascii_case(&format!("https://github.com/{}/{}", login, name)));
+            if !ours && (c != 200 || r.get("size").and_then(|s| s.as_u64()).unwrap_or(1) > 0) {
                 return Err(format!("you already have a repository called {} with something in it: pick another name (or, to get that one, use From GitHub on the start screen)", name));
             }
         }
@@ -386,6 +498,7 @@ fn link(dir: &Path, name: &str, say: &dyn Fn(&str)) -> Result<Link, String> {
     if !dir.join(".git").is_dir() {
         git(dir, &["init", "-q", "-b", BRANCH])?;
     }
+    let _ = git(dir, &["config", "core.autocrlf", "false"]);
     ignore_file(dir);
     let url = format!("{}.git", l.url());
     if git_ok(dir, &["remote", "get-url", REMOTE]) {
@@ -398,7 +511,12 @@ fn link(dir: &Path, name: &str, say: &dyn Fn(&str)) -> Result<Link, String> {
     if !git_ok(dir, &["diff", "--cached", "--quiet"]) {
         git_as(dir, &l, &["commit", "-q", "-m", &format!("Linked on {}", computer())])?;
     }
-    git(dir, &["push", "-q", "-u", REMOTE, &format!("HEAD:{}", BRANCH)])?;
+    // (Linked before: what's on GitHub comes in first.)
+    if git_ok(dir, &["fetch", "-q", REMOTE]) && git_ok(dir, &["rev-parse", "-q", "--verify", &format!("{}/{}", REMOTE, BRANCH)]) {
+        let mut out = Synced::default();
+        bring_in(dir, &l, true, &mut out)?;
+    }
+    push(dir).map_err(|e| why(&e))?;
     save_link(dir, &l)?;
     Ok(l)
 }
@@ -442,16 +560,29 @@ fn list_repos(say: &dyn Fn(&str)) -> Result<(Vec<Repo>, String), String> {
 
 /// Gets a linked project onto this computer, in `base`/<name> (or "<name> (2)"... if taken).
 fn get(r: &Repo, email: &str, base: &Path, say: &dyn Fn(&str)) -> Result<PathBuf, String> {
-    let mut dir = base.join(&r.name);
+    let name = repo_name(&r.name);
+    let same = |d: &Path| link_of(d).is_some_and(|l| l.owner.eq_ignore_ascii_case(&r.owner) && l.repo.eq_ignore_ascii_case(&r.name));
+    // Already on this computer (got before): that copy, brought up to date when it opens.
+    if let Some(d) = crate::state::recent_projects().into_iter().find(|d| same(d)).or_else(|| Some(base.join(&name)).filter(|d| same(d))) {
+        return Ok(d);
+    }
+    let mut dir = base.join(&name);
     let mut n = 2;
     while dir.exists() && std::fs::read_dir(&dir).map(|mut d| d.next().is_some()).unwrap_or(true) {
-        dir = base.join(format!("{} ({})", r.name, n));
+        dir = base.join(format!("{} ({})", name, n));
         n += 1;
     }
-    let _ = std::fs::create_dir_all(base);
+    std::fs::create_dir_all(base).map_err(|e| format!("couldn't make {}: {}", base.display(), e))?;
     say("Getting the project…");
     let url = format!("https://github.com/{}/{}.git", r.owner, r.name);
-    git(base, &["clone", "-q", "-o", REMOTE, &url, &dir.to_string_lossy()])?;
+    let cloned = git_signin_cmd(base)
+        .and_then(|mut c| c.args(["clone", "-q", "-o", REMOTE, &url]).arg(&dir).stdin(Stdio::null()).output().map_err(|e| e.to_string()))
+        .and_then(|o| if o.status.success() { Ok(()) } else { Err(why(&String::from_utf8_lossy(&o.stderr))) });
+    if let Err(e) = cloned {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(format!("couldn't get it: {}", e));
+    }
+    let _ = git(&dir, &["config", "core.autocrlf", "false"]);
     if !dir.join(gex_core::project::PROJECT_FILE).is_file() {
         return Err(format!("{} doesn't have a GEX project in it", r.name));
     }
@@ -470,8 +601,11 @@ pub struct Syncer {
     pub link: Link,
     dir: PathBuf,
     tx: Sender<Job>,
-    rx: Receiver<Result<Synced, String>>,
+    /// A sync's result (None: looked, nothing saved here to send, not time to bring in yet).
+    rx: Receiver<Result<Option<Synced>, String>>,
     pub busy: bool,
+    /// Busy with a whole sync (not just a look for saved changes): shown as "Syncing…".
+    busy_full: bool,
     pub last_ok: Option<Instant>,
     pub problem: Option<String>,
     pub waiting: bool,
@@ -492,7 +626,7 @@ impl Syncer {
                 while let Ok(job) = jobs.recv() {
                     let Job::Sync { merge, all } = job;
                     // Nothing saved here since last time and no time for a full sync: done.
-                    let r = if !all && git(&d, &["status", "--porcelain"]).is_ok_and(|s| s.trim().is_empty()) { Ok(Synced::default()) } else { sync(&d, &l, merge) };
+                    let r = if !all && git(&d, &["status", "--porcelain"]).is_ok_and(|s| s.trim().is_empty()) { Ok(None) } else { sync(&d, &l, merge).map(Some) };
                     if done.send(r).is_err() {
                         break;
                     }
@@ -501,7 +635,7 @@ impl Syncer {
             })
             .ok();
         let now = Instant::now();
-        let mut s = Syncer { link, dir: dir.to_path_buf(), tx, rx, busy: false, last_ok: None, problem: None, waiting: false, conflicts: Vec::new(), too_big: Vec::new(), looked: now, synced: now };
+        let mut s = Syncer { link, dir: dir.to_path_buf(), tx, rx, busy: false, busy_full: false, last_ok: None, problem: None, waiting: false, conflicts: Vec::new(), too_big: Vec::new(), looked: now, synced: now };
         s.now(true);
         s
     }
@@ -510,6 +644,7 @@ impl Syncer {
     pub fn now(&mut self, merge: bool) {
         if !self.busy && self.tx.send(Job::Sync { merge, all: true }).is_ok() {
             self.busy = true;
+            self.busy_full = true;
             self.looked = Instant::now();
             self.synced = Instant::now();
         }
@@ -519,8 +654,10 @@ impl Syncer {
     pub fn tick(&mut self, ctx: &egui::Context, st: &mut EditorState) {
         while let Ok(r) = self.rx.try_recv() {
             self.busy = false;
+            self.busy_full = false;
             match r {
-                Ok(s) => {
+                Ok(None) => {}
+                Ok(Some(s)) => {
                     self.last_ok = Some(Instant::now());
                     self.problem = None;
                     self.waiting = s.waiting;
@@ -540,12 +677,16 @@ impl Syncer {
             ctx.request_repaint_after(LOOK_EVERY);
             return;
         }
-        let full = self.synced.elapsed() > SYNC_EVERY;
+        // After a problem, tried again soon (back online); a sign-in that's needed waits for the
+        // button, or the usual time.
+        let full = self.synced.elapsed() > SYNC_EVERY || self.problem.as_deref().is_some_and(|p| !p.starts_with(SIGN_IN));
         if full || self.looked.elapsed() > LOOK_EVERY {
             // Others' changes come in only when nothing here is unsaved (they'd clash).
-            let merge = !unsaved(st);
-            if self.tx.send(Job::Sync { merge, all: full || self.waiting && merge }).is_ok() {
+            let merge = can_merge(st);
+            let all = full || self.waiting && merge;
+            if self.tx.send(Job::Sync { merge, all }).is_ok() {
                 self.busy = true;
+                self.busy_full = all;
                 self.looked = Instant::now();
                 if full {
                     self.synced = Instant::now();
@@ -555,25 +696,41 @@ impl Syncer {
         ctx.request_repaint_after(LOOK_EVERY);
     }
 
-    /// Closing the project: one last sync (up to `wait`).
-    pub fn finish(&mut self, wait: Duration) {
+    /// The project closing: what was saved here and isn't on GitHub yet goes up (waiting up to
+    /// `wait`). Nothing to send: nothing to wait for.
+    pub fn finish(self, wait: Duration) {
         let t = Instant::now();
-        while self.busy && t.elapsed() < wait {
+        let mut busy = self.busy;
+        while busy && t.elapsed() < wait {
             if self.rx.recv_timeout(Duration::from_millis(100)).is_ok() {
-                self.busy = false;
+                busy = false;
             }
         }
-        if !self.busy && self.tx.send(Job::Sync { merge: true, all: true }).is_ok() {
+        let theirs = format!("{}/{}", REMOTE, BRANCH);
+        let to_send = git(&self.dir, &["status", "--porcelain"]).is_ok_and(|s| !s.trim().is_empty()) || git(&self.dir, &["rev-list", "--count", &format!("{}..HEAD", theirs)]).map_or(true, |c| c.trim() != "0");
+        if !busy && to_send && self.tx.send(Job::Sync { merge: true, all: true }).is_ok() {
             let _ = self.rx.recv_timeout(wait.saturating_sub(t.elapsed()).max(Duration::from_secs(1)));
         }
+    }
+
+    /// A whole sync is going on (not just a look for saved changes).
+    pub fn syncing(&self) -> bool {
+        self.busy_full
     }
 
     /// A word for the top bar.
     pub fn status(&self) -> (String, egui::Color32) {
         if let Some(p) = &self.problem {
-            return (if p.starts_with("offline") { "Sync: offline".into() } else { "Sync problem".into() }, theme::WARN);
+            let w = if p.starts_with(OFFLINE) {
+                "Sync: offline"
+            } else if p.starts_with(SIGN_IN) {
+                "Sync: sign in"
+            } else {
+                "Sync problem"
+            };
+            return (w.into(), theme::WARN);
         }
-        if self.busy {
+        if self.busy_full {
             return ("Syncing…".into(), theme::TEXT_DIM);
         }
         if self.waiting {
@@ -588,6 +745,12 @@ impl Syncer {
 
 fn unsaved(st: &EditorState) -> bool {
     st.scripts.values().any(|s| s.dirty()) || (st.blueprint_res.is_some() && st.blueprint_dirty())
+}
+
+/// Whether changes from elsewhere can come in now: nothing unsaved here, nor (working together)
+/// anything others are changing in scripts and blueprints not open here.
+fn can_merge(st: &EditorState) -> bool {
+    !unsaved(st) && !st.collab.as_ref().is_some_and(|c| c.unsaved_shared(st))
 }
 
 // ---------- windows ----------
@@ -613,6 +776,7 @@ enum Msg {
     Got(Result<PathBuf, String>),
     #[cfg_attr(not(windows), allow(dead_code))]
     Installed(Result<(), String>),
+    SignedIn(Result<(), String>),
 }
 
 fn run(ctx: &egui::Context, f: impl FnOnce(&dyn Fn(&str)) -> Msg + Send + 'static) -> Receiver<Msg> {
@@ -692,7 +856,13 @@ impl Panel {
                 Msg::Linked(Ok(l)) => {
                     *syncer = Some(Syncer::start(ctx, &st.project.dir, l));
                 }
-                Msg::Linked(Err(e)) => self.error = e,
+                Msg::Linked(Err(e)) | Msg::SignedIn(Err(e)) => self.error = e,
+                Msg::SignedIn(Ok(())) => {
+                    if let Some(s) = syncer.as_mut() {
+                        s.problem = None;
+                        s.now(can_merge(st));
+                    }
+                }
                 Msg::Installed(r) => {
                     self.installing = false;
                     if let Err(e) = r {
@@ -718,7 +888,7 @@ impl Panel {
                     let (word, color) = s.status();
                     ui.label(RichText::new(match (&s.problem, s.last_ok) {
                         (Some(p), _) => format!("{}: {}", word, p),
-                        (None, Some(t)) if !s.busy => format!("Synced {} ago.", ago(t.elapsed())),
+                        (None, Some(t)) if !s.syncing() => format!("Synced {} ago.", ago(t.elapsed())),
                         _ => word,
                     }).color(color));
                     if s.waiting {
@@ -732,9 +902,16 @@ impl Panel {
                     }
                     ui.label(RichText::new("What you save goes up on its own, and what you did on your other computers comes in when the project opens and every couple of minutes. On another computer: From GitHub on the start screen.").small().color(theme::TEXT_DIM));
                     ui.horizontal(|ui| {
-                        if ui.add_enabled(!s.busy, egui::Button::new("Sync now")).clicked() {
-                            let merge = !unsaved(st);
-                            s.now(merge);
+                        if s.problem.as_deref().is_some_and(|p| p.starts_with(SIGN_IN)) {
+                            if ui.add_enabled(self.job.is_none(), egui::Button::new("Sign in to GitHub")).tip("Git opens GitHub's sign-in in your browser").clicked() {
+                                self.error.clear();
+                                self.job = Some(run(ctx, |say| {
+                                    say("Signing in to GitHub (a browser window may open)…");
+                                    Msg::SignedIn(token().and_then(|t| account(&t).map(|_| ())))
+                                }));
+                            }
+                        } else if ui.add_enabled(!s.busy, egui::Button::new("Sync now")).clicked() {
+                            s.now(can_merge(st));
                         }
                         if ui.button("Stop syncing").tip("This computer stops syncing this project (the repository and the other computers' copies stay as they are)").clicked() {
                             stop = true;
@@ -802,6 +979,10 @@ impl Panel {
         let mut open = true;
         egui::Window::new("From GitHub").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
             ui.set_width(440.0);
+            if base.as_os_str().is_empty() {
+                ui.label(RichText::new("Choose where projects go first (\"Made in\", under New project).").color(theme::WARN));
+                return;
+            }
             ui.label("Your projects synced with GitHub (File → Sync with GitHub on the computer that has them). Getting one here keeps it in sync on this computer too.");
             ui.add_space(4.0);
             if git_exe().is_none() {
@@ -908,7 +1089,7 @@ mod tests {
         let s = sync(&b, &l, true).unwrap();
         assert_eq!(s.conflicts, vec![script.clone()]);
         assert_eq!(std::fs::read_to_string(b.join(&script)).unwrap(), "// b's\n");
-        let aside = PathBuf::from(format!("{} (sync conflicts)", b.display())).join(format!("{} (other computer)", script));
+        let aside = PathBuf::from(format!("{} (sync conflicts)", b.display())).join(script.replace(".jlb", " (other computer).jlb"));
         assert_eq!(std::fs::read_to_string(aside).unwrap(), "// a's\n");
         sync(&a, &l, true).unwrap();
         assert_eq!(std::fs::read_to_string(a.join(&script)).unwrap(), "// b's\n", "and the other computer ends up the same");

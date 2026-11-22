@@ -394,6 +394,13 @@ fn joining_again_updates_the_copy_safely() {
     std::fs::write(a_dir.join("scripts/new_by_bob.jlb"), "// changed outside\n").unwrap();
     run(&ctx, &mut a, &mut b, 2200);
     assert_eq!(b.scripts[res].text, "// changed outside\n");
+    // Bob types in it without saving: syncing elsewhere (GitHub) on Ann's computer waits for that.
+    b.scripts.get_mut(res).unwrap().text.push_str("// typing\n");
+    run(&ctx, &mut a, &mut b, 600);
+    assert!(a.collab.as_ref().unwrap().unsaved_shared(&a));
+    b.save_all();
+    run(&ctx, &mut a, &mut b, 2500);
+    assert!(!a.collab.as_ref().unwrap().unsaved_shared(&a), "saved: nothing in the way");
     // Ann stops sharing: Bob is told (rather than trying to get back in).
     a.collab = None;
     let t0 = Instant::now();

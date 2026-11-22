@@ -979,6 +979,9 @@ pub struct Session {
     scan_at: Instant,
     bps: HashMap<String, Bp>,
     scripts: HashMap<String, Doc>,
+    /// Hosting: when each script or blueprint was last changed by someone (for
+    /// `unsaved_shared`).
+    edited_at: HashMap<String, Instant>,
     open_scripts: HashSet<String>,
     open_bps: HashSet<String>,
     objects_at: Instant,
@@ -1178,6 +1181,7 @@ impl Session {
             scan_at: now,
             bps: HashMap::new(),
             scripts: HashMap::new(),
+            edited_at: HashMap::new(),
             open_scripts: HashSet::new(),
             open_bps: HashSet::new(),
             objects_at: now,
@@ -1584,6 +1588,20 @@ fn read_bp_flat(st: &EditorState, res: &str) -> Flat {
     }
     let read = st.reader();
     st.project.read_text(res).ok().and_then(|t| gex_core::blueprint::load(&t, &read).ok()).map(|t| flat(&t)).unwrap_or_default()
+}
+
+impl Session {
+    /// Hosting: someone here changed a script or blueprint that isn't open on this computer and
+    /// hasn't saved it (in the last few minutes). Bringing in changes made elsewhere (Sync with
+    /// GitHub) would replace what they're typing, so that waits.
+    pub fn unsaved_shared(&self, st: &EditorState) -> bool {
+        if !self.host || self.people.is_empty() {
+            return false;
+        }
+        let recent = |res: &str| self.edited_at.get(res).is_some_and(|t| t.elapsed() < Duration::from_secs(300));
+        self.scripts.iter().any(|(res, d)| recent(res) && !st.scripts.contains_key(res) && st.project.read_text(res).map_or(true, |t| t != d.text))
+            || self.bps.iter().any(|(res, b)| recent(res) && open_tree(st, res).is_none() && read_bp_flat(st, res) != b.flat)
+    }
 }
 
 /// Once a frame: the network, files, blueprints, scripts, where everyone is, following.
@@ -2091,6 +2109,7 @@ impl Session {
                     }
                 }
                 self.refs_dirty = true;
+                self.edited_at.insert(res.clone(), Instant::now());
                 // Everyone, the sender too: that's how it knows its change got here.
                 self.send_all(&M::Objects { res, from: pid, patches: took });
             }
@@ -2154,6 +2173,7 @@ impl Session {
                 if op.t.contains("://") {
                     self.refs_dirty = true;
                 }
+                self.edited_at.insert(res.clone(), Instant::now());
                 self.send_all(&M::Edit { res, from: pid, rev, op });
             }
             _ => {}

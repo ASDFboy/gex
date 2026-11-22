@@ -2,6 +2,17 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.3.8 (Sync with GitHub, gone over):
+- Works with Work together: while you share a linked project, changes from GitHub wait until what others are typing is saved; a joined copy never syncs on its own.
+- Line endings are kept exactly as GEX writes them (no Windows CRLF conversion), and file names of any kind come through.
+- A sign-in that's needed shows as "Sync: sign in" with a button, instead of windows popping up in the background; turned-down sign-ins are forgotten so Git asks again.
+- Offline, sign-in and deleted-repository problems are told apart; after one, it tries again soon.
+- If both computers send at once, it brings in the other's changes and sends again instead of failing.
+- Closing a project sends its last changes in the background (no freeze); quitting GEX waits briefly only when there's something to send.
+- "Syncing…" only shows for real syncs (no flicker every 20 seconds); Git is looked for once, not every frame.
+- From GitHub opens the copy already on this computer instead of making a second one; a failed download leaves nothing behind.
+- Stopping and linking again reuses the same repository; conflict copies keep their file endings ("player (other computer).jlb").
+
 New in 0.3.7:
 - Sync with GitHub (File menu): keeps a project the same on all your computers through a private repository on your GitHub account. What you save goes up on its own; what you did elsewhere comes in when the project opens, every two minutes and when it closes, and open scripts and blueprints update in place. From GitHub on the start screen gets a synced project onto another computer. Conflicting changes keep the newer version and put the other aside; each computer keeps its own Half-Life 2 location. Uses Git (GEX can install it on Windows); the GitHub sign-in stays with Git.
 
