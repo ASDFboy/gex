@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.5.3:
+- Open scripts and blueprints changed by another program (another editor, files copied in) are noticed: read again when they have no unsaved changes, and never written over with the old copy. With unsaved changes, yours are kept and the other version goes to .trash.
+
 New in 0.5.2:
 - Text (Label2D, DRAW_TEXT) is drawn pixel for pixel at the size it's shown, as sharp as text in a browser: it used to be made at a nearby size and stretched, which blurred it.
 

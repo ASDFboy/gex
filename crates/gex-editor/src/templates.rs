@@ -367,4 +367,30 @@ mod tests {
         assert!(after == snapshot(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn files_changed_outside_are_noticed_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("gex-outside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        super::create_demo(&dir).unwrap();
+        let mut st = crate::state::EditorState::new(gex_core::project::Project::open(&dir).unwrap());
+        st.open_script("res://scripts/player.jlb", None);
+        let f = dir.join("scripts/player.jlb");
+        // Changed by another program, no unsaved edits here: read again, and saving keeps it.
+        std::fs::write(&f, "DEF on_step(dt) { }\n>> from outside\n").unwrap();
+        st.check_outside_changes();
+        assert!(st.scripts["res://scripts/player.jlb"].text.contains("from outside"));
+        st.save_all();
+        assert!(std::fs::read_to_string(&f).unwrap().contains("from outside"));
+        // Changed outside while edited here: the edits stay (and save), the other version is kept.
+        st.scripts.get_mut("res://scripts/player.jlb").unwrap().text.push_str(">> mine\n");
+        std::fs::write(&f, "DEF on_step(dt) { }\n>> second outside\n").unwrap();
+        st.outside_checked = None;
+        st.check_outside_changes();
+        st.save_all();
+        assert!(std::fs::read_to_string(&f).unwrap().contains(">> mine"));
+        let kept = std::fs::read_dir(dir.join(".trash")).unwrap().flatten().any(|d| std::fs::read_to_string(d.path().join("scripts/player.jlb")).is_ok_and(|t| t.contains("second outside")));
+        assert!(kept, "the other program's version is kept in .trash");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

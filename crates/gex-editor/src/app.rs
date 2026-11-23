@@ -158,6 +158,9 @@ impl EditorApp {
             let joined = st.collab.as_ref().is_some_and(|c| !c.host);
             self.syncer = crate::github::link_of(&st.project.dir).filter(|_| !joined).map(|l| crate::github::Syncer::start(ctx, &st.project.dir, l));
         }
+        // Open files changed by another program are noticed (checked every couple of seconds).
+        st.check_outside_changes();
+        ctx.request_repaint_after(std::time::Duration::from_secs(2));
         if let Some(s) = &mut self.syncer {
             s.tick(ctx, st);
         }

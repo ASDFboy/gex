@@ -199,6 +199,10 @@ pub struct EditorState {
     pub any_picture_meta: std::cell::Cell<Option<bool>>,
     /// Fonts for measuring text (clicking labels in the view).
     pub fonts: std::cell::RefCell<gex_assets::text::Fonts>,
+    /// When open files were last compared with the disk (see check_outside_changes), and what
+    /// each open blueprint file held then.
+    pub outside_checked: Option<Instant>,
+    pub outside_seen: std::collections::HashMap<String, u64>,
     /// File changes made in the Assets panel, newest last, for "Undo file change".
     pub file_undo: Vec<FileOp>,
     /// Something asked for the Timeline panel to be shown.
@@ -267,6 +271,8 @@ impl EditorState {
             picture_meta: Default::default(),
             any_picture_meta: Default::default(),
             fonts: Default::default(),
+            outside_checked: None,
+            outside_seen: Default::default(),
             file_undo: Vec::new(),
             open_timeline: false,
             open_sprite: false,
@@ -614,6 +620,74 @@ impl EditorState {
                     self.docs[i].blueprint_saved = text;
                 }
             }
+        }
+    }
+
+    /// Open scripts and blueprints changed on disk by another program (another editor, a file
+    /// copied in, a sync): about once a second they're compared with the disk. One with no
+    /// unsaved changes is read again; one with unsaved changes keeps them (saving writes them),
+    /// and the other program's version is kept in .trash so nothing is lost. So GEX never
+    /// writes an old copy over a newer file.
+    pub fn check_outside_changes(&mut self) {
+        if self.outside_checked.is_some_and(|t| t.elapsed().as_secs_f32() < 1.0) {
+            return;
+        }
+        self.outside_checked = Some(Instant::now());
+        let mut notes = Vec::new();
+        for (res, sc) in self.scripts.iter_mut() {
+            let Ok(disk) = self.project.read_text(res) else { continue };
+            if disk == sc.saved {
+                continue;
+            }
+            if !sc.dirty() {
+                sc.text = disk.clone();
+                notes.push(format!("{} changed outside GEX: read again", res));
+            } else {
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let to = self.project.dir.join(".trash").join(stamp.to_string()).join(res.trim_start_matches("res://"));
+                let _ = std::fs::create_dir_all(to.parent().unwrap());
+                let _ = std::fs::write(&to, &disk);
+                notes.push(format!("{} changed outside GEX while you had unsaved changes: yours are kept, the other version is in {}", res, to.display()));
+            }
+            sc.saved = disk;
+        }
+        // Blueprints: by what the file holds (GEX's own saves update it, below). Not while
+        // playing (the game has its own copy).
+        if self.playing.is_some() {
+            for n in notes {
+                self.status = n.clone();
+                self.log(LogKind::Info, n);
+            }
+            return;
+        }
+        let mut changed = Vec::new();
+        let open: Vec<String> = self.blueprint_res.iter().cloned().chain(self.docs.iter().filter_map(|d| d.blueprint_res.clone())).collect();
+        for res in open {
+            let Ok(text) = self.project.read_text(&res) else { continue };
+            let h = {
+                use std::hash::{Hash, Hasher};
+                let mut s = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut s);
+                s.finish()
+            };
+            match self.outside_seen.insert(res.clone(), h) {
+                Some(old) if old != h => {
+                    // Not one of GEX's own saves (those leave the file as it saved it).
+                    let ours = blueprint::save(&self.tree, &self.reader()).ok().is_some_and(|t| t == text && Some(&res) == self.blueprint_res.as_ref());
+                    if !ours {
+                        changed.push(res.trim_start_matches("res://").to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !changed.is_empty() {
+            self.reload_changed(&changed);
+            notes.push(format!("{} changed outside GEX", changed.join(", ")));
+        }
+        for n in notes {
+            self.status = n.clone();
+            self.log(LogKind::Info, n);
         }
     }
 
