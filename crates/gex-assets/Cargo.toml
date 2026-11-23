@@ -6,6 +6,8 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+ab_glyph = "0.2"
+epaint_default_fonts = "0.36"
 gex-core.workspace = true
 image.workspace = true
 steamlocate.workspace = true

@@ -1441,23 +1441,16 @@ fn file_arrived(st: &mut EditorState, rel: &str, bytes: &[u8]) -> bool {
 /// A project file from another computer, keeping this computer's own mounts (where its Half-Life
 /// 2 is, its asset folders): mounts the other has that this one doesn't are left out (their
 /// files are fetched instead), unless the same folder happens to exist here too.
-fn merge_project_file(here: &Path, incoming: &[u8]) -> Vec<u8> {
-    use gex_core::project::{MountKind, ProjectConfig};
+fn merge_project_file(_here: &Path, incoming: &[u8]) -> Vec<u8> {
+    use gex_core::project::ProjectConfig;
     let Ok(mut cfg) = ron::from_str::<ProjectConfig>(&String::from_utf8_lossy(incoming)) else { return incoming.to_vec() };
-    let local: Vec<gex_core::project::MountConfig> = std::fs::read_to_string(here).ok().and_then(|t| ron::from_str::<ProjectConfig>(&t).ok()).map(|c| c.mounts).unwrap_or_default();
-    // Another computer's mounts are only taken where it's Half-Life 2 at a place this computer
-    // has it too; never a folder (that would let others read any folder here they name).
-    let exists = |m: &gex_core::project::MountConfig| match &m.kind {
-        MountKind::Folder(_) => false,
-        MountKind::SourceGame { install, games } => install.is_dir() && games.iter().all(|g| gex_assets::source::HL2_GAMES.contains(&g.as_str())),
-    };
-    let mut mounts: Vec<_> = cfg.mounts.iter().filter_map(|m| local.iter().find(|l| l.scheme == m.scheme).cloned().or_else(|| exists(m).then(|| m.clone()))).collect();
-    let extra: Vec<_> = local.iter().filter(|l| !mounts.iter().any(|m| m.scheme == l.scheme)).cloned().collect();
-    mounts.extend(extra);
-    if mounts == cfg.mounts {
+    // Each computer's mounts are its own (in .gex/mounts.ron, not this file). One from an older
+    // GEX that still names them: never taken on (a folder named there would let others read
+    // any folder here).
+    if cfg.mounts.is_empty() {
         return incoming.to_vec();
     }
-    cfg.mounts = mounts;
+    cfg.mounts.clear();
     ron::ser::to_string_pretty(&cfg, ron::ser::PrettyConfig::new().struct_names(false)).map(String::into_bytes).unwrap_or_else(|_| incoming.to_vec())
 }
 

@@ -117,6 +117,7 @@ exported game starts with them next time (playing in the editor always uses the 
 | `tint` | `white` | Multiplies the whole picture by a color. |
 | `vignette` | `0.0` | Darkens the corners of the screen. (0.0 to 1.0) |
 | `grain` | `0.0` | Moving film grain over the picture. (0.0 to 1.0) |
+| `post_shader` | none | A full-screen shader (a .wgsl file of the project) run over the finished picture: it defines `fn post(color, uv, time, values)` (see SHADERS.md). Scripts: `POST_SHADER(file, [values])`. |
 
 ## Physics
 

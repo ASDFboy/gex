@@ -725,7 +725,19 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             st.tree.objects[id].visible = vis;
         }
     });
-    ui.label(RichText::new(kind.name()).color(theme::TEXT_DIM));
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(kind.name()).color(theme::TEXT_DIM));
+        ui.add_space(8.0);
+        let mut keep = st.tree.objects[id].prop("persistent").is_some_and(|v| v.as_bool());
+        if ui.checkbox(&mut keep, "Persistent").tip("Comes along when the game moves to another blueprint (CHANGE_BLUEPRINT), with everything inside it, like GameMaker's persistent: its scripts keep their variables and on_create doesn't run again. Scripts: self.persistent.").changed() {
+            st.will_change("persistent");
+            if keep {
+                st.tree.objects[id].props.insert("persistent".into(), gex_core::Variant::Bool(true));
+            } else {
+                st.tree.objects[id].props.remove("persistent");
+            }
+        }
+    });
     if let Some(p) = st.tree.objects[id].instance_of.clone() {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("Instance of {}", p.trim_start_matches("res://"))).color(theme::ACCENT));
@@ -1256,7 +1268,8 @@ fn project_files(ui: &egui::Ui, st: &EditorState) -> std::sync::Arc<Vec<(String,
     let mut todo = vec!["res://".to_string()];
     while let Some(dir) = todo.pop() {
         for e in st.vfs.list(&dir) {
-            if e.name.starts_with('.') || e.name == gex_core::project::PROJECT_FILE || out.len() >= 20000 {
+            // (A picture's sprite settings show as part of the picture, not as a file.)
+            if e.name.starts_with('.') || e.name == gex_core::project::PROJECT_FILE || e.name.ends_with(".sprite") || out.len() >= 20000 {
                 continue;
             }
             if e.is_dir {
@@ -1501,6 +1514,126 @@ fn asset_level(ui: &mut egui::Ui, st: &mut EditorState, files: &[(String, bool)]
     asset_tiles(ui, st, &pictures);
 }
 
+/// A picture's sprite settings (frames, origin, speed, mask), edited in a window of its own
+/// and kept beside it in `<picture>.sprite`.
+fn sprite_settings_window(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::collections::HashMap<String, egui::TextureHandle>) {
+    let id = egui::Id::new("sprite settings");
+    let Some((path, mut p)) = ui.data(|d| d.get_temp::<(String, gex_core::render::PictureSettings)>(id)) else { return };
+    let mut open = true;
+    let (mut save, mut remove) = (false, false);
+    let tex = thumb(ui, st, ctx_textures, &path).clone();
+    let size = tex.size();
+    egui::Window::new(format!("Sprite: {}", path.rsplit('/').next().unwrap_or("")))
+        .id(id.with("window"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ui.ctx(), |ui| {
+            egui::Grid::new("sprite settings grid").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                ui.label("Frames across").tip("How many frames side by side in the picture.");
+                ui.add(egui::DragValue::new(&mut p.hframes).range(1..=256));
+                ui.end_row();
+                ui.label("Frames down").tip("How many rows of frames.");
+                ui.add(egui::DragValue::new(&mut p.vframes).range(1..=256));
+                ui.end_row();
+                ui.label("Frame count").tip("How many frames there are, left to right then down (0 = all of them).");
+                ui.add(egui::DragValue::new(&mut p.frames).range(0..=65536));
+                ui.end_row();
+                ui.label("Frames a second").tip("How fast it plays by itself (0 = it doesn't). A sprite's picture_speed multiplies it.");
+                ui.add(egui::DragValue::new(&mut p.fps).range(0.0..=240.0).speed(0.25));
+                ui.end_row();
+                let fs = p.frame_size([size[0] as u32, size[1] as u32]);
+                ui.label("Origin").tip("Where the sprite's position is, in pixels from a frame's top-left (click the picture to set it).");
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(&mut p.origin[0]).prefix("x ").speed(0.5));
+                    ui.add(egui::DragValue::new(&mut p.origin[1]).prefix("y ").speed(0.5));
+                });
+                ui.end_row();
+                ui.label("");
+                ui.horizontal(|ui| {
+                    for (label, f) in [("Top-left", [0.0, 0.0]), ("Center", [0.5, 0.5]), ("Bottom", [0.5, 1.0])] {
+                        if ui.small_button(label).clicked() {
+                            p.origin = [(fs.x * f[0]).floor(), (fs.y * f[1]).floor()];
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label("Mouse finds it by").tip("box: the frame's rectangle; ellipse: the oval inside it; precise: only its visible pixels.");
+                egui::ComboBox::from_id_salt("sprite mask").selected_text(p.mask.as_str()).show_ui(ui, |ui| {
+                    for m in ["box", "ellipse", "precise"] {
+                        ui.selectable_value(&mut p.mask, m.to_string(), m);
+                    }
+                });
+                ui.end_row();
+            });
+            // The picture, its frames and its origin (on the first frame).
+            let scale = (260.0 / size[0].max(1) as f32).min(200.0 / size[1].max(1) as f32).min(4.0);
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(size[0] as f32, size[1] as f32) * scale, egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 0.0, Color32::from_gray(30));
+            painter.image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            let fw = rect.width() / p.hframes.max(1) as f32;
+            let fh = rect.height() / p.vframes.max(1) as f32;
+            for i in 1..p.hframes.max(1) {
+                let x = rect.left() + fw * i as f32;
+                painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, theme::ACCENT));
+            }
+            for i in 1..p.vframes.max(1) {
+                let y = rect.top() + fh * i as f32;
+                painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(1.0, theme::ACCENT));
+            }
+            let o = rect.min + egui::vec2(p.origin[0], p.origin[1]) * scale;
+            painter.line_segment([o - egui::vec2(6.0, 0.0), o + egui::vec2(6.0, 0.0)], egui::Stroke::new(2.0, theme::WARN));
+            painter.line_segment([o - egui::vec2(0.0, 6.0), o + egui::vec2(0.0, 6.0)], egui::Stroke::new(2.0, theme::WARN));
+            if let Some(at) = r.interact_pointer_pos().filter(|_| r.clicked() || r.dragged()) {
+                let local = (at - rect.min) / scale;
+                let fs = p.frame_size([size[0] as u32, size[1] as u32]);
+                p.origin = [(local.x % fs.x).floor(), (local.y % fs.y).floor()];
+            }
+            ui.horizontal(|ui| {
+                save = ui.button("Save").tip("Kept beside the picture; every Sprite2D showing it uses these.").clicked();
+                if st.picture_meta(&path).is_some() {
+                    remove = ui.button("Remove").tip("Back to a plain picture (each sprite's own frames and pivot).").clicked();
+                }
+            });
+        });
+    if save || remove {
+        let file = gex_core::render::PictureSettings::file_for(&path);
+        let old = st.picture_meta(&path);
+        if let Some(f) = st.project.res_to_path(&file) {
+            let r = if save { gex_core::project::write_if_changed(&f, p.to_text().as_bytes()).map(|_| ()) } else { std::fs::remove_file(&f) };
+            match r {
+                Ok(()) => {
+                    st.forget_picture_meta(&file);
+                    // Sprites in this blueprint showing it at one frame's old size take the new one.
+                    let pic = [size[0] as u32, size[1] as u32];
+                    let was = old.map(|(o, _)| o.frame_size(pic)).unwrap_or(gex_core::glam::Vec2::new(pic[0] as f32, pic[1] as f32));
+                    let now = if save { p.frame_size(pic) } else { gex_core::glam::Vec2::new(pic[0] as f32, pic[1] as f32) };
+                    let ids: Vec<_> = st.tree.walk().into_iter().filter(|i| st.tree.objects[*i].kind == ObjectKind::Sprite2D && st.tree.objects[*i].text("texture") == path).collect();
+                    if was != now && !ids.is_empty() {
+                        st.will_change("sprite settings");
+                        for i in ids {
+                            let n = &mut st.tree.objects[i];
+                            if (n.num("width", 32.0) as f32 - was.x).abs() < 0.5 && (n.num("height", 32.0) as f32 - was.y).abs() < 0.5 {
+                                n.props.insert("width".into(), Variant::Num(now.x as f64));
+                                n.props.insert("height".into(), Variant::Num(now.y as f64));
+                            }
+                        }
+                    }
+                    st.status = format!("sprite settings for {} {}", path, if save { "saved" } else { "removed" });
+                }
+                Err(e) => st.status = format!("couldn't save the sprite settings: {}", e),
+            }
+        }
+        open = false;
+    }
+    if open {
+        ui.data_mut(|d| d.insert_temp(id, (path, p)));
+    } else {
+        ui.data_mut(|d| d.remove::<(String, gex_core::render::PictureSettings)>(id));
+    }
+}
+
 fn thumb<'a>(ui: &egui::Ui, st: &EditorState, tex: &'a mut std::collections::HashMap<String, egui::TextureHandle>, path: &str) -> &'a egui::TextureHandle {
     tex.entry(path.to_string()).or_insert_with(|| {
         let img = gex_assets::load_image(&st.vfs, path).unwrap_or(gex_assets::Rgba { width: 1, height: 1, pixels: vec![255, 0, 255, 255] });
@@ -1622,6 +1755,7 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
             bg.context_menu(|ui| new_asset_menu(ui, st, "res://"));
         }
     });
+    sprite_settings_window(ui, st, ctx_textures);
     let Some(sel) = preview else { return };
     ui.separator();
     let w = ui.available_width().min(150.0);
@@ -1638,9 +1772,17 @@ pub fn assets(ui: &mut egui::Ui, st: &mut EditorState, ctx_textures: &mut std::c
                 if ui.small_button("Use on selected").tip("Set the selected object's texture to this").clicked() {
                     st.will_change("texture");
                     st.tree.objects[id].props.insert("texture".into(), Variant::Res(sel.clone()));
+                    st.size_to_picture(id);
                 }
             }
         });
+        if editing && sel.starts_with("res://") {
+            let has = st.picture_meta(&sel).is_some();
+            if ui.small_button(if has { "Sprite settings…" } else { "Make a sprite…" }).tip("Frames, origin, speed and how the mouse finds it, kept with the picture: every Sprite2D showing it uses them (like a GameMaker sprite).").clicked() {
+                let cur = st.picture_meta(&sel).map(|m| (*m.0).clone()).unwrap_or_default();
+                ui.data_mut(|d| d.insert_temp(egui::Id::new("sprite settings"), (sel.clone(), cur)));
+            }
+        }
     } else if gex_assets::model::is_model(&sel) {
         st.previews.model(ui, &st.project, &sel, w.min(130.0));
         if let Some(id) = st.selected.filter(|i| editing && st.tree.objects.get(*i).is_some_and(|n| n.kind == ObjectKind::Mesh3D)) {

@@ -10,6 +10,7 @@ pub mod formats;
 pub mod image_load;
 pub mod model;
 pub mod source;
+pub mod text;
 pub mod vfs;
 pub mod vmt;
 pub mod vpk;

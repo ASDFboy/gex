@@ -43,7 +43,11 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
     }
     let h = t.trim_start_matches('#');
     let p = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
+    // #rgb and #rgba: each digit twice (#f80 is #ff8800).
+    let q = |i: usize| u8::from_str_radix(h.get(i..i + 1)?, 16).ok().map(|v| v * 17);
     match h.len() {
+        3 => Some([q(0)?, q(1)?, q(2)?, 255]),
+        4 => Some([q(0)?, q(1)?, q(2)?, q(3)?]),
         6 => Some([p(0)?, p(2)?, p(4)?, 255]),
         8 => Some([p(0)?, p(2)?, p(4)?, p(6)?]),
         _ => None,
@@ -142,7 +146,7 @@ impl Default for Fonts {
 
 impl Fonts {
     /// The font for a file path ("" = the default), loading it the first time.
-    pub fn get(&mut self, vfs: &gex_assets::Vfs, path: &str, problems: &mut Vec<String>) -> FontArc {
+    pub fn get(&mut self, vfs: &crate::Vfs, path: &str, problems: &mut Vec<String>) -> FontArc {
         if path.is_empty() {
             return self.main.clone();
         }
@@ -283,7 +287,19 @@ fn lines_of(fonts: &Fonts, base: &FontArc, spans: &[Span], base_px: f32, scale: 
 }
 
 /// Draws text into a picture.
-pub fn rasterize(fonts: &mut Fonts, vfs: &gex_assets::Vfs, text: &str, style: &Style, problems: &mut Vec<String>) -> TextImage {
+pub fn rasterize(fonts: &mut Fonts, vfs: &crate::Vfs, text: &str, style: &Style, problems: &mut Vec<String>) -> TextImage {
+    build(fonts, vfs, text, style, problems, true)
+}
+
+/// How big a piece of text is, in game pixels (its picture without the room for an outline):
+/// laid out exactly as it's drawn, without drawing it.
+pub fn measure(fonts: &mut Fonts, vfs: &crate::Vfs, text: &str, style: &Style, problems: &mut Vec<String>) -> [f32; 2] {
+    let i = build(fonts, vfs, text, style, problems, false);
+    let s = i.scale.max(1e-6);
+    [((i.w as f32 - i.pad * 2.0) / s).max(0.0), ((i.h as f32 - i.pad * 2.0) / s).max(0.0)]
+}
+
+fn build(fonts: &mut Fonts, vfs: &crate::Vfs, text: &str, style: &Style, problems: &mut Vec<String>, pixels: bool) -> TextImage {
     let base = fonts.get(vfs, style.font, problems);
     let scale = style.scale;
     let spans = parse(text);
@@ -369,6 +385,9 @@ pub fn rasterize(fonts: &mut Fonts, vfs: &gex_assets::Vfs, text: &str, style: &S
     }
     let w = (width + pad * 2.0).ceil().max(1.0) as u32;
     let h = (y + pad).ceil().max(1.0) as u32;
+    if !pixels {
+        return TextImage { w, h, rgba: Vec::new(), scale, pad };
+    }
     let mut img = vec![0u8; (w * h * 4) as usize];
     for r in bgs {
         fill(&mut img, w, h, r);
@@ -480,7 +499,7 @@ mod tests {
 
     #[test]
     fn draws_text() {
-        let vfs = gex_assets::Vfs::new(std::path::Path::new("."), &Default::default());
+        let vfs = crate::Vfs::new(std::path::Path::new("."), &Default::default());
         let mut fonts = Fonts::default();
         let mut problems = Vec::new();
         let st = |scale: f32, wrap: f32, outline: f32| Style { font: "", size: 16.0, scale, color: [255; 4], align: 0.5, wrap, outline, outline_color: [0, 0, 0, 255] };

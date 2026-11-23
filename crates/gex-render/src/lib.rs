@@ -10,7 +10,7 @@
 pub mod camera;
 pub mod mesh;
 pub mod loader;
-pub mod text;
+pub use gex_assets::text;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -77,6 +77,8 @@ struct Globals {
     grade2: [f32; 4],
     /// Width, height, 1/width, 1/height of the picture.
     screen: [f32; 4],
+    /// The full-screen shader's four values (POST_SHADER).
+    user: [f32; 4],
     lights: [LightU; MAX_LIGHTS],
 }
 
@@ -119,6 +121,8 @@ pub struct LineVertex {
 pub struct Overlay {
     pub lines_3d: Vec<LineVertex>,
     pub lines_2d: Vec<LineVertex>,
+    /// Sprites whose picture is still loading show as a faint box (the editor's view).
+    pub placeholders: bool,
 }
 
 impl Overlay {
@@ -161,7 +165,16 @@ struct Tex {
     bind: wgpu::BindGroup,
     view: wgpu::TextureView,
     size: [u32; 2],
+    /// Its size in video memory.
+    bytes: u64,
+    /// The frame it was last drawn in, for a 2D picture loaded in the background (those can be
+    /// let go when video memory runs short, and come back when drawn again); NEVER for the rest.
+    used: std::cell::Cell<u64>,
 }
+
+const NEVER: u64 = u64::MAX;
+/// Video memory 2D pictures may take before the ones not drawn for a while are let go.
+const PICTURE_BUDGET: u64 = 768 << 20;
 
 struct Target {
     color: wgpu::Texture,
@@ -191,6 +204,34 @@ enum Geo {
 /// Sprites drawn together: texture, pixel filtering, blend, first instance, count, custom
 /// shader ("" for none).
 type SpriteBatch = (String, bool, Blend, u32, u32, String);
+
+/// A picture that's drawn into and kept (a Canvas2D or a surface).
+struct Canvas {
+    _color: wgpu::Texture,
+    view: wgpu::TextureView,
+    _depth: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    /// As a texture: smooth, pixel.
+    tex: [Tex; 2],
+    size: [u32; 2],
+    globals: wgpu::Buffer,
+    globals_bg: wgpu::BindGroup,
+    /// Not filled yet (cleared the first time it's drawn into or shown).
+    fresh: bool,
+    seen: u64,
+}
+
+/// One canvas's drawing this frame.
+struct CanvasJob {
+    key: String,
+    clear: Option<[f32; 4]>,
+    batches: Vec<SpriteBatch>,
+    lines: std::ops::Range<u32>,
+}
+
+fn is_canvas(key: &str) -> bool {
+    key.starts_with("@canvas:") || key.starts_with("@surface:")
+}
 
 /// A label's text picture, kept while it's shown: the texture, its size and scale, and the
 /// frame it was last used in.
@@ -223,6 +264,9 @@ struct Draw3 {
 }
 
 pub struct Renderer {
+    canvases: HashMap<String, Canvas>,
+    /// Full-screen shaders (graphics.post_shader), built once each.
+    post_custom: HashMap<String, Result<wgpu::RenderPipeline, String>>,
     light2d_pipe: wgpu::RenderPipeline,
     multiply_pipe: wgpu::RenderPipeline,
     bright_pipe: wgpu::RenderPipeline,
@@ -673,6 +717,8 @@ impl Renderer {
             fonts: text::Fonts::default(),
             texts: HashMap::new(),
             frame_no: 0,
+            canvases: HashMap::new(),
+            post_custom: HashMap::new(),
         }
     }
 
@@ -689,6 +735,7 @@ impl Renderer {
         self.texts.clear();
         self.fonts = text::Fonts::default();
         self.sprite_custom.clear();
+        self.post_custom.clear();
         self.materials.clear();
         self.normals.clear();
         self.custom.clear();
@@ -830,6 +877,7 @@ impl Renderer {
             // All there: ready to draw.
             let (_, tex, _, _) = self.uploading.take().unwrap();
             let size = [dec.w, dec.h];
+            let bytes: u64 = dec.levels.iter().map(|l| l.len() as u64).sum();
             self.decoded.pop_front();
             let view = tex.create_view(&Default::default());
             let sampler = if pixel { &self.nearest } else { &self.linear };
@@ -842,7 +890,7 @@ impl Renderer {
                 ],
             });
             self.loading[i].remove(&path);
-            self.textures[i].insert(path, Ok(Tex { bind, view, size }));
+            self.textures[i].insert(path, Ok(Tex { bind, view, size, bytes, used: std::cell::Cell::new(self.frame_no) }));
         }
     }
 
@@ -995,6 +1043,48 @@ impl Renderer {
         self.sprite_custom.insert(key, r);
     }
 
+    /// Builds (once) a project's full-screen shader: its fn post(...) over the picture.
+    fn ensure_post_shader(&mut self, device: &wgpu::Device, vfs: &Vfs, path: &str) {
+        if self.post_custom.contains_key(path) {
+            return;
+        }
+        let r = (|| -> Result<wgpu::RenderPipeline, String> {
+            let user = vfs.read_text(path)?;
+            let src = format!(
+                "{}\n// ---- {} ----\n{}\n\n// The finished picture anywhere (screen colors).\nfn post_texture(uv: vec2<f32>) -> vec4<f32> {{\n    return textureSampleLevel(tex, samp, uv, 0.0);\n}}\n\n@fragment\nfn fs_post_custom(o: SkyOut) -> @location(0) vec4<f32> {{\n    let uv = screen_uv(o.ndc);\n    let c = textureSampleLevel(tex, samp, uv, 0.0);\n    return clamp(post(c, uv, g.post.z, g.user), vec4<f32>(0.0), vec4<f32>(1.0));\n}}\n",
+                include_str!("shaders.wgsl"),
+                path,
+                user
+            );
+            let module = wgpu::naga::front::wgsl::parse_str(&src).map_err(|e| e.emit_to_string(&src))?;
+            wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+                .validate(&module)
+                .map_err(|e| e.emit_to_string(&src))?;
+            let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(path), source: wgpu::ShaderSource::Wgsl(src.into()) });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("gex post shader"),
+                bind_group_layouts: &[Some(&self.globals_layout), Some(&self.tex_layout)],
+                immediate_size: 0,
+            });
+            let targets = [Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })];
+            Ok(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(path),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_sky"), compilation_options: Default::default(), buffers: &[] },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState { module: &sm, entry_point: Some("fs_post_custom"), compilation_options: Default::default(), targets: &targets }),
+                multiview_mask: None,
+                cache: None,
+            }))
+        })();
+        if let Err(e) = &r {
+            self.problems.push(format!("shader {}: {}", path, e));
+        }
+        self.post_custom.insert(path.to_string(), r);
+    }
+
     /// The picture of a label's text at a scale (made once; kept while it's shown).
     fn ensure_text(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vfs: &Vfs, l: &gex_core::render::Label, scale: f32, tinted: bool) -> String {
         let base = if tinted { [255u8; 4] } else { l.color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8) };
@@ -1013,6 +1103,125 @@ impl Renderer {
         key
     }
 
+    /// Makes (or remakes, at a new size) a canvas.
+    fn ensure_canvas(&mut self, device: &wgpu::Device, key: &str, size: [u32; 2]) {
+        let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
+        let now = self.frame_no;
+        if let Some(c) = self.canvases.get_mut(key) {
+            c.seen = now;
+            if c.size == size {
+                return;
+            }
+        }
+        let mk = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("canvas"),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let color = mk(COLOR_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
+        let depth = mk(DEPTH_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let view = color.create_view(&Default::default());
+        let bind = |sampler: &wgpu::Sampler| {
+            let v = color.create_view(&Default::default());
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.tex_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&v) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) }],
+            });
+            Tex { bind, view: v, size, bytes: size[0] as u64 * size[1] as u64 * 4, used: std::cell::Cell::new(NEVER) }
+        };
+        let tex = [bind(&self.linear), bind(&self.nearest)];
+        let globals = device.create_buffer(&wgpu::BufferDescriptor { label: Some("canvas globals"), size: std::mem::size_of::<Globals>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let globals_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("canvas globals"),
+            layout: &self.globals_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&self.shadow_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.shadow_samp) },
+            ],
+        });
+        let depth_view = depth.create_view(&Default::default());
+        self.canvases.insert(key.to_string(), Canvas { _color: color, view, _depth: depth, depth_view, tex, size, globals, globals_bg, fresh: true, seen: now });
+    }
+
+    /// A 2D label as a sprite of its text's picture (made when its text or look changes).
+    /// `zoom`: picture pixels per world pixel.
+    fn text_sprite(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vfs: &Vfs, l: &gex_core::render::Label, zoom: f32) -> Option<gex_core::render::Sprite> {
+        if l.text.is_empty() || l.color[3] <= 0.0 {
+            return None;
+        }
+        let k = l.model.x_axis.truncate().length().max(l.model.y_axis.truncate().length()).max(1e-4);
+        // Kept to steps (a quarter octave), so zooming doesn't make a new picture every frame.
+        let want = (zoom * k).clamp(0.05, 16.0);
+        let mut scale = 2f32.powf((want.log2() * 4.0).round() / 4.0);
+        // At most 4096 pixels across.
+        let longest = l.text.lines().map(|t| t.chars().count()).max().unwrap_or(1).max(1) as f32;
+        if longest * l.size * 0.7 * scale > 4096.0 {
+            scale = 4096.0 / (longest * l.size * 0.7);
+        }
+        let tinted = !l.text.contains("[color=");
+        let key = self.ensure_text(device, queue, vfs, l, scale, tinted);
+        let t = &self.texts[&key];
+        let (w, h) = (t.size[0] as f32 / t.scale, t.size[1] as f32 / t.scale);
+        let pad = t.pad / t.scale;
+        // The anchor point of the text block (without the padding) sits at the label's position.
+        let inner = gex_core::glam::Vec2::new(w - pad * 2.0, h - pad * 2.0);
+        let off = -(l.anchor * inner) - gex_core::glam::Vec2::splat(pad);
+        let color = if tinted { l.color } else { [1.0, 1.0, 1.0, l.color[3]] };
+        Some(gex_core::render::Sprite {
+            object: l.object,
+            model: l.model * Mat4::from_translation(off.extend(0.0)),
+            size: gex_core::glam::Vec2::new(w, h),
+            color,
+            texture: key,
+            layer: l.layer,
+            pixel: Some(false),
+            lit: false,
+            ..Default::default()
+        })
+    }
+
+    /// When 2D pictures take more video memory than PICTURE_BUDGET, the ones not drawn for the
+    /// longest (and not for a few seconds at least) are let go, down to most of the budget.
+    /// Drawn again, they load again in the background.
+    fn let_go_of_pictures(&mut self) {
+        if self.frame_no % 60 != 0 {
+            return;
+        }
+        let held: u64 = self.textures.iter().flat_map(|m| m.values()).filter_map(|t| t.as_ref().ok()).filter(|t| t.used.get() != NEVER).map(|t| t.bytes).sum();
+        if held <= PICTURE_BUDGET {
+            return;
+        }
+        let now = self.frame_no;
+        let mut old: Vec<(u64, usize, String, u64)> = Vec::new();
+        for (i, m) in self.textures.iter().enumerate() {
+            for (k, t) in m {
+                if let Ok(t) = t {
+                    if t.used.get() != NEVER && now - t.used.get() > 300 {
+                        old.push((t.used.get(), i, k.clone(), t.bytes));
+                    }
+                }
+            }
+        }
+        old.sort();
+        let mut over = held - PICTURE_BUDGET * 3 / 4;
+        for (_, i, k, b) in old {
+            self.textures[i].remove(&k);
+            over = over.saturating_sub(b);
+            if over == 0 {
+                break;
+            }
+        }
+    }
+
     fn tex(&self, path: &str, pixel: bool) -> &Tex {
         if path.is_empty() {
             return if pixel { &self.white_nearest } else { &self.white_linear };
@@ -1026,8 +1235,16 @@ impl Renderer {
         if path.starts_with("@text:") {
             return self.texts.get(path).map(|t| &t.tex).unwrap_or(&self.missing);
         }
+        if is_canvas(path) {
+            return self.canvases.get(path).map(|c| &c.tex[pixel as usize]).unwrap_or(&self.missing);
+        }
         match self.textures[pixel as usize].get(path) {
-            Some(Ok(t)) => t,
+            Some(Ok(t)) => {
+                if t.used.get() != NEVER {
+                    t.used.set(self.frame_no);
+                }
+                t
+            }
             // Still on its way: plain white for the moment.
             None if self.loading[pixel as usize].contains_key(path) => if pixel { &self.white_nearest } else { &self.white_linear },
             _ => &self.missing,
@@ -1234,6 +1451,16 @@ impl Renderer {
         let mesh_pixel = gs.texture_filter == "pixel";
         // Load what this frame needs: 2D pictures on other threads (see request_texture).
         self.frame_no += 1;
+        self.let_go_of_pictures();
+        for k in &list.canvases_freed {
+            self.canvases.remove(k);
+        }
+        for c in &list.canvases {
+            self.ensure_canvas(device, &c.key, c.size);
+        }
+        let now = self.frame_no;
+        // A canvas not shown or drawn into for a minute (its object gone) goes.
+        self.canvases.retain(|_, c| now - c.seen < 3600);
         self.upload_decoded(device, queue);
         let mut last: (&str, bool) = ("", false);
         for s in &list.sprites {
@@ -1255,43 +1482,16 @@ impl Renderer {
             // Picture pixels per world pixel: the view's zoom times the resolution.
             let zoom = (cams.view_proj_2d.x_axis.x * size[0] as f32 / 2.0).abs().max(1e-4);
             for l in &list.labels {
-                if l.text.is_empty() || l.color[3] <= 0.0 {
-                    continue;
+                if let Some(t) = self.text_sprite(device, queue, vfs, l, zoom) {
+                    text_sprites.push(t);
                 }
-                let k = l.model.x_axis.truncate().length().max(l.model.y_axis.truncate().length()).max(1e-4);
-                // Kept to steps (a quarter octave), so zooming doesn't make a new picture every frame.
-                let want = (zoom * k).clamp(0.05, 16.0);
-                let mut scale = 2f32.powf((want.log2() * 4.0).round() / 4.0);
-                // At most 4096 pixels across.
-                let longest = l.text.lines().map(|t| t.chars().count()).max().unwrap_or(1).max(1) as f32;
-                if longest * l.size * 0.7 * scale > 4096.0 {
-                    scale = 4096.0 / (longest * l.size * 0.7);
-                }
-                let tinted = !l.text.contains("[color=");
-                let key = self.ensure_text(device, queue, vfs, l, scale, tinted);
-                let t = &self.texts[&key];
-                let (w, h) = (t.size[0] as f32 / t.scale, t.size[1] as f32 / t.scale);
-                let pad = t.pad / t.scale;
-                // The anchor point of the text block (without the padding) sits at the label's position.
-                let inner = gex_core::glam::Vec2::new(w - pad * 2.0, h - pad * 2.0);
-                let off = -(l.anchor * inner) - gex_core::glam::Vec2::splat(pad);
-                let color = if tinted { l.color } else { [1.0, 1.0, 1.0, l.color[3]] };
-                text_sprites.push(gex_core::render::Sprite {
-                    object: l.object,
-                    model: l.model * Mat4::from_translation(off.extend(0.0)),
-                    size: gex_core::glam::Vec2::new(w, h),
-                    color,
-                    texture: key,
-                    layer: l.layer,
-                    pixel: Some(false),
-                    lit: false,
-                    ..Default::default()
-                });
             }
         }
         // Text pictures not shown for a while go (text that changes often would pile up).
         let now = self.frame_no;
-        self.texts.retain(|_, t| now - t.used < 120);
+        // (Many at once, from text changing every frame: only the ones still showing stay.)
+        let keep = if self.texts.len() > 256 { 2 } else { 120 };
+        self.texts.retain(|_, t| now - t.used < keep);
         for l in &list.lights_2d {
             self.ensure_texture(device, queue, vfs, &l.texture, true);
         }
@@ -1555,6 +1755,7 @@ impl Renderer {
             },
             grade2: [(gs.vignette + env.as_ref().map(|e| e.vignette).unwrap_or(0.0)).min(1.0), gs.grain, (gs.antialiasing == "fxaa") as i32 as f32, 0.0],
             screen: [size[0] as f32, size[1] as f32, 1.0 / size[0] as f32, 1.0 / size[1] as f32],
+            user: list.post_values,
             lights,
         };
         let mut g = g;
@@ -1587,6 +1788,10 @@ impl Renderer {
                 let mut i = Instance::flat(model, color, uv);
                 i.mat = fx.0;
                 i.extra0 = fx.1;
+                // A canvas holds its colors premultiplied by alpha: the shader is told so.
+                if is_canvas(tex) {
+                    i.color[3] -= 2.0;
+                }
                 inst.push(i);
                 match batches.last_mut() {
                     Some(b) if b.0 == tex && b.1 == pixel && b.2 == blend && b.5 == fx.2 => b.4 += 1,
@@ -1619,6 +1824,11 @@ impl Renderer {
                 let local = Mat4::from_translation(off) * Mat4::from_scale(Vec3::new(s.size.x, s.size.y, 1.0));
                 let pixel = s.pixel.unwrap_or(sprite_pixel);
                 if !self.texture_ready(&s.texture, pixel) {
+                    // Still loading: in the editor, a faint box where it goes.
+                    if overlay.placeholders {
+                        let model = s.model * local;
+                        push(&mut inst, &mut sprite_batches, model, [0.5, 0.5, 0.55, 0.25], [0.0, 0.0, 1.0, 1.0], "", true, Blend::Normal, ([0.0; 4], [0.0; 4], ""));
+                    }
                     continue;
                 }
                 let tex_size = self.tex(&s.texture, pixel).size;
@@ -1682,6 +1892,59 @@ impl Renderer {
                 }
             }
         }
+        // ---- what's drawn into canvases, in their own pixels ----
+        let mut canvas_jobs: Vec<CanvasJob> = Vec::new();
+        let mut canvas_lines: Vec<(usize, Vec<([f32; 2], [f32; 2], [f32; 4])>)> = Vec::new();
+        for c in &list.canvases {
+            let Some(cv) = self.canvases.get(&c.key) else { continue };
+            let busy = !c.sprites.is_empty() || !c.labels.is_empty() || !c.lines.is_empty();
+            if !busy && !c.clear && !cv.fresh {
+                continue;
+            }
+            let clear = (c.clear || cv.fresh).then_some(c.clear_color);
+            let mut cg = g;
+            cg.vp2 = Mat4::orthographic_rh(0.0, cv.size[0] as f32, cv.size[1] as f32, 0.0, -1000.0, 1000.0).to_cols_array_2d();
+            queue.write_buffer(&cv.globals, 0, bytemuck::bytes_of(&cg));
+            let mut texts = Vec::new();
+            for l in &c.labels {
+                if let Some(t) = self.text_sprite(device, queue, vfs, l, l.model.x_axis.truncate().length().max(1e-4)) {
+                    texts.push(t);
+                }
+            }
+            let mut all: Vec<&gex_core::render::Sprite> = c.sprites.iter().chain(texts.iter()).collect();
+            all.sort_by(|a, b| a.layer.total_cmp(&b.layer));
+            let mut batches: Vec<SpriteBatch> = Vec::new();
+            for s in all {
+                let pixel = s.pixel.unwrap_or(sprite_pixel);
+                self.request_texture(device, queue, vfs, &s.texture, pixel, true);
+                if !self.texture_ready(&s.texture, pixel) || s.texture == c.key {
+                    continue;
+                }
+                let mut uv = region_uv(s.region, self.tex(&s.texture, pixel).size);
+                if s.flip[0] {
+                    uv.swap(0, 2);
+                }
+                if s.flip[1] {
+                    uv.swap(1, 3);
+                }
+                let off = (-s.pivot * s.size).extend(0.0);
+                let model = s.model * Mat4::from_translation(off) * Mat4::from_scale(Vec3::new(s.size.x, s.size.y, 1.0));
+                let start = inst.len() as u32;
+                let mut i = Instance::flat(model, srgb_to_linear(s.color), uv);
+                i.mat = s.effects;
+                i.extra0 = s.values;
+                if is_canvas(&s.texture) {
+                    i.color[3] -= 2.0;
+                }
+                inst.push(i);
+                match batches.last_mut() {
+                    Some(b) if b.0 == s.texture && b.1 == pixel && b.2 == s.blend && b.5 == s.shader => b.4 += 1,
+                    _ => batches.push((s.texture.clone(), pixel, s.blend, start, 1, s.shader.clone())),
+                }
+            }
+            canvas_lines.push((canvas_jobs.len(), c.lines.clone()));
+            canvas_jobs.push(CanvasJob { key: c.key.clone(), clear, batches, lines: 0..0 });
+        }
         if !inst.is_empty() {
             upload(device, queue, &mut self.instances, bytemuck::cast_slice(&inst), wgpu::BufferUsages::VERTEX);
         }
@@ -1723,6 +1986,14 @@ impl Renderer {
         }
         lines.extend_from_slice(&overlay.lines_2d);
         let n2 = lines.len() as u32 - n3;
+        for (j, ls) in canvas_lines {
+            let start = lines.len() as u32;
+            for (a, b, c) in ls {
+                lines.push(LineVertex { pos: [a[0], a[1], 0.0], color: c, space: 1.0 });
+                lines.push(LineVertex { pos: [b[0], b[1], 0.0], color: c, space: 1.0 });
+            }
+            canvas_jobs[j].lines = start..lines.len() as u32;
+        }
         if !lines.is_empty() {
             upload(device, queue, &mut self.lines, bytemuck::cast_slice(&lines), wgpu::BufferUsages::VERTEX);
         }
@@ -1788,6 +2059,41 @@ impl Renderer {
                     pass.set_bind_group(1, &self.tex(tex, *px).bind, &[]);
                     pass.draw_indexed(0..self.quad.count, 0, *start..start + count);
                 }
+            }
+        }
+        // ---- canvases: drawn into first, so the frame shows what they have now ----
+        for job in &canvas_jobs {
+            let Some(cv) = self.canvases.get(&job.key) else { continue };
+            let load = match job.clear {
+                // Kept premultiplied by alpha (see is_canvas).
+                Some(c) => wgpu::LoadOp::Clear(wgpu::Color { r: (c[0] * c[3]) as f64, g: (c[1] * c[3]) as f64, b: (c[2] * c[3]) as f64, a: c[3] as f64 }),
+                None => wgpu::LoadOp::Load,
+            };
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("gex canvas"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &cv.view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load, store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &cv.depth_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &cv.globals_bg, &[]);
+            if !job.batches.is_empty() {
+                self.draw_sprites(&mut pass, &job.batches);
+            }
+            if !job.lines.is_empty() {
+                pass.set_pipeline(&self.line2_pipe);
+                pass.set_vertex_buffer(0, self.lines.as_ref().unwrap().slice(..));
+                pass.draw(job.lines.clone(), 0..1);
+            }
+        }
+        for job in &canvas_jobs {
+            if let Some(cv) = self.canvases.get_mut(&job.key) {
+                cv.fresh = false;
             }
         }
         // ---- main pass ----
@@ -1935,6 +2241,27 @@ impl Renderer {
             pass.set_bind_group(0, &self.globals_bg, &[]);
             pass.set_bind_group(1, &t.post.1, &[]);
             pass.draw(0..3, 0..1);
+        }
+        // ---- the project's own full-screen shader, over the finished picture ----
+        let post = gs.post_shader.0.clone();
+        if !post.is_empty() {
+            self.ensure_post_shader(device, vfs, &post);
+            if let Some(Ok(pipe)) = self.post_custom.get(&post) {
+                let t = self.target.as_ref().unwrap();
+                enc.copy_texture_to_texture(t.color.as_image_copy(), t.post_tex.as_image_copy(), wgpu::Extent3d { width: t.size[0], height: t.size[1], depth_or_array_layers: 1 });
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("gex post shader"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &t.view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(0, &self.globals_bg, &[]);
+                pass.set_bind_group(1, &t.post.1, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
         queue.submit([enc.finish()]);
         // Forget skinned buffers of objects that weren't drawn.
@@ -2084,7 +2411,8 @@ fn make_tex_levels(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::Bi
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
         ],
     });
-    Tex { bind, view, size: [w, h] }
+    let bytes = d.levels.iter().map(|l| l.len() as u64).sum();
+    Tex { bind, view, size: [w, h], bytes, used: std::cell::Cell::new(NEVER) }
 }
 
 #[cfg(test)]

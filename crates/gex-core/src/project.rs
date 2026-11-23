@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// This computer's mounts for a project (where its Half-Life 2 is, its asset folders), kept out
+/// of the project file so another computer working on it doesn't get folders that aren't there.
+pub const MOUNTS_FILE: &str = ".gex/mounts.ron";
 pub const PROJECT_FILE: &str = "project.jproj";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -104,14 +107,25 @@ pub struct Project {
 impl Project {
     pub fn open(dir: &Path) -> Result<Project, String> {
         rename_old_files(dir);
-        let f = dir.join(PROJECT_FILE);
-        let text = std::fs::read_to_string(&f).map_err(|e| format!("couldn't open {}: {}", f.display(), e))?;
-        let mut config: ProjectConfig = ron::from_str(&text).map_err(|e| format!("{}: {}", f.display(), e))?;
-        config.migrate();
-        Ok(Project { dir: dir.to_path_buf(), config })
+        Ok(Project { dir: dir.to_path_buf(), config: Project::peek(dir)? })
     }
-    /// Reads a project's settings without opening it (nothing in the folder is touched).
+    /// Reads a project's settings without opening it (nothing in the folder is touched), with
+    /// this computer's own mounts (see MOUNTS_FILE).
     pub fn peek(dir: &Path) -> Result<ProjectConfig, String> {
+        let mut config = Project::read_file(dir)?;
+        match std::fs::read_to_string(dir.join(MOUNTS_FILE)).ok().and_then(|t| ron::from_str::<Vec<MountConfig>>(&t).ok()) {
+            Some(m) => config.mounts = m,
+            // From before mounts were kept per computer: the ones the file names that are on
+            // this computer (another computer's folders aren't).
+            None => config.mounts.retain(|m| match &m.kind {
+                MountKind::Folder(p) => p.is_dir(),
+                MountKind::SourceGame { install, .. } => install.is_dir(),
+            }),
+        }
+        Ok(config)
+    }
+    /// The project file's settings as written (mounts named in it from older versions too).
+    fn read_file(dir: &Path) -> Result<ProjectConfig, String> {
         let f = dir.join(PROJECT_FILE);
         let text = std::fs::read_to_string(&f).map_err(|e| format!("couldn't open {}: {}", f.display(), e))?;
         let mut config: ProjectConfig = ron::from_str(&text).map_err(|e| format!("{}: {}", f.display(), e))?;
@@ -119,11 +133,19 @@ impl Project {
         Ok(config)
     }
     /// Writes the settings, when they're different from what the file says (a file that says
-    /// the same, in other words, is left as it is).
+    /// the same, in other words, is left as it is). The mounts go in this computer's own
+    /// MOUNTS_FILE, not the project file, which is shared (GitHub, working together).
     pub fn save(&self) -> Result<(), String> {
         let pretty = |c: &ProjectConfig| ron::ser::to_string_pretty(c, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string());
-        let text = pretty(&self.config)?;
-        let same = Project::peek(&self.dir).ok().and_then(|c| pretty(&c).ok()).is_some_and(|t| t == text);
+        let mf = self.dir.join(MOUNTS_FILE);
+        if !self.config.mounts.is_empty() || mf.is_file() {
+            let m = ron::ser::to_string_pretty(&self.config.mounts, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string())?;
+            write_if_changed(&mf, m.as_bytes()).map_err(|e| e.to_string())?;
+        }
+        let mut shared = self.config.clone();
+        shared.mounts.clear();
+        let text = pretty(&shared)?;
+        let same = Project::read_file(&self.dir).ok().and_then(|c| pretty(&c).ok()).is_some_and(|t| t == text);
         if same {
             return Ok(());
         }

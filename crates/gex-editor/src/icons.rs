@@ -63,6 +63,7 @@ pub fn kind(k: ObjectKind) -> &'static str {
         TileMap2D => "border_all",
         Particles2D => "asterisk_yellow",
         Light2D => "lightbulb",
+        Canvas2D => "paintbrush",
         Panel => "application",
         Button => "button",
         Label => "text_ab",

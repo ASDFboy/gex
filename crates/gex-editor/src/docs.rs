@@ -190,6 +190,7 @@ fn kind_doc(k: ObjectKind) -> &'static str {
         Body2D => "A physics body in 2D: `dynamic` falls and bounces, `static` never moves (floors, walls), `kinematic` is moved by your script and pushes others.",
         TileMap2D => "A grid of tiles painted from one tileset picture. Select it and pick a tile in Properties to paint in the blueprint view.",
         Particles2D => "Many small pictures emitted over time: smoke, sparks, rain.",
+        Canvas2D => "A picture scripts paint into: DRAW_* calls with target: \"<its name>\" draw into it, and what's drawn stays until CLEAR_CANVAS (like Scratch's pen). Shown where it's placed.",
         Light2D => "A light in a 2D blueprint. Sprites with `lit` on are lit by it.",
         Panel => "A UI rectangle on the screen (not in the world): a background for other UI.",
         Button => "A UI button. Its scripts get on_pressed(); every script gets on_pressed_<name>().",

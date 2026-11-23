@@ -8,6 +8,9 @@ use crate::theme;
 
 /// How the running game spends its time.
 pub fn profiler(ui: &mut egui::Ui, st: &mut EditorState) {
+    if let Some(p) = &mut st.playing {
+        p.profiled = Some(std::time::Instant::now());
+    }
     let Some(p) = &st.playing else {
         ui.label(RichText::new("Press Play: frame times, script and physics costs, and the slowest event handlers show here.").color(theme::TEXT_DIM));
         return;
@@ -57,6 +60,54 @@ pub fn profiler(ui: &mut egui::Ui, st: &mut EditorState) {
     let y60 = rect.bottom() - 16.7 / max_ms * rect.height();
     painter.hline(rect.x_range(), y60, egui::Stroke::new(1.0, Color32::from_gray(90)));
     ui.label(RichText::new("bars: time between frames (line = 60 fps); blue: the game's own step").small().color(theme::TEXT_DIM));
+    // Where the time goes: every event, by script, over the last second.
+    let recent: Vec<&(f32, gex_script::world::FrameStats)> = p.stats.iter().rev().take(60).collect();
+    let mut by: std::collections::HashMap<(String, String), (f32, u32)> = std::collections::HashMap::new();
+    let mut counted = 0;
+    for (_, s) in &recent {
+        if !s.handlers.is_empty() {
+            counted += 1;
+        }
+        for (r, h, ms, n) in &s.handlers {
+            let e = by.entry((r.clone(), h.clone())).or_default();
+            e.0 += ms;
+            e.1 += n;
+        }
+    }
+    let mut open_script = None;
+    ui.separator();
+    ui.label(RichText::new("Events by script (last second, per frame)").strong()).tip("Each event's time per frame, added up over every object that has it: what to look at first when the game is slow.");
+    if counted == 0 {
+        ui.label(RichText::new("measuring…").color(theme::TEXT_DIM));
+    } else {
+        let mut rows: Vec<_> = by.into_iter().collect();
+        rows.sort_by(|a, b| b.1 .0.total_cmp(&a.1 .0));
+        egui::Grid::new("prof handlers").num_columns(3).striped(true).show(ui, |ui| {
+            for ((res, h), (ms, n)) in rows.into_iter().take(12) {
+                ui.label(RichText::new(format!("{:.3} ms", ms / counted as f32)).monospace());
+                ui.label(RichText::new(format!("{:.0}×", n as f32 / counted as f32)).monospace().color(theme::TEXT_DIM)).tip("calls per frame (objects that have it)");
+                if ui.link(format!("{}  {}()", res.trim_start_matches("res://"), h)).clicked() {
+                    open_script = Some(res.clone());
+                }
+                ui.end_row();
+            }
+        });
+    }
+    // The worst frames still on the chart, and what was slowest in each.
+    ui.separator();
+    ui.label(RichText::new("Slowest frames").strong()).tip("The longest frames of the last few seconds: a stutter shows up here.");
+    let mut worst: Vec<&(f32, gex_script::world::FrameStats)> = p.stats.iter().collect();
+    worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (ft, s) in worst.into_iter().take(4) {
+        let top = s.slowest.first().map(|(r, h, ms)| format!("  {} {}() {:.2} ms", r.trim_start_matches("res://").trim_start_matches("scripts/"), h, ms)).unwrap_or_default();
+        ui.label(RichText::new(format!("{:.1} ms (game {:.2} ms){}", ft, s.total_ms, top)).monospace().small());
+    }
+    if let Some(r) = open_script {
+        st.open_script(&r, None);
+        return;
+    }
+    let Some(p) = &st.playing else { return };
+    let last = &p.stats.back().unwrap().1;
     ui.separator();
     ui.label(RichText::new("Slowest events last frame").strong());
     if last.slowest.is_empty() {
@@ -141,17 +192,23 @@ pub fn search(ui: &mut egui::Ui, st: &mut EditorState) {
         for (file, line, text) in &st.search.results {
             ui.horizontal(|ui| {
                 if ui.link(RichText::new(format!("{}:{}", file.trim_start_matches("res://"), line)).monospace()).clicked() {
-                    open = Some((file.clone(), *line));
+                    open = Some((file.clone(), *line, text.clone()));
                 }
                 ui.label(RichText::new(text.trim()).monospace().color(theme::TEXT_DIM));
             });
         }
     });
-    if let Some((file, line)) = open {
+    if let Some((file, line, text)) = open {
         st.search.open = false;
         if file.ends_with(".jblueprint") {
             if st.playing.is_none() {
                 st.open_blueprint(&file);
+                // The object the line belongs to is selected.
+                if let Some(name) = text.split("name: \"").nth(1).and_then(|r| r.split('"').next()) {
+                    if let Some(id) = st.tree.find_named(name) {
+                        st.selected = Some(id);
+                    }
+                }
             }
         } else {
             st.open_script(&file, Some(line));

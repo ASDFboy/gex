@@ -85,6 +85,7 @@ pub fn panel(ui: &mut egui::Ui, st: &mut EditorState) {
             if !playing {
                 st.will_change("sprite picture");
                 st.tree.objects[id].props.insert("texture".into(), Variant::Res(p.0.clone()));
+                st.size_to_picture(id);
             }
         }
         return;

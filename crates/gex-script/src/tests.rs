@@ -1564,3 +1564,64 @@ fn kept_lookups_follow_changes() {
     assert_eq!(prop_of(&g2, "Next", "v"), Some(Variant::Bool(true)), "a save made just before is there, and 0.3 is still 0.3");
     assert_eq!(prop_of(&g2, "Next", "carried"), Some(Variant::Num(0.75)));
 }
+
+/// What 0.5 added: SPAWN running on_create at once, persistent objects, finding objects by
+/// place, measuring text, GLOBAL checks, data files, screen-space and canvas drawing, a
+/// picture's own sprite settings.
+#[test]
+fn new_drawing_and_queries_work() {
+    let main = r#"(root: (name: "Root", kind: Some(Object2D), scripts: ["res://m.jlb"], children: [
+        (name: "Cam", kind: Some(Camera2D), transform: Some((position: (500.0, 300.0, 0.0))), props: {"zoom": Num(2.0)}),
+        (name: "Paper", kind: Some(Canvas2D), props: {"width": Num(64.0), "height": Num(32.0)}),
+        (name: "Box", kind: Some(Sprite2D), transform: Some((position: (100.0, 100.0, 0.0))), props: {"width": Num(40.0), "height": Num(40.0), "layer": Num(2.0)}),
+        (name: "Under", kind: Some(Sprite2D), transform: Some((position: (100.0, 100.0, 0.0))), props: {"width": Num(80.0), "height": Num(80.0)}),
+        (name: "Hud", kind: Some(Object2D), scripts: ["res://hud.jlb"], props: {"persistent": Bool(true)}),
+        (name: "Sheet", kind: Some(Sprite2D), props: {"texture": Res("res://sheet.png"), "width": Num(16.0), "height": Num(16.0)}),
+    ]))"#;
+    let thing = r#"(root: (name: "Thing", kind: Some(Object2D), scripts: ["res://t.jlb"]))"#;
+    let next = r#"(root: (name: "Next", kind: Some(Object2D), scripts: ["res://n.jlb"]))"#;
+    let m = "DEF on_create() {\n    LOCAL id = SPAWN(\"res://thing.jblueprint\", 0, 0)\n    self.made = GET(id, \"ready\")\n    self.at = NAME_OF(OBJECTS_AT(100, 100)[1])\n    self.in_count = LEN(OBJECTS_IN(0, 0, 200, 200))\n    self.wide = TEXT_SIZE(\"Hello there\", 20).w > TEXT_SIZE(\"Hi\", 20).w\n    self.has = HAS_GLOBAL(\"nope\")\n    self.fallback = GLOBAL_OR(\"nope\", 7)\n    GLOBAL data = READ_JSON(\"res://d.json\")\n    self.speed_ok = GLOBAL.data.speed == 0.3\n    self.text = READ_FILE(\"res://note.txt\")\n}\nDEF on_draw() {\n    DRAW_RECT(0, 0, 10, 10, \"red\", TRUE, [target: \"Paper\"])\n}\nframes = 0\nDEF on_step(dt) {\n    GLOBAL frames += 1\n    IF frames == 3 { CHANGE_BLUEPRINT(\"res://next.jblueprint\") }\n}\n";
+    let t = "DEF on_create() {\n    self.ready = TRUE\n}\n";
+    let hud = "ticks = 0\nDEF on_create() {\n    GLOBAL ticks += 100\n}\nDEF on_step(dt) {\n    GLOBAL ticks += 1\n    self.ticks = ticks\n}\nDEF on_draw_gui() {\n    DRAW_RECT(0, 0, 50, 10, \"white\")\n}\n";
+    let n = "DEF on_create() {\n    self.hud_here = OBJECT(\"Hud\") !== NULL\n}\n";
+    let p = project("drawing", &[("main.jblueprint", main), ("thing.jblueprint", thing), ("next.jblueprint", next), ("m.jlb", m), ("t.jlb", t), ("hud.jlb", hud), ("n.jlb", n), ("d.json", r#"{"speed": 0.3}"#), ("note.txt", "hi")]);
+    // A 32×16 sheet of two frames, its origin at the middle of the bottom.
+    gex_assets::image_load::save_png(&p.dir.join("sheet.png"), 32, 16, &vec![255u8; 32 * 16 * 4]).unwrap();
+    std::fs::write(p.dir.join("sheet.png.sprite"), gex_core::render::PictureSettings { hframes: 2, origin: [8.0, 16.0], fps: 10.0, ..Default::default() }.to_text()).unwrap();
+    let mut g = Game::from_blueprint(p.clone(), "res://main.jblueprint", None).unwrap();
+    g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    let e = errors_of(&mut g);
+    assert!(e.is_empty(), "{:#?}", e);
+    assert_eq!(prop_of(&g, "Root", "made"), Some(Variant::Bool(true)), "on_create ran inside SPAWN");
+    assert_eq!(prop_of(&g, "Root", "at"), Some(Variant::Text("Box".into())), "the one on top first");
+    assert_eq!(prop_of(&g, "Root", "in_count"), Some(Variant::Num(3.0)));
+    assert_eq!(prop_of(&g, "Root", "wide"), Some(Variant::Bool(true)));
+    assert_eq!(prop_of(&g, "Root", "has"), Some(Variant::Bool(false)));
+    assert_eq!(prop_of(&g, "Root", "fallback"), Some(Variant::Num(7.0)));
+    assert_eq!(prop_of(&g, "Root", "speed_ok"), Some(Variant::Bool(true)));
+    assert_eq!(prop_of(&g, "Root", "text"), Some(Variant::Text("hi".into())));
+    let list = g.render_list();
+    let paper = list.canvases.iter().find(|c| c.size == [64, 32]).expect("the canvas");
+    assert_eq!(paper.sprites.len(), 1, "drawn into the canvas, not the world");
+    // Screen space: (0, 0) is the window's top-left whatever the camera does (the design is
+    // 1280×720 here, the camera at 500, 300 zoomed in 2×): the world point under it.
+    let hud = list.sprites.iter().find(|s| s.size == gex_core::glam::Vec2::new(50.0, 10.0)).expect("the HUD rect");
+    let corner = hud.model.transform_point3(gex_core::glam::Vec3::ZERO);
+    assert!((corner.x - (500.0 - 640.0 / 2.0)).abs() < 0.01 && (corner.y - (300.0 - 360.0 / 2.0)).abs() < 0.01, "{:?}", corner);
+    let sheet = list.sprites.iter().find(|s| s.texture == "res://sheet.png").unwrap();
+    assert_eq!(sheet.region, gex_core::render::Region::Frame { h: 2, v: 1, frame: 0 }, "the picture's own frames");
+    assert_eq!(sheet.pivot, gex_core::glam::Vec2::new(0.5, 1.0), "and origin");
+    // Persistent: the Hud comes along, its variables kept and on_create not run again.
+    for _ in 0..3 {
+        g.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    }
+    let to = g.st.borrow_mut().change_blueprint.take().expect("asked to change");
+    let tree = gex_core::blueprint::load(&p.read_text(&to).unwrap(), &|x: &str| p.read_text(x)).unwrap();
+    let mut g2 = Game::new(p, tree, None);
+    g2.carry_over(&mut g);
+    g2.frame(1.0 / 60.0, HashSet::new(), [0.0, 0.0], HashSet::new());
+    let e = errors_of(&mut g2);
+    assert!(e.is_empty(), "{:#?}", e);
+    assert_eq!(prop_of(&g2, "Next", "hud_here"), Some(Variant::Bool(true)));
+    assert_eq!(prop_of(&g2, "Hud", "ticks"), Some(Variant::Num(105.0)), "kept counting, on_create once");
+}

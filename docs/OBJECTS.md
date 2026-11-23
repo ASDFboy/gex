@@ -26,6 +26,7 @@ Rotations are in degrees. A child moves, turns and scales with its parent.
 | `Label2D` | text in the world (moves with the camera), in layer order with sprites | `text`, `size`, `color`, `font`, `layer`, `align` (left, center, right), `valign` (top, middle, bottom), `wrap_width`, `outline` and `outline_color`; turns and scales with its transform |
 | `Camera2D` | what the game shows; follows its parent | `zoom`, `current`, `smoothing` (0 = locked on, higher = catches up faster), `limits` with `limit_left/top/right/bottom` (the view stays inside), `ambient` (below white darkens the blueprint for Light2Ds) |
 | `Light2D` | a light in a dark 2D blueprint | `color`, `energy`, `radius`, `texture` (a soft glow if empty) |
+| `Canvas2D` | a picture scripts draw into, kept from frame to frame (Scratch's pen layer) | `width`, `height` (its pixels), `clear_color` (what it starts as; see-through by default), `color`, `opacity`, `layer`, `pivot_x/y` (0, 0: its top-left at its position). Draw into it with any `DRAW_*` and `target: "<its name>"`; `CLEAR_CANVAS` empties it |
 | `Collider2D` | an area that reports overlaps (pickups, triggers) with other colliders and bodies | `width`, `height`, `layer`, `mask` |
 | `Body2D` | a physics object | `body` (dynamic / kinematic / static), `shape` (box / circle), `width`, `height`, `radius`, `friction`, `bounce`, `density`, `gravity_scale`, `fixed_rotation`; live: `vx`, `vy`, `on_floor` |
 | `TileMap2D` | a grid of tiles from one tileset picture | `tileset`, `tile_width`, `tile_height`, `solid`, `solid_tiles` |
@@ -37,6 +38,19 @@ picks one. Name animations in `animations`, like `idle=0; walk=1-5; jump=6,7,8`,
 The easy way: select the sprite and press **Sprite sheet & animations…** in Properties. Set the
 columns and rows (or **Square frames**), press **+ Animation**, click frames in order (right-click
 takes one out), and watch the preview; the round button marks the one that plays when the game starts.
+
+**Sprites made from a picture.** Select a picture in Assets and press **Make a sprite…**: its
+frames (across, down, how many), origin (click the picture), frames a second and how the mouse
+finds it (box, ellipse or its visible pixels) are kept beside it (`<picture>.sprite`), like a
+GameMaker sprite. Every Sprite2D showing that picture uses them (instead of its own hframes,
+vframes and pivot), plays through its frames by itself (its `picture_speed` multiplies the
+speed; 0 stops it) and is sized to one frame when the picture is put on it. DRAW_SPRITE uses
+them too.
+
+**Persistent objects.** Tick **Persistent** in the Inspector (or set `persistent`) and the object
+comes along when the game moves to another blueprint (CHANGE_BLUEPRINT), with everything inside
+it, like GameMaker's persistent: its scripts keep their variables and its timers keep running;
+`on_create` doesn't run again.
 
 **Backgrounds.** `parallax_x` below 1 makes a sprite (or tilemap) follow the camera only part
 of the way, so it looks far off: 0.5 for distant hills, 0 for a sky that never moves. `repeat_x`

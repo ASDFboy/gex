@@ -1553,8 +1553,13 @@ impl eframe::App for PlayerApp {
                     axes,
                     ui: std::mem::take(&mut self.ui_events),
                     fullscreen: self.report_full.take(),
+                    profile: false,
                 });
                 self.last = now;
+            }
+            // The game draws its own pointer (SET_CURSOR), or hides it.
+            if self.list.hide_cursor && ui.rect_contains_pointer(view) {
+                ctx.set_cursor_icon(egui::CursorIcon::None);
             }
             if view != rect {
                 ui.painter().rect_filled(rect, 0.0, viewport::bar_color(d));
@@ -1625,6 +1630,10 @@ fn settings_rows(ui: &mut egui::Ui, fields: &[gex_core::settings::FieldInfo], ge
                                 }
                             });
                             ch
+                        }
+                        (Variant::Res(cur), "file") => {
+                            let r = ui.add(egui::TextEdit::singleline(cur).hint_text("res://shaders/...wgsl").desired_width(220.0));
+                            r.changed()
                         }
                         (Variant::Num(n), "whole") => {
                             let mut k = *n as i64;

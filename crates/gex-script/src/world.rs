@@ -52,7 +52,7 @@ pub const PAUSE_GROUP: &str = "while_paused";
 /// Events that stop for paused objects. Custom events (SEND / EMIT), on_create and on_destroy
 /// still run.
 fn pausable(handler: &str) -> bool {
-    ["on_step", "on_physics", "on_draw", "on_timer", "on_key_", "on_press_", "on_release_", "on_mouse_", "on_collide", "on_pressed", "on_text_", "on_animation_end", "on_tween_end", "when_"]
+    ["on_step", "on_physics", "on_draw", "on_draw_gui", "on_timer", "on_key_", "on_press_", "on_release_", "on_mouse_", "on_collide", "on_pressed", "on_text_", "on_animation_end", "on_tween_end", "when_"]
         .iter()
         .any(|p| handler.starts_with(p))
 }
@@ -68,6 +68,8 @@ pub struct FrameStats {
     pub objects: usize,
     pub sprites: usize,
     pub meshes: usize,
+    /// Every event handler's time this frame, when profiling: (script, handler, ms, calls).
+    pub handlers: Vec<(String, String, f32, u32)>,
 }
 
 /// One frame's input from the window.
@@ -87,6 +89,8 @@ pub struct FrameInput {
     pub ui: Vec<UiEvent>,
     /// The player switched full screen itself (F11, Alt+Enter): the window's new state.
     pub fullscreen: Option<bool>,
+    /// The editor's profiler is open: time every event handler (FrameStats::handlers).
+    pub profile: bool,
 }
 
 /// True in a built or exported game (`gex --play`), false when playing in the editor.
@@ -136,6 +140,8 @@ pub(crate) enum Pending {
     /// An object (and its subtree) just appeared: attach scripts, then on_create. The
     /// values SPAWN was given go to the object first.
     Created(ObjectId, Vec<(String, Value)>),
+    /// Objects SPAWN made and started at once (see WorldState::adopt): their scripts join.
+    Adopt(ObjectId),
     Destroy(ObjectId),
 }
 
@@ -173,6 +179,26 @@ pub struct WorldState {
     pub window_title: Option<String>,
     /// DRAW_* commands from this frame.
     pub draws: Vec<crate::commands::Draw>,
+    /// This frame's DRAW_* in screen space (screen: TRUE, or inside on_draw_gui).
+    pub draws_screen: Vec<crate::commands::Draw>,
+    /// This frame's DRAW_* into canvases (target:), by canvas.
+    pub canvas_draws: HashMap<String, Vec<crate::commands::Draw>>,
+    /// Canvases to clear before this frame's drawing into them (with a color, or their own).
+    pub canvas_clear: HashMap<String, Option<[f32; 4]>>,
+    /// Surfaces made by SURFACE_CREATE: name → size.
+    pub surfaces: HashMap<String, [u32; 2]>,
+    pub(crate) surface_count: u64,
+    pub(crate) surfaces_freed: RefCell<Vec<String>>,
+    /// Running on_draw_gui: DRAW_* are in screen space unless they say otherwise.
+    pub(crate) gui: bool,
+    /// From screen space (the game window's pixels, (0, 0) its top-left, as with no camera)
+    /// to the 2D world, as of the last frame drawn.
+    pub(crate) screen_fix: std::cell::Cell<glam::Mat4>,
+    /// SET_CURSOR: a picture drawn as the mouse pointer (its size), or the pointer hidden.
+    pub(crate) cursor: Option<(String, [f32; 2], [f32; 2])>,
+    pub(crate) cursor_hidden: bool,
+    /// The full-screen shader's values (POST_SHADER).
+    pub(crate) post_values: [f32; 4],
     /// Sprite animations: object → (animation, time, ended).
     pub(crate) anims: HashMap<ObjectId, (String, f64, bool)>,
     /// Model crossfades: object → (from animation, its time, progress 0..1, length).
@@ -208,6 +234,11 @@ pub struct WorldState {
     pub net: Option<crate::net::Net>,
     /// Pictures' sizes and see-through parts (DRAW_SPRITE, precise mouse hits).
     pub(crate) images: crate::hit::Images,
+    /// What each script file has (events, $variables), read once per file.
+    pub(crate) script_info: HashMap<PathBuf, ScriptInfoEntry>,
+    /// Scripts SPAWN attached at once (and ran on_create on): handed to the World with
+    /// Pending::Adopt.
+    pub(crate) adopt: Vec<(ObjectId, Vec<ScriptInst>)>,
     /// Pictures to get ready in the background (handed to the next render list).
     pub(crate) preload: Vec<String>,
     /// Goes up when an object loses a property (objects otherwise only gain them), so a
@@ -240,30 +271,34 @@ impl WorldState {
     }
 }
 
-struct ScriptInst {
-    res: String,
-    env: Env,
+pub(crate) struct ScriptInst {
+    pub(crate) res: String,
+    pub(crate) env: Env,
     /// The on_/when_ functions this script defines.
-    handlers: HashSet<String>,
-    when_was: HashMap<String, bool>,
-    dead: bool,
+    pub(crate) handlers: HashSet<String>,
+    pub(crate) when_was: HashMap<String, bool>,
+    pub(crate) dead: bool,
     /// What this script's `self` holds, entry by entry, as of the last event: kept so the
     /// next event only updates what changed on the object meanwhile.
-    sync: SelfSnap,
+    pub(crate) sync: SelfSnap,
     /// props_gen when `sync` was last checked name by name.
-    sync_gen: u64,
+    pub(crate) sync_gen: u64,
 }
 
 pub struct Game {
     /// Timings gathered during the frame.
     pub stats: FrameStats,
+    /// Profiling this frame: handler time by (script, handler).
+    profile: Option<HashMap<(String, String), (f32, u32)>>,
     pub(crate) it: Interp,
     pub st: Rc<RefCell<WorldState>>,
     scripts: HashMap<ObjectId, Vec<ScriptInst>>,
     physics_acc: f64,
     started: bool,
+    /// Persistent objects brought over from the last blueprint: already running (their
+    /// scripts keep their variables; on_create doesn't run again).
+    carried: HashSet<ObjectId>,
     /// Per script file: its change stamp, its events and its $variables.
-    script_info: HashMap<PathBuf, ScriptInfoEntry>,
     /// Objects the mouse is over (for on_mouse_enter / on_mouse_leave).
     hovered: HashSet<ObjectId>,
     /// Which objects have each event, in tree order (made when first asked, again after the
@@ -326,6 +361,17 @@ impl Game {
             mouse_locked: false,
             window_title: None,
             draws: Vec::new(),
+            draws_screen: Vec::new(),
+            canvas_draws: HashMap::new(),
+            canvas_clear: HashMap::new(),
+            surfaces: HashMap::new(),
+            surface_count: 0,
+            surfaces_freed: RefCell::new(Vec::new()),
+            gui: false,
+            screen_fix: std::cell::Cell::new(glam::Mat4::IDENTITY),
+            cursor: None,
+            cursor_hidden: false,
+            post_values: [0.0; 4],
             anims: HashMap::new(),
             anim_blends: HashMap::new(),
             mesh_colliders: HashMap::new(),
@@ -345,6 +391,8 @@ impl Game {
             blueprint: String::new(),
             net: None,
             images: Default::default(),
+            script_info: HashMap::new(),
+            adopt: Vec::new(),
             preload: Vec::new(),
             props_gen: 0,
         }));
@@ -352,8 +400,8 @@ impl Game {
         it.set_output(Box::new(LogWriter(st.clone(), Vec::new())));
         it.host = Some(Box::new(EngineHost { st: st.clone() }));
         it.cancel = cancel;
-        Game { stats: FrameStats::default(), it, st, scripts: HashMap::new(), physics_acc: 0.0,
-            script_info: HashMap::new(), started: false, hovered: HashSet::new(), handler_index: HashMap::new(), index_key: (u64::MAX, 0), scripts_rev: 0 }
+        Game { stats: FrameStats::default(), profile: None, it, st, scripts: HashMap::new(), physics_acc: 0.0,
+            started: false, carried: HashSet::new(), hovered: HashSet::new(), handler_index: HashMap::new(), index_key: (u64::MAX, 0), scripts_rev: 0 }
     }
 
     /// Moving to the next blueprint (CHANGE_BLUEPRINT): what lasts for the whole run comes
@@ -365,14 +413,65 @@ impl Game {
         self.it.take_parsed_from(&mut old.it);
         // Pictures' sizes, scripts' events: the same files, already looked at.
         self.st.borrow_mut().images = std::mem::take(&mut old.st.borrow_mut().images);
-        for (k, v) in old.script_info.drain() {
-            self.script_info.entry(k).or_insert(v);
-        }
+        let info = std::mem::take(&mut old.st.borrow_mut().script_info);
+        self.st.borrow_mut().script_info = info;
         for (k, s) in old.it.shared.drain() {
             if !matches!(&*s.borrow(), jlb::Value::Func(_) | jlb::Value::Builtin(_) | jlb::Value::Task(_)) {
                 self.it.shared.insert(k, s);
             }
         }
+        self.carry_persistent(old);
+    }
+
+    /// Objects marked `persistent` (like GameMaker's) come along into the new blueprint, under
+    /// its root, with their children: their scripts keep their variables and their timers keep
+    /// running; on_create doesn't run again.
+    fn carry_persistent(&mut self, old: &mut Game) {
+        let tops: Vec<ObjectId> = {
+            let ost = old.st.borrow();
+            let t = &ost.tree;
+            let marked = |i: ObjectId| t.objects[i].prop("persistent").is_some_and(|v| v.as_bool());
+            t.walk()
+                .into_iter()
+                .filter(|&i| marked(i) && {
+                    let mut p = t.objects[i].parent;
+                    let mut under_marked = false;
+                    while let Some(x) = p {
+                        under_marked |= marked(x);
+                        p = t.objects[x].parent;
+                    }
+                    !under_marked
+                })
+                .collect()
+        };
+        if tops.is_empty() {
+            return;
+        }
+        let mut map: HashMap<ObjectId, ObjectId> = HashMap::new();
+        {
+            let ost = old.st.borrow();
+            let mut st = self.st.borrow_mut();
+            let root = st.tree.root;
+            for top in tops {
+                let new_top = st.tree.copy_subtree(&ost.tree, top, root);
+                let (mut a, mut b) = (Vec::new(), Vec::new());
+                ost.tree.walk_from(top, &mut a);
+                st.tree.walk_from(new_top, &mut b);
+                map.extend(a.into_iter().zip(b));
+            }
+            st.timers.extend(ost.timers.iter().filter_map(|t| map.get(&t.object).map(|&o| Timer { object: o, name: t.name.clone(), left: t.left, every: t.every })));
+        }
+        for (o, n) in &map {
+            if let Some(mut list) = old.scripts.remove(o) {
+                for s in &mut list {
+                    s.sync = Default::default();
+                    s.sync_gen = u64::MAX;
+                }
+                self.scripts.insert(*n, list);
+            }
+            self.carried.insert(*n);
+        }
+        self.scripts_rev += 1;
     }
 
     /// Loads a blueprint file as a fresh game.
@@ -427,9 +526,10 @@ impl Game {
             }
             st.preload.extend(pre);
         }
-        self.attach_all(&ids);
-        self.autoplay(&ids);
-        for id in &ids {
+        let fresh: Vec<ObjectId> = ids.iter().copied().filter(|i| !self.carried.contains(i)).collect();
+        self.attach_all(&fresh);
+        self.autoplay(&fresh);
+        for id in &fresh {
             self.run(*id, "on_create", vec![]);
         }
         self.drain();
@@ -566,51 +666,17 @@ impl Game {
     }
 
     fn attach(&mut self, id: ObjectId, res: &str) {
-        let Some(path) = self.st.borrow().project.res_to_path(res) else {
-            self.st.borrow_mut().log(LogKind::Error, format!("{} isn't a project path (scripts live in res://)", res));
-            return;
-        };
-        // What the file has (events, $variables): read once per file, not per object (SPAWN
-        // of a bullet happens often).
-        let meta = std::fs::metadata(&path).ok();
-        let stamp = (meta.as_ref().and_then(|m| m.modified().ok()), meta.as_ref().map_or(0, |m| m.len()));
-        let info = match self.script_info.get(&path) {
-            Some((s, info)) if meta.is_some() && *s == stamp => info.clone(),
-            _ => {
-                let text = std::fs::read_to_string(&path).unwrap_or_default();
-                let info = Rc::new((scan_handlers_text(&text), gex_core::object::script_vars(&text)));
-                self.script_info.insert(path.clone(), (stamp, info.clone()));
-                info
-            }
-        };
-        let handlers = info.0.clone();
-        // $variables nobody gave this object a value for start at 0.
-        {
-            let mut st = self.st.borrow_mut();
-            if let Some(n) = st.tree.objects.get_mut(id) {
-                for v in &info.1 {
-                    n.props.entry(v.clone()).or_insert(Variant::Num(0.0));
-                }
-            }
+        let st = self.st.clone();
+        if let Some(inst) = load_script(&st, &mut self.it, id, res) {
+            self.scripts.entry(id).or_default().push(inst);
+            self.scripts_rev += 1;
         }
-        let (me, before) = self.self_table(id);
-        self.st.borrow_mut().current = Some(id);
-        match self.it.load_module(&path, &[("self", me)]) {
-            Ok(env) => {
-                self.read_self_back(id, &env, &before);
-                let handlers = with_imported_handlers(&env, handlers);
-                self.scripts.entry(id).or_default().push(ScriptInst {
-                    res: res.to_string(),
-                    env,
-                    handlers,
-                    when_was: HashMap::new(),
-                    dead: false,
-                    sync: Vec::new(),
-                    sync_gen: 0,
-                });
-                self.scripts_rev += 1
-            }
-            Err(f) => self.report(&f, res),
+    }
+
+    /// This frame's handler times (when profiling), into the stats.
+    pub fn take_profile(&mut self) {
+        if let Some(p) = self.profile.take() {
+            self.stats.handlers = p.into_iter().map(|((r, h), (ms, n))| (r, h, ms, n)).collect();
         }
     }
 
@@ -696,55 +762,12 @@ impl Game {
     }
 
     fn report(&mut self, f: &Fault, res: &str) {
-        let mut st = self.st.borrow_mut();
-        match f {
-            Fault::End => st.quit = true,
-            Fault::Cancelled => st.log(LogKind::Info, "stopped"),
-            _ => {
-                let text = fault_report(f).unwrap_or_default();
-                let (file, line) = fault_location(f).unwrap_or_default();
-                st.logs.push(LogLine {
-                    kind: LogKind::Error,
-                    text: format!("{}  [{} is turned off until the game restarts]", text, res),
-                    file: Some(file).filter(|f| !f.is_empty()),
-                    line,
-                });
-            }
-        }
+        report(&self.st, f, res)
     }
 
     /// The `self` table a script sees, and what it held (to tell what the script changed).
     fn self_table(&self, id: ObjectId) -> (Value, SelfSnap) {
-        let st = self.st.borrow();
-        let Some(n) = st.tree.get(id) else { return (Value::Null, Vec::new()) };
-        let t = &n.transform;
-        let base: [(&str, Variant); 11] = [
-            ("name", Variant::Text(n.name.clone())),
-            ("x", Variant::Num(t.position.x as f64)),
-            ("y", Variant::Num(t.position.y as f64)),
-            ("z", Variant::Num(t.position.z as f64)),
-            ("rotation", Variant::Num(t.rotation.z as f64)),
-            ("rotation_x", Variant::Num(t.rotation.x as f64)),
-            ("rotation_y", Variant::Num(t.rotation.y as f64)),
-            ("scale_x", Variant::Num(t.scale.x as f64)),
-            ("scale_y", Variant::Num(t.scale.y as f64)),
-            ("scale_z", Variant::Num(t.scale.z as f64)),
-            ("visible", Variant::Bool(n.visible)),
-        ];
-        let mut snap: SelfSnap = Vec::with_capacity(base.len() + n.props.len());
-        for (k, v) in base.iter() {
-            snap.push((key(k), to_value(v), None));
-        }
-        for (k, v) in &n.props {
-            let val = to_value(v);
-            let keep = matches!(val, Value::Table(..)).then(|| v.clone());
-            snap.push((key(k), val, keep));
-        }
-        let mut entries: Vec<(Rc<str>, Value)> = Vec::with_capacity(snap.len() + 2);
-        entries.push((key("id"), id_value(id)));
-        entries.push((key("kind"), Value::text(n.kind.name())));
-        entries.extend(snap.iter().map(|(k, v, _)| (k.clone(), v.clone())));
-        (jlb::embed::named_table_rc(entries), snap)
+        self_table(&self.st, id)
     }
 
     /// Before an event: the script's `self` brought up to date with the object. Only entries
@@ -890,33 +913,7 @@ impl Game {
 
     /// Applies what a script changed in `self` back to the object.
     fn read_self_back(&mut self, id: ObjectId, env: &Env, before: &SelfSnap) {
-        let Some(Value::Table(t, _)) = Interp::env_get(env, "self") else { return };
-        let mut st = self.st.borrow_mut();
-        let Some(n) = st.tree.get_mut(id) else { return };
-        for (i, (k, slot)) in t.named.iter().enumerate() {
-            let k: &str = k;
-            if k == "id" || k == "kind" {
-                continue;
-            }
-            // The table keeps the order it was made in, so the entry is usually at the same place.
-            let was = before.get(i.wrapping_sub(2)).filter(|b| &*b.0 == k).or_else(|| before.iter().find(|b| &*b.0 == k));
-            let now = slot.borrow();
-            let v = match was {
-                // Untouched: the same number, switch or piece of text that went in.
-                Some((_, put, None)) if same_value(&now, put) => continue,
-                Some((_, _, Some(keep))) => match to_variant(&now, Some(keep)) {
-                    Some(v) if v == *keep => continue,
-                    Some(v) => v,
-                    None => continue,
-                },
-                _ => match to_variant(&now, n.props.get(k)) {
-                    Some(v) => v,
-                    None => continue,
-                },
-            };
-            drop(now);
-            apply_prop(n, k, v);
-        }
+        read_self_back(&self.st, id, env, before)
     }
 
     /// Runs `handler` in each of the object's scripts that defines it.
@@ -952,6 +949,12 @@ impl Game {
         let r = self.it.call_value(&f, args);
         let ms = t0.elapsed().as_secs_f32() * 1000.0;
         self.stats.scripts_ms += ms;
+        if self.profile.is_some() {
+            let r = res(self);
+            let e = self.profile.as_mut().unwrap().entry((r, handler.to_string())).or_default();
+            e.0 += ms;
+            e.1 += 1;
+        }
         if ms > 0.05 {
             let r = res(self);
             self.stats.slowest.push((r, handler.to_string(), ms));
@@ -1019,6 +1022,7 @@ impl Game {
 
     /// One frame of the game.
     pub fn step(&mut self, input: FrameInput) {
+        self.profile = input.profile.then(HashMap::new);
         self.start();
         let real_dt = input.dt.clamp(0.0, 0.25);
         let moved;
@@ -1042,6 +1046,9 @@ impl Game {
                 st.time += dt;
             }
             st.draws.clear();
+            st.draws_screen.clear();
+            st.canvas_draws.clear();
+            st.canvas_clear.clear();
         }
         self.net_poll(real_dt);
         // UI first: a click belongs to the frame it happened in.
@@ -1113,6 +1120,10 @@ impl Game {
         }
         self.broadcast("on_step", vec![num(dt)]);
         self.broadcast("on_draw", vec![]);
+        // Drawing over everything, in the window's pixels (GameMaker's Draw GUI).
+        self.st.borrow_mut().gui = true;
+        self.broadcast("on_draw_gui", vec![]);
+        self.st.borrow_mut().gui = false;
         self.animate(dt);
         {
             let mut st = self.st.borrow_mut();
@@ -1266,6 +1277,7 @@ impl Game {
             let mut st = self.st.borrow_mut();
             let st = &mut *st;
             let ids = st.tree.of_kinds(&[ObjectKind::Sprite2D]);
+            let any_meta = st.images.any_meta(&st.vfs);
             for &id in ids.iter() {
                 if st.frozen(id) {
                     continue;
@@ -1275,6 +1287,15 @@ impl Game {
                 if n.text("animation").is_empty() {
                     if !st.anims.is_empty() {
                         st.anims.remove(&id);
+                    }
+                    // A picture with its own settings plays through its frames by itself (at
+                    // its fps, times the sprite's picture_speed).
+                    if let Some((p, _)) = any_meta.then(|| st.images.meta(&st.vfs, n.text("texture"))).flatten() {
+                        if p.fps > 0.0 && p.count() > 1 {
+                            let count = p.count() as f64;
+                            let f = (n.num("frame", 0.0) + p.fps as f64 * n.num("picture_speed", 1.0) * dt).rem_euclid(count);
+                            st.tree.objects[id].props.insert("frame".into(), Variant::Num(f));
+                        }
                     }
                     continue;
                 }
@@ -1639,7 +1660,52 @@ impl Game {
             c[3] *= f.amount();
             list.fade = c;
         }
+        // Pictures with their own sprite settings: their frames and origin.
+        if st.images.any_meta(&st.vfs) {
+            let tree = &st.tree;
+            let frames = |id: ObjectId| tree.get(id).map_or(0.0, |n| n.num("frame", 0.0));
+            gex_core::render::apply_picture_settings(&mut list.sprites[..drawn], &frames, &mut |t: &str| st.images.meta(&st.vfs, t));
+        }
         crate::commands::append_draws(&st.draws, &mut list);
+        // Screen space: (0, 0) the top-left of the game window, in its pixels, whatever the
+        // camera does (as with no camera).
+        let design = glam::Vec2::new(st.project.config.display.width.max(1) as f32, st.project.config.display.height.max(1) as f32);
+        let fix = match list.camera2d {
+            Some(c) => glam::Mat4::from_translation(c.center.extend(0.0)) * glam::Mat4::from_rotation_z(c.rotation) * glam::Mat4::from_scale(glam::Vec3::new(1.0 / c.zoom.max(1e-4), 1.0 / c.zoom.max(1e-4), 1.0)) * glam::Mat4::from_translation((-design / 2.0).extend(0.0)),
+            None => glam::Mat4::IDENTITY,
+        };
+        st.screen_fix.set(fix);
+        crate::commands::append_screen_draws(&st.draws_screen, fix, &mut list);
+        if let Some((file, size, pivot)) = &st.cursor {
+            let unscale = glam::Mat4::from_cols(fix.x_axis, fix.y_axis, fix.z_axis, glam::Vec4::W);
+            list.sprites.push(gex_core::render::Sprite {
+                model: glam::Mat4::from_translation(glam::Vec3::new(st.input.mouse[0], st.input.mouse[1], 0.0)) * unscale,
+                size: glam::Vec2::from(*size),
+                pivot: glam::Vec2::from(*pivot),
+                texture: file.clone(),
+                layer: 3.0e6,
+                lit: false,
+                ..Default::default()
+            });
+        }
+        list.hide_cursor = st.cursor.is_some() || st.cursor_hidden;
+        list.post_values = st.post_values;
+        // Canvases: the Canvas2Ds (from extract) and surfaces, with what's drawn into them.
+        for (k, size) in &st.surfaces {
+            list.canvases.push(gex_core::render::CanvasDraw { key: k.clone(), size: *size, ..Default::default() });
+        }
+        for c in &mut list.canvases {
+            if let Some(clear) = st.canvas_clear.get(&c.key) {
+                c.clear = true;
+                if let Some(col) = clear {
+                    c.clear_color = *col;
+                }
+            }
+            if let Some(d) = st.canvas_draws.get(&c.key) {
+                crate::commands::append_canvas_draws(d, c);
+            }
+        }
+        list.canvases_freed = std::mem::take(&mut *st.surfaces_freed.borrow_mut());
         // (Stable: the same layer keeps tree order, then drawing order.)
         if list.sprites.len() != drawn {
             gex_core::render::sort_by_layer(&mut list.sprites);
@@ -1889,6 +1955,23 @@ impl Game {
             match p {
                 Pending::Event { target: Some(t), handler, args } => self.run(t, &handler, args),
                 Pending::Event { target: None, handler, args } => self.broadcast(&handler, args),
+                Pending::Adopt(id) => {
+                    let mut ids = Vec::new();
+                    self.st.borrow().tree.walk_from(id, &mut ids);
+                    let mine: Vec<(ObjectId, Vec<ScriptInst>)> = {
+                        let mut st = self.st.borrow_mut();
+                        let (mine, rest) = std::mem::take(&mut st.adopt).into_iter().partition(|(o, _)| ids.contains(o));
+                        st.adopt = rest;
+                        mine
+                    };
+                    for (o, list) in mine {
+                        if self.st.borrow().tree.contains(o) {
+                            self.scripts.entry(o).or_default().extend(list);
+                        }
+                    }
+                    self.scripts_rev += 1;
+                    self.autoplay(&ids);
+                }
                 Pending::Created(id, vars) => {
                     let mut ids = Vec::new();
                     self.st.borrow().tree.walk_from(id, &mut ids);
@@ -2082,7 +2165,7 @@ fn apply_prop(n: &mut gex_core::Object, k: &str, v: Variant) {
 
 /// What went into an object's `self` table: each name, the value put in, and for tables
 /// (which a script can change in place) the property they came from.
-type SelfSnap = Vec<(Rc<str>, Value, Option<Variant>)>;
+pub(crate) type SelfSnap = Vec<(Rc<str>, Value, Option<Variant>)>;
 
 /// In a SelfSnap: this entry is to be taken from the object again.
 const STALE: &str = "<stale>";
@@ -2112,4 +2195,138 @@ fn key(k: &str) -> Rc<str> {
         m.borrow_mut().insert(k.to_string(), r.clone());
         r
     })
+}
+
+/// Loads one of an object's scripts (its outside code runs, with `self`).
+pub(crate) fn load_script(rc: &Rc<RefCell<WorldState>>, it: &mut Interp, id: ObjectId, res: &str) -> Option<ScriptInst> {
+    let Some(path) = rc.borrow().project.res_to_path(res) else {
+        rc.borrow_mut().log(LogKind::Error, format!("{} isn't a project path (scripts live in res://)", res));
+        return None;
+    };
+    // What the file has (events, $variables): read once per file, not per object (SPAWN
+    // of a bullet happens often).
+    let meta = std::fs::metadata(&path).ok();
+    let stamp = (meta.as_ref().and_then(|m| m.modified().ok()), meta.as_ref().map_or(0, |m| m.len()));
+    let cached = rc.borrow().script_info.get(&path).cloned();
+let info = match cached {
+        Some((s, info)) if meta.is_some() && s == stamp => info,
+        _ => {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let info = Rc::new((scan_handlers_text(&text), gex_core::object::script_vars(&text)));
+            rc.borrow_mut().script_info.insert(path.clone(), (stamp, info.clone()));
+            info
+        }
+    };
+    let handlers = info.0.clone();
+    // $variables nobody gave this object a value for start at 0.
+    {
+        let mut st = rc.borrow_mut();
+        if let Some(n) = st.tree.objects.get_mut(id) {
+            for v in &info.1 {
+                n.props.entry(v.clone()).or_insert(Variant::Num(0.0));
+            }
+        }
+    }
+    let (me, before) = self_table(rc, id);
+    rc.borrow_mut().current = Some(id);
+    match it.load_module(&path, &[("self", me)]) {
+        Ok(env) => {
+            read_self_back(rc, id, &env, &before);
+            let handlers = with_imported_handlers(&env, handlers);
+            Some(ScriptInst {
+                res: res.to_string(),
+                env,
+                handlers,
+                when_was: HashMap::new(),
+                dead: false,
+                sync: Vec::new(),
+                sync_gen: 0,
+            })
+        }
+        Err(f) => {
+            report(rc, &f, res);
+            None
+        }
+    }
+}
+
+pub(crate) fn report(rc: &Rc<RefCell<WorldState>>, f: &Fault, res: &str) {
+    let mut st = rc.borrow_mut();
+    match f {
+        Fault::End => st.quit = true,
+        Fault::Cancelled => st.log(LogKind::Info, "stopped"),
+        _ => {
+            let text = fault_report(f).unwrap_or_default();
+            let (file, line) = fault_location(f).unwrap_or_default();
+            st.logs.push(LogLine {
+                kind: LogKind::Error,
+                text: format!("{}  [{} is turned off until the game restarts]", text, res),
+                file: Some(file).filter(|f| !f.is_empty()),
+                line,
+            });
+        }
+    }
+}
+
+pub(crate) fn self_table(rc: &Rc<RefCell<WorldState>>, id: ObjectId) -> (Value, SelfSnap) {
+    let st = rc.borrow();
+    let Some(n) = st.tree.get(id) else { return (Value::Null, Vec::new()) };
+    let t = &n.transform;
+    let base: [(&str, Variant); 11] = [
+        ("name", Variant::Text(n.name.clone())),
+        ("x", Variant::Num(t.position.x as f64)),
+        ("y", Variant::Num(t.position.y as f64)),
+        ("z", Variant::Num(t.position.z as f64)),
+        ("rotation", Variant::Num(t.rotation.z as f64)),
+        ("rotation_x", Variant::Num(t.rotation.x as f64)),
+        ("rotation_y", Variant::Num(t.rotation.y as f64)),
+        ("scale_x", Variant::Num(t.scale.x as f64)),
+        ("scale_y", Variant::Num(t.scale.y as f64)),
+        ("scale_z", Variant::Num(t.scale.z as f64)),
+        ("visible", Variant::Bool(n.visible)),
+    ];
+    let mut snap: SelfSnap = Vec::with_capacity(base.len() + n.props.len());
+    for (k, v) in base.iter() {
+        snap.push((key(k), to_value(v), None));
+    }
+    for (k, v) in &n.props {
+        let val = to_value(v);
+        let keep = matches!(val, Value::Table(..)).then(|| v.clone());
+        snap.push((key(k), val, keep));
+    }
+    let mut entries: Vec<(Rc<str>, Value)> = Vec::with_capacity(snap.len() + 2);
+    entries.push((key("id"), id_value(id)));
+    entries.push((key("kind"), Value::text(n.kind.name())));
+    entries.extend(snap.iter().map(|(k, v, _)| (k.clone(), v.clone())));
+    (jlb::embed::named_table_rc(entries), snap)
+}
+
+pub(crate) fn read_self_back(rc: &Rc<RefCell<WorldState>>, id: ObjectId, env: &Env, before: &SelfSnap) {
+    let Some(Value::Table(t, _)) = Interp::env_get(env, "self") else { return };
+    let mut st = rc.borrow_mut();
+    let Some(n) = st.tree.get_mut(id) else { return };
+    for (i, (k, slot)) in t.named.iter().enumerate() {
+        let k: &str = k;
+        if k == "id" || k == "kind" {
+            continue;
+        }
+        // The table keeps the order it was made in, so the entry is usually at the same place.
+        let was = before.get(i.wrapping_sub(2)).filter(|b| &*b.0 == k).or_else(|| before.iter().find(|b| &*b.0 == k));
+        let now = slot.borrow();
+        let v = match was {
+            // Untouched: the same number, switch or piece of text that went in.
+            Some((_, put, None)) if same_value(&now, put) => continue,
+            Some((_, _, Some(keep))) => match to_variant(&now, Some(keep)) {
+                Some(v) if v == *keep => continue,
+                Some(v) => v,
+                None => continue,
+            },
+            _ => match to_variant(&now, n.props.get(k)) {
+                Some(v) => v,
+                None => continue,
+            },
+        };
+        drop(now);
+        apply_prop(n, k, v);
+    }
 }

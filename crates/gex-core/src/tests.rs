@@ -194,3 +194,27 @@ fn label_boxes_skip_tags_and_wrap() {
     assert_eq!(wrapped.x, 100.0);
     assert!(wrapped.y > 10.0 * 1.2 * 4.0);
 }
+
+#[test]
+fn mounts_stay_on_each_computer() {
+    use crate::project::*;
+    let dir = std::env::temp_dir().join(format!("gex-mounts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("art")).unwrap();
+    let mut p = Project { dir: dir.clone(), config: ProjectConfig::default() };
+    p.save().unwrap();
+    // From an older GEX: mounts in the project file, one of them another computer's folder.
+    let mut old = p.config.clone();
+    old.mounts = vec![
+        MountConfig { scheme: "art".into(), kind: MountKind::Folder(dir.join("art")) },
+        MountConfig { scheme: "far".into(), kind: MountKind::Folder(dir.join("elsewhere")) },
+    ];
+    std::fs::write(dir.join(PROJECT_FILE), ron::to_string(&old).unwrap()).unwrap();
+    p = Project::open(&dir).unwrap();
+    assert_eq!(p.config.mounts.iter().map(|m| m.scheme.as_str()).collect::<Vec<_>>(), vec!["art"], "only what's on this computer");
+    p.save().unwrap();
+    let shared: ProjectConfig = ron::from_str(&std::fs::read_to_string(dir.join(PROJECT_FILE)).unwrap()).unwrap();
+    assert!(shared.mounts.is_empty(), "the shared file no longer names them");
+    assert_eq!(Project::open(&dir).unwrap().config.mounts.len(), 1, "kept for this computer");
+    let _ = std::fs::remove_dir_all(&dir);
+}

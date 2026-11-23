@@ -62,7 +62,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("SAVE_DATA", "(name, value)", "keeps a value (a table, number, text...) on disk between runs"),
     ("LOAD_DATA", "(name)", "a value kept with SAVE_DATA, or NULL"),
     ("DELETE_DATA", "(name)", "forgets a value kept with SAVE_DATA"),
-    ("DRAW_RECT", "(x, y, w, h, color, filled, [options])", "draws a rectangle this frame (2D world); options: [layer:, rotation:, blend:]"),
+    ("DRAW_RECT", "(x, y, w, h, color, filled, [options])", "draws a rectangle this frame (2D world); options: [layer:, rotation:, blend:]. Every DRAW_* also takes screen: TRUE (in the window's pixels over everything, as in on_draw_gui) and target: a Canvas2D or surface to draw into"),
     ("DRAW_LINE", "(x1, y1, x2, y2, color)", "draws a line this frame"),
     ("DRAW_CIRCLE", "(x, y, radius, color, filled, [options])", "draws a circle this frame; options: [layer:, blend:]"),
     ("DRAW_TEXT", "(x, y, text, size, color, [options])", "draws text this frame (tags like [color=red] work); options: [layer:, font:, align:, valign:, wrap:, outline:, outline_color:, rotation:, scale:]"),
@@ -70,10 +70,26 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("DRAW_SPRITE", "(file, x, y, [options])", "draws a picture this frame at its own size: options [frame:, hframes:, vframes:, region: [x, y, w, h], w:, h:, scale:, scale_x:, scale_y:, rotation:, pivot_x:, pivot_y:, color:, alpha:, layer:, blend:, flip_h:, flip_v:, brightness:, hue:, saturation:, invert:, shader:, values: [a, b, c, d], filter:, lit:]"),
     ("PRELOAD", "(files...)", "gets pictures ready in the background so they show without a pause the first time: files, a table of them, or a folder (every picture in it)"),
     ("IMAGE_SIZE", "(file)", "a picture's size in pixels: [w:, h:] (NULL if it can't be read)"),
+    ("OBJECTS_AT", "(x, y, precise)", "the 2D objects at a world point (sprites by their picture, labels by their text, colliders and bodies by their shape), the one on top first; precise: only a sprite's visible pixels"),
+    ("OBJECTS_IN", "(x, y, w, h)", "the 2D objects whose box overlaps a world rectangle (x, y its top-left corner), the one on top first"),
+    ("TEXT_SIZE", "(text, size, font, wrap)", "how big text is drawn, as [w:, h:] in pixels: laid out exactly as a Label2D or DRAW_TEXT does it (size 16 and the built-in font if left out; wrap: the width it wraps at)"),
+    ("HAS_GLOBAL", "(name)", "TRUE once GLOBAL name has been made (reading one that hasn't is an error)"),
+    ("GLOBAL_OR", "(name, fallback)", "GLOBAL name's value, or fallback when it hasn't been made"),
+    ("READ_FILE", "(file)", "a text file of the project (res://...) as text, or NULL if it can't be read"),
+    ("READ_JSON", "(file)", "a JSON file of the project read into tables and values, or NULL if it can't be read"),
     ("POINT_ON", "(object, x, y, precise)", "TRUE when a 2D world point is on an object: a Sprite2D's picture (precise: only its visible pixels), a Collider2D's or Body2D's shape, a Label2D's text"),
     ("KEY_DOWN", "(key)", "TRUE while a key is held (mouse buttons: \"mouse_left\", \"mouse_right\", \"mouse_middle\")"),
     ("KEY_PRESSED", "(key)", "TRUE on the frame a key went down"),
     ("KEY_RELEASED", "(key)", "TRUE on the frame a key went up"),
+    ("MOUSE_SCREEN_X", "()", "mouse x in screen space: the game window's pixels, (0, 0) its top-left, whatever the camera does (what on_draw_gui and screen: TRUE draw in)"),
+    ("MOUSE_SCREEN_Y", "()", "mouse y in screen space"),
+    ("TO_SCREEN", "(x, y)", "a 2D world point in screen space, as [x:, y:]"),
+    ("TO_WORLD", "(x, y)", "a screen-space point in the 2D world, as [x:, y:]"),
+    ("CLEAR_CANVAS", "(canvas, color)", "empties a Canvas2D or surface (fills it with color, or its clear_color / see-through)"),
+    ("SURFACE_CREATE", "(w, h)", "makes a picture to draw into (DRAW_* with target: it) that keeps what's drawn; gives its name, which DRAW_SPRITE / textures take like a file"),
+    ("SURFACE_FREE", "(surface)", "lets go of a surface made with SURFACE_CREATE"),
+    ("POST_SHADER", "(file, [a, b, c, d])", "runs a full-screen shader (.wgsl with fn post(color, uv, time, values)) over the finished picture, with four values it reads as values.x...w; NULL turns it off"),
+    ("SET_CURSOR", "(file, x, y)", "draws a picture as the mouse pointer (x, y: its hot spot, in its pixels); \"hidden\" hides the pointer; NULL brings the normal one back"),
     ("MOUSE_X", "()", "mouse x in game coordinates"),
     ("MOUSE_Y", "()", "mouse y in game coordinates"),
     ("MOUSE_WHEEL", "()", "how far the wheel turned this frame"),
@@ -333,6 +349,67 @@ pub fn append_draws(draws: &[Draw], list: &mut gex_core::render::RenderList) {
     }
 }
 
+/// Screen-space draws (see WorldState::screen_fix) into the world: over everything, unlit.
+pub fn append_screen_draws(draws: &[Draw], fix: glam::Mat4, list: &mut gex_core::render::RenderList) {
+    const OVER: f32 = 1.0e6;
+    for d in draws {
+        match d {
+            Draw::Sprite(s) => {
+                let mut s = (**s).clone();
+                s.model = fix * s.model;
+                s.layer += OVER;
+                s.lit = false;
+                list.sprites.push(s);
+            }
+            Draw::Text(l) => {
+                let mut l = (**l).clone();
+                l.model = fix * l.model;
+                l.pos = fix.transform_point3(l.pos.extend(0.0)).truncate();
+                l.layer += OVER;
+                list.labels.push(l);
+            }
+            Draw::Line { a, b, color } => {
+                let p = |q: &[f32; 2]| {
+                    let v = fix.transform_point3(glam::Vec3::new(q[0], q[1], 0.0));
+                    [v.x, v.y]
+                };
+                list.lines_2d.push((p(a), p(b), *color));
+            }
+        }
+    }
+    if draws.iter().any(|d| matches!(d, Draw::Text(_))) {
+        list.labels.sort_by(|a, b| a.layer.total_cmp(&b.layer));
+    }
+}
+
+/// Draws into a canvas, in its own pixels.
+pub fn append_canvas_draws(draws: &[Draw], c: &mut gex_core::render::CanvasDraw) {
+    for d in draws {
+        match d {
+            Draw::Sprite(s) => c.sprites.push((**s).clone()),
+            Draw::Text(l) => c.labels.push((**l).clone()),
+            Draw::Line { a, b, color } => c.lines.push((*a, *b, *color)),
+        }
+    }
+    gex_core::render::sort_by_layer(&mut c.sprites);
+    c.labels.sort_by(|a, b| a.layer.total_cmp(&b.layer));
+}
+
+/// A canvas named by a DRAW_* target or CLEAR_CANVAS: a surface's name, or a Canvas2D (its
+/// name, path or id).
+fn canvas_target(st: &WorldState, v: &Value) -> R<String> {
+    if let Value::Text(t) = v {
+        if t.starts_with("@surface:") {
+            return if st.surfaces.contains_key(&**t) { Ok(t.to_string()) } else { err(format!("{} was let go of (SURFACE_FREE) or never made", t)) };
+        }
+    }
+    let id = target(st, Some(v))?;
+    if st.tree.objects[id].kind != gex_core::ObjectKind::Canvas2D {
+        return err(format!("{} isn't a Canvas2D or a surface, so it can't be drawn into", st.tree.objects[id].name));
+    }
+    Ok(gex_core::render::canvas_key(id))
+}
+
 /// A color given as a table ([r:, g:, b:, a:] or [r, g, b, a], 0 to 1), as text ("#ff8800",
 /// "red"...), or NULL for white.
 pub(crate) fn color_arg(v: Option<&Value>) -> [f32; 4] {
@@ -357,7 +434,10 @@ pub(crate) fn color_arg(v: Option<&Value>) -> [f32; 4] {
             }
             let h = t.trim_start_matches('#');
             let p = |i: usize| u8::from_str_radix(h.get(i..i + 2).unwrap_or("ff"), 16).unwrap_or(255) as f32 / 255.0;
-            if h.len() >= 6 {
+            let q = |i: usize| u8::from_str_radix(h.get(i..i + 1).unwrap_or("f"), 16).unwrap_or(15) as f32 / 15.0;
+            if h.len() == 3 || h.len() == 4 {
+                [q(0), q(1), q(2), if h.len() == 4 { q(3) } else { 1.0 }]
+            } else if h.len() >= 6 {
                 [p(0), p(2), p(4), if h.len() >= 8 { p(6) } else { 1.0 }]
             } else {
                 [1.0; 4]
@@ -406,11 +486,108 @@ pub fn play_object(st: &mut WorldState, id: ObjectId) -> Result<(), String> {
     Ok(())
 }
 
+impl EngineHost {
+    /// SPAWN: the blueprint is placed, its scripts attached and on_create run (its starting
+    /// values given first) before SPAWN gives back the new object's id, so the next line can
+    /// use what on_create set up. The scripts join the game's own list at the next
+    /// Pending::Adopt (before anything on_create asked for).
+    fn spawn(&mut self, it: &mut Interp, a: &[Value]) -> R<Value> {
+        let rc = self.st.clone();
+        let (a, vars) = spawn_vars(a);
+        let a = &a[..];
+        let (root, ids, before_cur) = {
+            let mut st = rc.borrow_mut();
+            let st = &mut *st;
+            let before_cur = st.current;
+            if let Some(tag) = it.running_tag() {
+                st.current = Some(crate::world::tag_object(tag));
+            }
+            let res = text_arg("SPAWN", a, 0)?;
+            let parent = match a.get(4) {
+                None | Some(Value::Null) => st.tree.root,
+                v => Some(target(st, v)?),
+            };
+            let project = st.project.clone();
+            let id = blueprint::instance(&mut st.tree, parent, &res, &|p: &str| project.read_text(p)).map_err(|e| jlb::value::fault(e.0))?;
+            let t = &mut st.tree.objects[id].transform;
+            t.position.x = num_arg(a, 1, t.position.x as f64) as f32;
+            t.position.y = num_arg(a, 2, t.position.y as f64) as f32;
+            t.position.z = num_arg(a, 3, t.position.z as f64) as f32;
+            let mut ids = Vec::new();
+            st.tree.walk_from(id, &mut ids);
+            st.queue.push_back(Pending::Adopt(id));
+            (id, ids, before_cur)
+        };
+        // Scripts called from here reach the engine through a host of their own (this one
+        // is out of the interpreter while it runs a command).
+        let tag = it.event_tag;
+        it.host = Some(Box::new(EngineHost { st: rc.clone() }));
+        let mut made: Vec<(ObjectId, Vec<crate::world::ScriptInst>)> = Vec::new();
+        for id in &ids {
+            let scripts = rc.borrow().tree.get(*id).map(|n| n.scripts.clone()).unwrap_or_default();
+            let list: Vec<_> = scripts.iter().filter_map(|res| crate::world::load_script(&rc, it, *id, res)).collect();
+            made.push((*id, list));
+        }
+        // The starting values: a script's own variable of that name, or else a property.
+        for (k, v) in vars {
+            let mut found = false;
+            for s in &made[0].1 {
+                if Interp::env_get(&s.env, &k).is_some_and(|old| !old.is_func()) {
+                    Interp::env_set(&s.env, &k, v.clone());
+                    found = true;
+                }
+            }
+            if !found {
+                let mut st = rc.borrow_mut();
+                if let Err(f) = set_prop(&mut st, root, &k, &v) {
+                    let msg = match f { jlb::Fault::Error(e) | jlb::Fault::TaskError(e) => e.msg.clone(), _ => String::new() };
+                    st.log(crate::LogKind::Error, format!("SPAWN's {}: {}", k, msg));
+                }
+            }
+        }
+        for (id, list) in &mut made {
+            for s in list.iter_mut() {
+                if !s.handlers.contains("on_create") || !rc.borrow().tree.contains(*id) {
+                    continue;
+                }
+                let Some(f) = Interp::env_get(&s.env, "on_create").filter(|f| f.is_func()) else { continue };
+                let (me, before) = crate::world::self_table(&rc, *id);
+                Interp::env_set(&s.env, "self", me);
+                rc.borrow_mut().current = Some(*id);
+                it.event_tag = crate::world::object_tag(*id);
+                let r = it.call_value(&f, vec![]);
+                read_self_back_checked(&rc, *id, &s.env, &before);
+                if let Err(f) = r {
+                    crate::world::report(&rc, &f, &s.res);
+                    if !matches!(f, jlb::Fault::End) {
+                        s.dead = true;
+                    }
+                }
+            }
+        }
+        it.host = None;
+        it.event_tag = tag;
+        let mut st = rc.borrow_mut();
+        st.current = before_cur;
+        st.adopt.extend(made);
+        Ok(id_value(root))
+    }
+}
+
+fn read_self_back_checked(rc: &Rc<RefCell<WorldState>>, id: ObjectId, env: &jlb::Env, before: &crate::world::SelfSnap) {
+    if rc.borrow().tree.contains(id) {
+        crate::world::read_self_back(rc, id, env, before);
+    }
+}
+
 impl Host for EngineHost {
     fn call(&mut self, _it: &mut Interp, name: &'static str, a: Vec<Value>) -> Result<R<Value>, Vec<Value>> {
         let name = OLD_NAMES.iter().find(|o| o.0 == name).map_or(name, |o| o.1);
         if !COMMANDS.iter().any(|c| c.0 == name) {
             return Err(a);
+        }
+        if name == "SPAWN" {
+            return Ok(self.spawn(_it, &a));
         }
         let mut st = self.st.borrow_mut();
         let st = &mut *st;
@@ -449,23 +626,6 @@ impl Host for EngineHost {
             "PATH_OF" => {
                 let id = target(st, a.first())?;
                 Ok(Value::text(&st.tree.path_of(id)))
-            }
-            "SPAWN" => {
-                let (a, vars) = spawn_vars(&a);
-                let a = &a[..];
-                let res = text_arg(name, a, 0)?;
-                let parent = match a.get(4) {
-                    None | Some(Value::Null) => st.tree.root,
-                    v => Some(target(st, v)?),
-                };
-                let project = st.project.clone();
-                let id = blueprint::instance(&mut st.tree, parent, &res, &|p: &str| project.read_text(p)).map_err(|e| jlb::value::fault(e.0))?;
-                let t = &mut st.tree.objects[id].transform;
-                t.position.x = num_arg(&a, 1, t.position.x as f64) as f32;
-                t.position.y = num_arg(&a, 2, t.position.y as f64) as f32;
-                t.position.z = num_arg(&a, 3, t.position.z as f64) as f32;
-                st.queue.push_back(Pending::Created(id, vars));
-                Ok(id_value(id))
             }
             "DESTROY" => {
                 let id = target(st, a.first())?;
@@ -902,7 +1062,10 @@ impl Host for EngineHost {
                     _ => {
                         let file = text_arg(name, a, 0)?;
                         let (x, y) = (n(1), n(2));
-                        let (hf, vf) = (opt_num(o, "hframes", 1.0).max(1.0) as u32, opt_num(o, "vframes", 1.0).max(1.0) as u32);
+                        // A picture with its own sprite settings: its frames and origin unless the options say.
+                        let meta = st.images.meta(&st.vfs, &file);
+                        let (dh, dv) = meta.as_ref().map_or((1.0, 1.0), |(p, _)| (p.hframes.max(1) as f64, p.vframes.max(1) as f64));
+                        let (hf, vf) = (opt_num(o, "hframes", dh).max(1.0) as u32, opt_num(o, "vframes", dv).max(1.0) as u32);
                         let region = match opt(o, "region") {
                             Some(Value::Table(r, _)) => {
                                 let g = |i: usize, k: &str| r.items.get(i).map(|s| s.borrow().clone()).or_else(|| r.named.get(k).map(|s| s.borrow().clone())).as_ref().and_then(as_f64).unwrap_or(0.0) as f32;
@@ -923,13 +1086,18 @@ impl Host for EngineHost {
                                 Region::Rect { w, h, .. } => Some([w, h]),
                                 _ => {
                                     let vfs = &st.vfs;
-                                    st.images.size(vfs, &file).map(|[w, h]| [w as f32 / hf as f32, h as f32 / vf as f32])
+                                    let size = match st.surfaces.get(&file) {
+                                        Some(s) => Some(*s),
+                                        None => st.images.size(vfs, &file),
+                                    };
+                                    size.map(|[w, h]| [w as f32 / hf as f32, h as f32 / vf as f32])
                                 }
                             };
                             let own = own.unwrap_or([64.0, 64.0]);
                             (opt_num(o, "w", own[0] as f64) as f32, opt_num(o, "h", own[1] as f64) as f32)
                         };
-                        let pivot = glam::Vec2::new(opt_num(o, "pivot_x", 0.0) as f32, opt_num(o, "pivot_y", 0.0) as f32);
+                        let dp = meta.as_ref().map_or(glam::Vec2::ZERO, |(p, size)| p.pivot(*size));
+                        let pivot = glam::Vec2::new(opt_num(o, "pivot_x", dp.x as f64) as f32, opt_num(o, "pivot_y", dp.y as f64) as f32);
                         let color = opt(o, "color").map(|c| color_arg(Some(&c))).unwrap_or([1.0; 4]);
                         let mut s = shape(x, y, w, h, pivot, color, &file);
                         s.region = region;
@@ -937,8 +1105,25 @@ impl Host for EngineHost {
                         out.push(Draw::Sprite(Box::new(s)));
                     }
                 }
-                if st.draws.len() < 100_000 {
-                    st.draws.extend(out);
+                // Where it goes: into a canvas, over everything in screen space, or the world.
+                match opt(o, "target").filter(|v| !matches!(v, Value::Null)) {
+                    Some(t) => {
+                        let key = canvas_target(st, &t)?;
+                        let list = st.canvas_draws.entry(key).or_default();
+                        if list.len() < 100_000 {
+                            list.extend(out);
+                        }
+                    }
+                    None if opt_bool(o, "screen", st.gui) => {
+                        if st.draws_screen.len() < 100_000 {
+                            st.draws_screen.extend(out);
+                        }
+                    }
+                    None => {
+                        if st.draws.len() < 100_000 {
+                            st.draws.extend(out);
+                        }
+                    }
                 }
                 Ok(Value::Null)
             }
@@ -998,6 +1183,51 @@ impl Host for EngineHost {
                     None => Value::Null,
                 })
             }
+            "OBJECTS_AT" => {
+                let p = glam::Vec2::new(num_arg(&a, 0, 0.0) as f32, num_arg(&a, 1, 0.0) as f32);
+                let ids = crate::hit::objects_at(st, p, truthy(a.get(2), false));
+                Ok(jlb::embed::list_table(ids.into_iter().map(id_value).collect()))
+            }
+            "OBJECTS_IN" => {
+                let (x, y, w, h) = (num_arg(&a, 0, 0.0) as f32, num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32, num_arg(&a, 3, 0.0) as f32);
+                let (lo, hi) = (glam::Vec2::new(x.min(x + w), y.min(y + h)), glam::Vec2::new(x.max(x + w), y.max(y + h)));
+                let ids = crate::hit::objects_in(st, lo, hi);
+                Ok(jlb::embed::list_table(ids.into_iter().map(id_value).collect()))
+            }
+            "TEXT_SIZE" => {
+                let text = match a.first() {
+                    Some(Value::Text(t)) => t.to_string(),
+                    Some(v) => jlb::value::display(v),
+                    None => return err("TEXT_SIZE needs the text to measure"),
+                };
+                let font = match a.get(2) {
+                    Some(Value::Text(f)) => f.to_string(),
+                    _ => String::new(),
+                };
+                let vfs = &st.vfs;
+                let [w, h] = st.images.text_size(vfs, &text, num_arg(&a, 1, 16.0) as f32, &font, num_arg(&a, 3, 0.0) as f32);
+                Ok(jlb::embed::named_table(vec![("w", crate::convert::decimal_num((w as f64 * 100.0).round() / 100.0)), ("h", crate::convert::decimal_num((h as f64 * 100.0).round() / 100.0))]))
+            }
+            "HAS_GLOBAL" => {
+                let n = text_arg(name, &a, 0)?;
+                Ok(Value::Bool(_it.shared.contains_key(n.trim_start_matches("GLOBAL."))))
+            }
+            "GLOBAL_OR" => {
+                let n = text_arg(name, &a, 0)?;
+                Ok(_it.shared.get(n.trim_start_matches("GLOBAL.")).map(|s| s.borrow().clone()).unwrap_or_else(|| a.get(1).cloned().unwrap_or(Value::Null)))
+            }
+            "READ_FILE" => {
+                let f = text_arg(name, &a, 0)?;
+                Ok(st.vfs.read(&f).ok().map(|b| Value::text(&String::from_utf8_lossy(&b))).unwrap_or(Value::Null))
+            }
+            "READ_JSON" => {
+                let f = text_arg(name, &a, 0)?;
+                let Ok(b) = st.vfs.read(&f) else { return Ok(Value::Null) };
+                match serde_json::from_slice::<serde_json::Value>(&b) {
+                    Ok(j) => Ok(crate::extras::plain_json(&j)),
+                    Err(e) => err(format!("{} isn't readable JSON: {}", f, e)),
+                }
+            }
             "POINT_ON" => {
                 let id = target(st, a.first())?;
                 let p = glam::Vec2::new(num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32);
@@ -1041,6 +1271,79 @@ impl Host for EngineHost {
             "KEY_DOWN" => Ok(Value::Bool(st.input.key_down(&text_arg(name, &a, 0)?.to_lowercase()))),
             "KEY_PRESSED" => Ok(Value::Bool(st.input.key_pressed(&text_arg(name, &a, 0)?.to_lowercase()))),
             "KEY_RELEASED" => Ok(Value::Bool(st.input.key_released(&text_arg(name, &a, 0)?.to_lowercase()))),
+            "MOUSE_SCREEN_X" | "MOUSE_SCREEN_Y" => {
+                let p = st.screen_fix.get().inverse().transform_point3(glam::Vec3::new(st.input.mouse[0], st.input.mouse[1], 0.0));
+                Ok(num(if name == "MOUSE_SCREEN_X" { p.x } else { p.y } as f64))
+            }
+            "TO_SCREEN" | "TO_WORLD" => {
+                let m = if name == "TO_SCREEN" { st.screen_fix.get().inverse() } else { st.screen_fix.get() };
+                let p = m.transform_point3(glam::Vec3::new(num_arg(&a, 0, 0.0) as f32, num_arg(&a, 1, 0.0) as f32, 0.0));
+                Ok(jlb::embed::named_table(vec![("x", num(p.x as f64)), ("y", num(p.y as f64))]))
+            }
+            "CLEAR_CANVAS" => {
+                let key = canvas_target(st, a.first().unwrap_or(&Value::Null))?;
+                let c = a.get(1).filter(|v| !matches!(v, Value::Null)).map(|v| color_arg(Some(v)));
+                st.canvas_clear.insert(key.clone(), c);
+                // What was drawn into it earlier this frame goes too.
+                st.canvas_draws.remove(&key);
+                Ok(Value::Null)
+            }
+            "SURFACE_CREATE" => {
+                let (w, h) = (num_arg(&a, 0, 256.0).clamp(1.0, 8192.0) as u32, num_arg(&a, 1, 256.0).clamp(1.0, 8192.0) as u32);
+                if st.surfaces.len() >= 256 {
+                    return err("too many surfaces (256): let go of ones not needed with SURFACE_FREE");
+                }
+                st.surface_count += 1;
+                let key = format!("@surface:{}", st.surface_count);
+                st.surfaces.insert(key.clone(), [w, h]);
+                Ok(Value::text(&key))
+            }
+            "SURFACE_FREE" => {
+                let key = text_arg(name, &a, 0)?;
+                if st.surfaces.remove(&key).is_some() {
+                    st.surfaces_freed.borrow_mut().push(key);
+                }
+                Ok(Value::Null)
+            }
+            "POST_SHADER" => {
+                let file = match a.first() {
+                    None | Some(Value::Null) => String::new(),
+                    Some(Value::Text(t)) => t.to_string(),
+                    Some(o) => return err(format!("POST_SHADER takes a .wgsl file or NULL, not a {}", o.type_name())),
+                };
+                st.project.config.graphics.post_shader = gex_core::settings::FileSetting(file);
+                if let Some(Value::Table(t, _)) = a.get(1) {
+                    for (i, s) in t.items.iter().take(4).enumerate() {
+                        st.post_values[i] = as_f64(&s.borrow()).unwrap_or(0.0) as f32;
+                    }
+                }
+                Ok(Value::Null)
+            }
+            "SET_CURSOR" => {
+                match a.first() {
+                    None | Some(Value::Null) => {
+                        st.cursor = None;
+                        st.cursor_hidden = false;
+                    }
+                    Some(Value::Text(t)) if t.is_empty() || &**t == "default" => {
+                        st.cursor = None;
+                        st.cursor_hidden = false;
+                    }
+                    Some(Value::Text(t)) if &**t == "hidden" || &**t == "none" => {
+                        st.cursor = None;
+                        st.cursor_hidden = true;
+                    }
+                    Some(Value::Text(t)) => {
+                        let vfs = &st.vfs;
+                        let [w, h] = st.images.size(vfs, t).ok_or_else(|| jlb::value::fault(format!("SET_CURSOR: can't read the picture {}", t)))?;
+                        let (px, py) = (num_arg(&a, 1, 0.0) as f32, num_arg(&a, 2, 0.0) as f32);
+                        st.cursor = Some((t.to_string(), [w as f32, h as f32], [px / w.max(1) as f32, py / h.max(1) as f32]));
+                        st.cursor_hidden = false;
+                    }
+                    Some(o) => return err(format!("SET_CURSOR takes a picture, \"hidden\" or NULL, not a {}", o.type_name())),
+                }
+                Ok(Value::Null)
+            }
             "MOUSE_X" => Ok(num(st.input.mouse[0] as f64)),
             "MOUSE_Y" => Ok(num(st.input.mouse[1] as f64)),
             "DELTA_TIME" => Ok(num(st.dt)),

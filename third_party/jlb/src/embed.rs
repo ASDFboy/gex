@@ -47,15 +47,19 @@ impl Interp {
                 e.insert(Rc::from(*k), new_slot(v.clone()));
             }
         }
+        // (Also called from inside a host command that a running program called: its frames
+        // stay.)
+        let depth = self.frames.len().max(1);
         let r = self.run_module(path, env.clone());
-        // An error part way can leave loop scopes behind in the base frame.
-        self.frames.truncate(1);
+        // An error part way can leave frames behind.
+        self.frames.truncate(depth);
         let _ = self.out.flush();
         r.map(|_| env)
     }
 
     /// Calls a function value (your own or a built-in) with these inputs.
     pub fn call_value(&mut self, f: &Value, args: Vec<Value>) -> R<Value> {
+        let depth = self.frames.len().max(1);
         let r = match f {
             Value::Func(func) => {
                 let slots = args.into_iter().map(|v| new_slot(copy_val(v))).collect();
@@ -64,7 +68,7 @@ impl Interp {
             Value::Builtin(name) => crate::builtins::call(self, name, args),
             o => err(format!("a {} can't be called like a function", o.type_name())),
         };
-        self.frames.truncate(1);
+        self.frames.truncate(depth);
         let _ = self.out.flush();
         r
     }

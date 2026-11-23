@@ -72,6 +72,24 @@ impl SettingValue for bool {
     }
 }
 
+/// A file of the project named in a setting (kept exactly as typed).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FileSetting(pub String);
+
+impl SettingValue for FileSetting {
+    const KIND: &'static str = "file";
+    fn to_variant(&self) -> Variant {
+        Variant::Res(self.0.clone())
+    }
+    fn from_variant(v: &Variant) -> Option<Self> {
+        match v {
+            Variant::Null => Some(FileSetting(String::new())),
+            v => v.as_str().map(|s| FileSetting(s.to_string())),
+        }
+    }
+}
+
 impl SettingValue for String {
     const KIND: &'static str = "choice";
     fn to_variant(&self) -> Variant {
@@ -228,6 +246,7 @@ settings! {
         ("Color", tint, [f32; 4], [1.0; 4], 0, 0, [], "Multiplies the whole picture by a color."),
         ("Color", vignette, f32, 0.0, 0.0, 1.0, [], "Darkens the corners of the screen."),
         ("Color", grain, f32, 0.0, 0.0, 1.0, [], "Moving film grain over the picture."),
+        ("Color", post_shader, FileSetting, FileSetting::default(), 0, 0, [], "A full-screen shader (a .wgsl file of the project) run over the finished picture: it defines fn post(color: vec4<f32>, uv: vec2<f32>, time: f32, values: vec4<f32>) -> vec4<f32> and can read the picture anywhere with post_texture(uv). Scripts: POST_SHADER(file, [values])."),
     }
 }
 

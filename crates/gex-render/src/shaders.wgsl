@@ -46,6 +46,8 @@ struct Globals {
     grade2: vec4<f32>,
     // width, height, 1/width, 1/height
     screen: vec4<f32>,
+    // a full-screen shader's four values
+    user: vec4<f32>,
     lights: array<Light, 16>,
 };
 
@@ -413,9 +415,20 @@ fn sprite_fx(c0: vec3<f32>, fx: vec4<f32>) -> vec3<f32> {
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+// The sprite's texture where it's drawn. A canvas (color alpha below -1, see is_canvas in
+// lib.rs) holds screen colors premultiplied by alpha: they're straightened and made linear.
+fn sprite_texel(o: SpriteOut) -> vec4<f32> {
+    let t = textureSample(tex, samp, o.uv);
+    if (o.color.a < -0.5) {
+        let s = vec4<f32>(decode(t.rgb / max(t.a, 0.0001)), t.a);
+        return s * vec4<f32>(o.color.rgb, o.color.a + 2.0);
+    }
+    return t * o.color;
+}
+
 // The texture times the color, with the effects: in screen (sRGB) color.
 fn sprite_base(o: SpriteOut) -> vec4<f32> {
-    let t = textureSample(tex, samp, o.uv) * o.color;
+    let t = sprite_texel(o);
     var c = encode(t);
     if (any(o.fx != vec4<f32>(0.0))) {
         c = vec4<f32>(sprite_fx(c.rgb, o.fx), c.a);
@@ -431,7 +444,7 @@ fn sprite_texture(uv: vec2<f32>) -> vec4<f32> {
 @fragment
 fn fs_sprite(o: SpriteOut) -> @location(0) vec4<f32> {
     if (all(o.fx == vec4<f32>(0.0))) {
-        let c = textureSample(tex, samp, o.uv) * o.color;
+        let c = sprite_texel(o);
         if (c.a < 0.004) {
             discard;
         }

@@ -66,6 +66,8 @@ impl FileOp {
 
 pub struct Playing {
     pub handle: GameHandle,
+    /// When the profiler was last shown (it asks the game to time every event).
+    pub profiled: Option<Instant>,
     pub list: RenderList,
     pub tree: BlueprintTree,
     pub last: Instant,
@@ -192,6 +194,11 @@ pub struct EditorState {
     pub watches: Vec<String>,
     pub watch_input: String,
     pub previews: crate::preview::Previews,
+    /// Pictures' own sprite settings (`<picture>.sprite`) and sizes, as looked up.
+    pub picture_meta: std::cell::RefCell<std::collections::HashMap<String, Option<(std::rc::Rc<gex_core::render::PictureSettings>, [u32; 2])>>>,
+    pub any_picture_meta: std::cell::Cell<Option<bool>>,
+    /// Fonts for measuring text (clicking labels in the view).
+    pub fonts: std::cell::RefCell<gex_assets::text::Fonts>,
     /// File changes made in the Assets panel, newest last, for "Undo file change".
     pub file_undo: Vec<FileOp>,
     /// Something asked for the Timeline panel to be shown.
@@ -257,6 +264,9 @@ impl EditorState {
             watches: Vec::new(),
             watch_input: String::new(),
             previews: Default::default(),
+            picture_meta: Default::default(),
+            any_picture_meta: Default::default(),
+            fonts: Default::default(),
             file_undo: Vec::new(),
             open_timeline: false,
             open_sprite: false,
@@ -288,6 +298,62 @@ impl EditorState {
 
     pub fn reader(&self) -> impl Fn(&str) -> Result<String, String> + '_ {
         move |p: &str| self.project.read_text(p)
+    }
+
+    /// How big text is drawn, in game pixels (laid out as a Label2D draws it).
+    pub fn text_size(&self, text: &str, size: f32, font: &str, wrap: f32) -> [f32; 2] {
+        let style = gex_assets::text::Style { font, size, scale: 1.0, color: [255; 4], align: 0.0, wrap, outline: 0.0, outline_color: [0; 4] };
+        gex_assets::text::measure(&mut self.fonts.borrow_mut(), &self.vfs, text, &style, &mut Vec::new())
+    }
+
+    /// A picture's own sprite settings and size, when it has settings.
+    pub fn picture_meta(&self, path: &str) -> Option<(std::rc::Rc<gex_core::render::PictureSettings>, [u32; 2])> {
+        if path.is_empty() || path.starts_with('@') {
+            return None;
+        }
+        let any = self.any_picture_meta.get().unwrap_or_else(|| {
+            let a = self.vfs.has_picture_settings();
+            self.any_picture_meta.set(Some(a));
+            a
+        });
+        if !any {
+            return None;
+        }
+        self.picture_meta
+            .borrow_mut()
+            .entry(path.to_string())
+            .or_insert_with(|| {
+                let p = gex_core::render::PictureSettings::parse(&self.vfs.read_text(&gex_core::render::PictureSettings::file_for(path)).ok()?)?;
+                let size = gex_assets::image_size(&self.vfs, path).ok()?;
+                Some((std::rc::Rc::new(p), size))
+            })
+            .clone()
+    }
+
+    /// A Sprite2D just given a picture is sized to it (one frame of it, when the picture has
+    /// its own sprite settings).
+    pub fn size_to_picture(&mut self, id: gex_core::ObjectId) {
+        let Some(n) = self.tree.objects.get(id).filter(|n| n.kind == gex_core::ObjectKind::Sprite2D) else { return };
+        let path = n.text("texture").to_string();
+        let size = match self.picture_meta(&path) {
+            Some((m, s)) => m.frame_size(s),
+            None => match gex_assets::image_size(&self.vfs, &path) {
+                Ok([w, h]) => gex_core::glam::Vec2::new(w as f32, h as f32),
+                Err(_) => return,
+            },
+        };
+        let n = &mut self.tree.objects[id];
+        n.props.insert("width".into(), gex_core::Variant::Num(size.x as f64));
+        n.props.insert("height".into(), gex_core::Variant::Num(size.y as f64));
+    }
+
+    pub fn forget_picture_meta(&self, path: &str) {
+        let mut m = self.picture_meta.borrow_mut();
+        m.remove(path);
+        if let Some(p) = path.strip_suffix(".sprite") {
+            m.remove(p);
+            self.any_picture_meta.set(None);
+        }
     }
 
     pub fn remount(&mut self) {
@@ -572,8 +638,13 @@ impl EditorState {
                     }
                 }
             } else if !rel.ends_with(".jblueprint") && !rel.ends_with(".jlb") {
+                self.forget_picture_meta(&res);
                 self.previews.forget(&res);
                 textures = true;
+                // A running game measures pictures (sizes, click masks) again too.
+                if let Some(p) = &self.playing {
+                    p.handle.reload(&res);
+                }
             }
         }
         if textures {
@@ -795,6 +866,15 @@ impl EditorState {
             return Err("stop the game first".into());
         }
         let (new, fixed) = crate::files::rename(&self.project, old, new_name)?;
+        // A picture's sprite settings go with it.
+        let (os, ns) = (gex_core::render::PictureSettings::file_for(old), gex_core::render::PictureSettings::file_for(&new));
+        if let (Some(a), Some(b)) = (self.project.res_to_path(&os), self.project.res_to_path(&ns)) {
+            if a.is_file() && !b.exists() {
+                let _ = std::fs::rename(&a, &b);
+                self.forget_picture_meta(&os);
+                self.forget_picture_meta(&ns);
+            }
+        }
         let swap = |s: &str| -> Option<String> {
             if s == old {
                 Some(new.clone())
@@ -913,6 +993,12 @@ impl EditorState {
             self.close_blueprint_res(&r);
         }
         let to = crate::files::trash(&self.project, res)?;
+        // Its sprite settings go too.
+        let side = gex_core::render::PictureSettings::file_for(res);
+        if self.project.res_to_path(&side).is_some_and(|p| p.is_file()) {
+            let _ = crate::files::trash(&self.project, &side);
+            self.forget_picture_meta(&side);
+        }
         self.scripts.retain(|k, _| k != res && !k.starts_with(&format!("{}/", res)));
         let (fixed, open) = self.forget_asset(res);
         if self.asset_selected.as_deref() == Some(res) {
@@ -1514,6 +1600,7 @@ impl EditorState {
         let handle = GameHandle::start_with(self.project.clone(), self.tree.clone(), self.blueprint_res.as_deref().unwrap_or(""), self.game_breakpoints.clone());
         self.playing = Some(Playing {
             handle,
+            profiled: None,
             list: gex_core::render::extract(&self.tree),
             tree: self.tree.clone(),
             last: Instant::now(),
@@ -1613,6 +1700,7 @@ impl EditorState {
                 axes: p.axes.clone(),
                 ui: std::mem::take(&mut p.ui_events),
                 fullscreen: None,
+                profile: p.profiled.is_some_and(|t| t.elapsed().as_secs_f32() < 1.0),
             });
         }
     }
@@ -1665,9 +1753,12 @@ impl EditorState {
                     }
                 }
             }
-            if let Some(start) = &start {
+            {
+                // This computer's mounts too (they're kept apart from the project file).
                 let mut cfg = self.project.config.clone();
-                cfg.main_blueprint = start.clone();
+                if let Some(start) = &start {
+                    cfg.main_blueprint = start.clone();
+                }
                 let text = ron::ser::to_string_pretty(&cfg, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string())?;
                 std::fs::write(dir.join(gex_core::project::PROJECT_FILE), text).map_err(|e| e.to_string())?;
             }
@@ -1675,7 +1766,8 @@ impl EditorState {
             let mut child = std::process::Command::new(exe)
                 .arg("--play")
                 .arg(&dir)
-                .stdin(std::process::Stdio::null())
+                .env("GEX_STOP_ON_EOF", "1")
+                .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped())
                 .spawn()
@@ -1927,6 +2019,13 @@ pub struct Build {
 
 impl Drop for Build {
     fn drop(&mut self) {
+        // Asked to close (its input ends), so the game finishes properly (saves written);
+        // stopped outright if it hasn't closed in a few seconds.
+        drop(self.child.stdin.take());
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < until && matches!(self.child.try_wait(), Ok(None)) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.dir);

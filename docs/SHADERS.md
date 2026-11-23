@@ -56,6 +56,31 @@ Colors are as they look on screen, 0 to 1. `sprite_texture(uv)` reads the pictur
 GameMaker shaders port straight over: `texture2D(gm_BaseTexture, v_vTexcoord)` is
 `sprite_texture(uv)`, `v_vColour * texture2D(...)` is `base`, and a uniform is one of `values`.
 
+## Full-screen shaders
+
+A full-screen shader runs over the finished picture (after everything is drawn, color grading
+included). Set it for the whole game with the graphics setting `post_shader`, or from a script
+with `POST_SHADER(file, [a, b, c, d])` (NULL turns it off). The file defines one function:
+
+```wgsl
+fn post(color: vec4<f32>, uv: vec2<f32>, time: f32, values: vec4<f32>) -> vec4<f32> {
+    // A red flash, values.x strong (0 to 1), fading toward the edges.
+    let d = distance(uv, vec2<f32>(0.5));
+    return mix(color, vec4<f32>(1.0, 0.0, 0.0, 1.0), values.x * smoothstep(0.2, 0.8, d));
+}
+```
+
+`color` is the pixel (screen colors, 0 to 1), `uv` where it is (0, 0 the top-left, 1, 1 the
+bottom-right), `time` the game's time in seconds and `values` the four numbers POST_SHADER gave.
+`post_texture(uv)` reads the picture anywhere, for waves, blurs and color fringes:
+
+```wgsl
+fn post(color: vec4<f32>, uv: vec2<f32>, time: f32, values: vec4<f32>) -> vec4<f32> {
+    let wobble = vec2<f32>(sin(uv.y * 40.0 + time * 6.0) * 0.004 * values.x, 0.0);
+    return post_texture(uv + wobble);
+}
+```
+
 ## Sprite effects without a shader
 
 Sprite2D (and DRAW_SPRITE) also have built-in effects that cost nothing extra: `brightness`

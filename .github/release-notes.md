@@ -2,6 +2,27 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.5.0:
+Drawing
+- on_draw_gui(), and screen: TRUE on any DRAW_*: drawing in the window's pixels over everything, whatever the camera does (GameMaker's Draw GUI). MOUSE_SCREEN_X/Y, TO_SCREEN and TO_WORLD go between the two.
+- Canvas2D: a picture placed in the blueprint that scripts draw into (DRAW_* with target:), keeping what's drawn until CLEAR_CANVAS, like Scratch's pen. SURFACE_CREATE / SURFACE_FREE make ones in scripts, like GameMaker's surfaces.
+- Full-screen shaders: the graphics setting post_shader, or POST_SHADER(file, values) from scripts (fn post(color, uv, time, values), post_texture(uv) to read the picture anywhere).
+- SET_CURSOR: a picture as the mouse pointer, or the pointer hidden.
+- Pictures can be made into sprites in Assets (Make a sprite…): frames, origin, speed and mouse mask kept with the picture, used by every Sprite2D and DRAW_SPRITE showing it, playing by itself.
+- Text colors take short hex too ([color=#f80]).
+Scripting
+- SPAWN runs the new object's on_create right away, so the next line can use what it set up.
+- Persistent objects (a tick in the Inspector) come along into the next blueprint with their variables, like GameMaker's.
+- OBJECTS_AT and OBJECTS_IN find objects by place without physics; TEXT_SIZE measures text exactly as it's drawn; HAS_GLOBAL and GLOBAL_OR; READ_FILE and READ_JSON read the project's data files.
+- Clicking labels (on_clicked, POINT_ON, picking them in the editor) uses the text's real size.
+Editor and engine
+- The Profiler shows every event's time by script over the last second, and the slowest frames.
+- Find in files: a blueprint result selects the object it's about.
+- Pictures loading in the editor show as a faint box; pictures not drawn for a while are let go when video memory runs short; text that changes every frame no longer piles up.
+- Each computer's linked folders (Half-Life 2, asset folders) are kept on that computer (.gex/mounts.ron), not in the shared project file.
+- A test build stopped from the editor closes properly (its saves are written).
+- A picture changed while the game runs is measured again (sizes, click masks).
+
 New in 0.4.4 (checking today's changes together):
 - A short decimal read back from a property or a save is exact again: SET(obj, "speed", 0.3) then GET, or SAVE_DATA then LOAD_DATA, gives 0.3, so `== 0.3` holds (it used to come back as a near miss).
 - Clicking a Label2D (on_clicked, POINT_ON, and picking it in the editor) uses its real block: [color=...] tags take no room and wrap_width wraps it. The editor picks labels and sprites by layer, as they're drawn.

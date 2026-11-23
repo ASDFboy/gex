@@ -211,7 +211,7 @@ fn box_lines(o: &mut Overlay, m: Mat4, c: [f32; 4]) {
 
 /// The overlay for editing: grid, colliders, gizmos, selection.
 fn editor_overlay(st: &EditorState, list: &RenderList, cams: &Cameras) -> Overlay {
-    let mut o = Overlay::default();
+    let mut o = Overlay { placeholders: true, ..Default::default() };
     let tree = st.view_tree();
     if st.mode_3d {
         if st.show_grid {
@@ -315,7 +315,7 @@ fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Op
     // Sprites and labels from the top layer down (labels are drawn among the sprites), then
     // point-like objects.
     let label_hit = |l: &gex_core::render::Label| {
-        let size = gex_core::render::label_box(&l.text, l.size, l.wrap);
+        let size = Vec2::from(st.text_size(&l.text, l.size, &l.font, l.wrap));
         let local = l.model.inverse().transform_point3(w.extend(0.0)).truncate() + l.anchor * size;
         local.x >= 0.0 && local.y >= 0.0 && local.x <= size.x && local.y <= size.y
     };
@@ -439,6 +439,8 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
         Some(p) => p.list.clone(),
         None => {
             let mut l = extract(&st.tree);
+            let tree = &st.tree;
+            gex_core::render::apply_picture_settings(&mut l.sprites, &|id| tree.get(id).map_or(0.0, |n| n.num("frame", 0.0)), &mut |t: &str| st.picture_meta(t));
             l.graphics = st.project.config.graphics.clone();
             l.display = st.project.config.display.clone();
             preview_particles(ui.ctx(), st, &mut l);
@@ -450,6 +452,10 @@ pub fn viewport(ui: &mut egui::Ui, st: &mut EditorState, rs: Option<&egui_wgpu::
     let gv = if game_cam { gex_render::GameView::new(&list.display.scale_mode, px, design) } else { gex_render::GameView { render: px, rect: [0.0, 0.0, px[0] as f32, px[1] as f32] } };
     let view_rect = Rect::from_min_size(rect.min + egui::vec2(gv.rect[0], gv.rect[1]) / ppp, egui::vec2(gv.rect[2], gv.rect[3]) / ppp);
     let cams = if game_cam { Cameras::for_game(&list, gv.render, design) } else { Cameras::for_editor(st.mode_3d, &st.cam2, &st.cam3, px) };
+    // A game that draws its own pointer (SET_CURSOR) hides the system's over its picture.
+    if game_cam && list.hide_cursor && ui.rect_contains_pointer(view_rect) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+    }
 
     // ---- input ----
     let (scroll, pointer, delta, secondary, middle, shift, keys) = ui.input(|i| {
@@ -886,11 +892,9 @@ fn drop_asset(st: &mut EditorState, path: &str, at: Vec3) {
         } else {
             let mut n = Object::new(name, ObjectKind::Sprite2D);
             n.props.insert("texture".into(), Variant::Res(path.to_string()));
-            if let Ok(img) = gex_assets::load_image(&st.vfs, path) {
-                n.props.insert("width".into(), Variant::Num(img.width as f64));
-                n.props.insert("height".into(), Variant::Num(img.height as f64));
-            }
-            st.tree.add(st.tree.root, n)
+            let id = st.tree.add(st.tree.root, n);
+            st.size_to_picture(id);
+            id
         };
         place(st, id);
         st.selected = Some(id);

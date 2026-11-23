@@ -615,6 +615,14 @@ pub struct RenderList {
     /// 2D lighting: the dark (from the Camera2D's ambient; white = none) and the lights in it.
     pub ambient_2d: [f32; 4],
     pub lights_2d: Vec<Light2DDraw>,
+    /// Pictures drawn into this frame (Canvas2Ds, SURFACE_CREATE's), before the rest is drawn.
+    pub canvases: Vec<CanvasDraw>,
+    /// Surfaces the game let go of (SURFACE_FREE).
+    pub canvases_freed: Vec<String>,
+    /// The game draws its own mouse pointer (SET_CURSOR): the system's is hidden over it.
+    pub hide_cursor: bool,
+    /// The four values the full-screen shader (graphics.post_shader) gets (POST_SHADER).
+    pub post_values: [f32; 4],
     /// The game's window title (WINDOW_TITLE); None = as it is.
     pub window_title: Option<String>,
     /// The project's display settings: resolution, full screen, scaling (scripts can change them).
@@ -655,6 +663,93 @@ pub fn anchor_fraction(a: &str) -> Vec2 {
     let fx = if a.ends_with("right") { 1.0 } else if a == "top" || a == "bottom" || a == "center" { 0.5 } else { 0.0 };
     let fy = if a.starts_with("bottom") { 1.0 } else if a == "left" || a == "right" || a == "center" { 0.5 } else { 0.0 };
     Vec2::new(fx, fy)
+}
+
+/// A picture that's drawn into and kept from frame to frame (a Canvas2D, or a surface a script
+/// made): its name as a texture ("@canvas:..." / "@surface:..."), its size in pixels, and what's
+/// drawn into it this frame, in its own pixels ((0, 0) its top-left).
+#[derive(Clone, Debug, Default)]
+pub struct CanvasDraw {
+    pub key: String,
+    pub size: [u32; 2],
+    /// What it's filled with when made, or when cleared (CLEAR_CANVAS).
+    pub clear_color: [f32; 4],
+    /// Cleared before this frame's drawing.
+    pub clear: bool,
+    pub sprites: Vec<Sprite>,
+    pub labels: Vec<Label>,
+    pub lines: Vec<([f32; 2], [f32; 2], [f32; 4])>,
+}
+
+/// A picture's own sprite settings, kept beside it in `<picture>.sprite` (made in the Assets
+/// panel): how it's cut into frames, where its origin is, how fast it animates and how the
+/// mouse finds it. A Sprite2D showing the picture uses these instead of its own hframes,
+/// vframes, pivot and mouse_precise.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PictureSettings {
+    /// Frames across and down the sheet.
+    pub hframes: u32,
+    pub vframes: u32,
+    /// How many frames there are (0: all of them; fewer when the sheet's last row isn't full).
+    pub frames: u32,
+    /// The origin, in pixels from a frame's top-left: where the sprite's position is.
+    pub origin: [f32; 2],
+    /// Frames a second it plays at by itself (0: it doesn't).
+    pub fps: f32,
+    /// How the mouse finds it: "box", "ellipse" or "precise" (its visible pixels).
+    pub mask: String,
+}
+
+impl Default for PictureSettings {
+    fn default() -> Self {
+        PictureSettings { hframes: 1, vframes: 1, frames: 0, origin: [0.0, 0.0], fps: 0.0, mask: "box".into() }
+    }
+}
+
+impl PictureSettings {
+    /// Where a picture's settings are kept.
+    pub fn file_for(picture: &str) -> String {
+        format!("{}.sprite", picture)
+    }
+    pub fn parse(text: &str) -> Option<PictureSettings> {
+        ron::from_str(text).ok()
+    }
+    pub fn to_text(&self) -> String {
+        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::new().struct_names(false)).unwrap_or_default()
+    }
+    pub fn count(&self) -> u32 {
+        let all = self.hframes.max(1) * self.vframes.max(1);
+        if self.frames == 0 { all } else { self.frames.min(all) }
+    }
+    /// One frame's size in pixels, for a picture this big.
+    pub fn frame_size(&self, picture: [u32; 2]) -> Vec2 {
+        Vec2::new(picture[0] as f32 / self.hframes.max(1) as f32, picture[1] as f32 / self.vframes.max(1) as f32)
+    }
+    /// The pivot (0 to 1 across a frame) its origin makes.
+    pub fn pivot(&self, picture: [u32; 2]) -> Vec2 {
+        Vec2::from(self.origin) / self.frame_size(picture).max(Vec2::splat(1e-3))
+    }
+}
+
+/// Sprites showing a picture that has its own settings take its frames and origin (`lookup`
+/// gives a picture's settings and size, when it has settings).
+pub fn apply_picture_settings(sprites: &mut [Sprite], frames: &dyn Fn(ObjectId) -> f64, lookup: &mut dyn FnMut(&str) -> Option<(std::rc::Rc<PictureSettings>, [u32; 2])>) {
+    for s in sprites {
+        if s.texture.is_empty() || s.texture.starts_with('@') || matches!(s.region, Region::Tile { .. } | Region::Rect { .. }) {
+            continue;
+        }
+        let Some((p, size)) = lookup(&s.texture) else { continue };
+        let (h, v) = (p.hframes.max(1), p.vframes.max(1));
+        let frame = frames(s.object).max(0.0) as u32 % p.count().max(1);
+        s.region = if h * v > 1 { Region::Frame { h, v, frame } } else { Region::Whole };
+        s.pivot = p.pivot(size);
+    }
+}
+
+/// The texture name of a Canvas2D's picture.
+pub fn canvas_key(id: ObjectId) -> String {
+    format!("@canvas:{:?}", id)
 }
 
 pub fn extract(tree: &BlueprintTree) -> RenderList {
@@ -763,6 +858,26 @@ pub fn extract(tree: &BlueprintTree) -> RenderList {
                     model,
                     size: if circle { Vec2::splat(r) } else { Vec2::new(n.num("width", 32.0) as f32, n.num("height", 32.0) as f32) },
                 });
+            }
+            ObjectKind::Canvas2D => {
+                let (w, h) = (n.num("width", 256.0).clamp(1.0, 8192.0) as u32, n.num("height", 256.0).clamp(1.0, 8192.0) as u32);
+                let key = canvas_key(id);
+                let mut c = tint(n, tint_down, n.color("color"));
+                c[3] *= n.num("opacity", 1.0) as f32;
+                out.sprites.push(Sprite {
+                    object: id,
+                    model,
+                    size: Vec2::new(w as f32, h as f32),
+                    pivot: Vec2::new(n.num("pivot_x", 0.0) as f32, n.num("pivot_y", 0.0) as f32),
+                    color: c,
+                    texture: key.clone(),
+                    layer: n.num("layer", 0.0) as f32 + z,
+                    blend,
+                    pixel,
+                    lit: n.prop("lit").is_some_and(|v| v.as_bool()),
+                    ..Default::default()
+                });
+                out.canvases.push(CanvasDraw { key, size: [w, h], clear_color: n.color("clear_color"), ..Default::default() });
             }
             ObjectKind::Light2D => out.lights_2d.push(Light2DDraw {
                 object: id,

@@ -161,6 +161,9 @@ pub fn info(kind: ObjectKind, k: &str) -> PropInfo {
         (Light3D, "shadows") => p(&[], None, "Casts shadows (the first directional light with this on is the shadow sun)."),
         (Light3D, "shadow_strength") => p(&[], Some((0.0, 1.0)), "How dark its shadows are: 1 full, 0.5 half."),
         (Light3D, "shadow_bias") => p(&[], Some((-1.0, 0.05)), "Its own shadow bias (below 0 uses the project's). Raise it if surfaces get speckled shadows."),
+        (Canvas2D, "width") => p(&[], None, "How many pixels across its picture is (what's drawn into it keeps these pixels)."),
+        (Canvas2D, "height") => p(&[], None, "How many pixels tall its picture is."),
+        (Canvas2D, "clear_color") => p(&[], None, "What it starts as, and what CLEAR_CANVAS fills it with when no color is given (see-through by default)."),
         (Light2D, "energy") => p(&[], Some((0.0, 8.0)), "Brightness."),
         (Light2D, "radius") => p(&[], None, "How far the light reaches, in pixels."),
         // ---- environment ----

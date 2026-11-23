@@ -118,6 +118,16 @@ fn main() -> std::process::ExitCode {
             opts,
             Box::new(move |cc| {
                 cc.egui_ctx.set_theme(egui::Theme::Dark);
+                // A test build run from the editor: when the editor stops it (closes our
+                // input), close like the window's X, so the game ends properly (saves written).
+                if std::env::var_os("GEX_STOP_ON_EOF").is_some() {
+                    let ctx = cc.egui_ctx.clone();
+                    std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ctx.request_repaint();
+                    });
+                }
                 app::PlayerApp::new(project).map(|a| Box::new(a) as Box<dyn eframe::App>).map_err(|e| e.into())
             }),
         ));

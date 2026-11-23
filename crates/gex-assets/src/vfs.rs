@@ -121,6 +121,33 @@ impl Vfs {
 
     /// The plain file on disk behind a project or mounted-folder path, so another thread can
     /// read it (None for built-in assets and games' archives).
+    /// Whether any picture of the project has its own sprite settings (a `.sprite` file
+    /// beside it): when none has, nothing needs looking up.
+    pub fn has_picture_settings(&self) -> bool {
+        let mut stack = vec![self.project_dir.clone()];
+        let mut seen = 0;
+        while let Some(d) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&d) else { continue };
+            for e in rd.flatten() {
+                seen += 1;
+                if seen > 200_000 {
+                    return true;
+                }
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with('.') {
+                    continue;
+                }
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    stack.push(e.path());
+                } else if name.ends_with(".sprite") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn disk_file(&self, path: &str) -> Option<PathBuf> {
         let (scheme, rel) = split(path)?;
         if scheme == "res" {

@@ -17,7 +17,8 @@ use jlb::host::PauseHook;
 
 pub enum ToGame {
     Frame(FrameInput),
-    /// A script file changed: load it again in the running game.
+    /// A file changed: a script is loaded again in the running game; a picture is measured
+    /// again (its size, its click mask).
     Reload(String),
     /// Go online before the scripts start (playing together from the editor).
     Net(NetStart),
@@ -203,7 +204,11 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
         match msg {
             ToGame::Stop => break,
             ToGame::Reload(res) => {
-                game.reload_script(&res);
+                if res.ends_with(".jlb") {
+                    game.reload_script(&res);
+                } else {
+                    game.st.borrow_mut().images.forget(&res);
+                }
             }
             ToGame::Net(how) => {
                 let mut st = game.st.borrow_mut();
@@ -266,6 +271,7 @@ fn run(project: Project, tree: BlueprintTree, blueprint: String, cancel: Arc<Ato
                 }
                 let quit = game.st.borrow().quit;
                 let list = game.render_list();
+                game.take_profile();
                 let mut stats = std::mem::take(&mut game.stats);
                 stats.total_ms = started.elapsed().as_secs_f32() * 1000.0;
                 stats.objects = game.tree().objects.len();

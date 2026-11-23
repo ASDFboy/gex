@@ -40,6 +40,9 @@ pub enum ObjectKind {
     Particles2D,
     /// A light in 2D: brightens the dark a Camera2D's `ambient` sets.
     Light2D,
+    /// A picture scripts draw into (DRAW_* with target:), kept from frame to frame like
+    /// Scratch's pen layer, shown where it's placed.
+    Canvas2D,
     // ---- UI (screen space, in the game window's pixels) ----
     Panel,
     Button,
@@ -94,6 +97,7 @@ pub const ALL_KINDS: &[ObjectKind] = &[
     ObjectKind::TileMap2D,
     ObjectKind::Particles2D,
     ObjectKind::Light2D,
+    ObjectKind::Canvas2D,
     ObjectKind::Panel,
     ObjectKind::Button,
     ObjectKind::Label,
@@ -134,6 +138,7 @@ impl ObjectKind {
             ObjectKind::TileMap2D => "TileMap2D",
             ObjectKind::Particles2D => "Particles2D",
             ObjectKind::Light2D => "Light2D",
+            ObjectKind::Canvas2D => "Canvas2D",
             ObjectKind::Panel => "Panel",
             ObjectKind::Button => "Button",
             ObjectKind::Label => "Label",
@@ -169,7 +174,7 @@ impl ObjectKind {
         ALL_KINDS.iter().copied().find(|k| k.name().eq_ignore_ascii_case(s))
     }
     pub fn is_2d(self) -> bool {
-        matches!(self, ObjectKind::Object2D | ObjectKind::Sprite2D | ObjectKind::Label2D | ObjectKind::Camera2D | ObjectKind::Collider2D | ObjectKind::Body2D | ObjectKind::TileMap2D | ObjectKind::Particles2D | ObjectKind::Light2D)
+        matches!(self, ObjectKind::Object2D | ObjectKind::Sprite2D | ObjectKind::Label2D | ObjectKind::Camera2D | ObjectKind::Collider2D | ObjectKind::Body2D | ObjectKind::TileMap2D | ObjectKind::Particles2D | ObjectKind::Light2D | ObjectKind::Canvas2D)
     }
     pub fn is_ui(self) -> bool {
         matches!(
@@ -238,6 +243,18 @@ impl ObjectKind {
                 ("value_2", Num(0.0)),
                 ("value_3", Num(0.0)),
                 ("value_4", Num(0.0)),
+            ],
+            ObjectKind::Canvas2D => vec![
+                ("width", Num(256.0)),
+                ("height", Num(256.0)),
+                ("clear_color", Color([0.0, 0.0, 0.0, 0.0])),
+                ("color", Color([1.0, 1.0, 1.0, 1.0])),
+                ("opacity", Num(1.0)),
+                ("layer", Num(0.0)),
+                ("pivot_x", Num(0.0)),
+                ("pivot_y", Num(0.0)),
+                ("filter", Text("project".into())),
+                ("lit", Bool(false)),
             ],
             ObjectKind::Light2D => vec![("color", Color([1.0, 0.9, 0.7, 1.0])), ("energy", Num(1.0)), ("radius", Num(200.0)), ("texture", Res(String::new()))],
             ObjectKind::TileMap2D => vec![

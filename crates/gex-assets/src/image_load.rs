@@ -182,3 +182,8 @@ fn psd(d: &[u8]) -> Result<Rgba, String> {
     }
     Ok(Rgba { width: w as u32, height: h as u32, pixels: px })
 }
+
+/// Writes RGBA pixels to a PNG file (tests, tools).
+pub fn save_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) -> Result<(), String> {
+    image::RgbaImage::from_raw(w, h, rgba.to_vec()).ok_or("the pixels don't match the size")?.save(path).map_err(|e| e.to_string())
+}

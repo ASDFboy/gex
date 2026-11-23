@@ -103,10 +103,11 @@ scripts can read it with `GET(object, "speed")`.
 | Function | When it runs |
 |---|---|
 | top-level code | when the script is attached (before `on_create`) |
-| `on_create()` | once the whole blueprint is loaded, or after `SPAWN` |
+| `on_create()` | once the whole blueprint is loaded, or inside `SPAWN` (before it gives back the id) |
 | `on_step(dt)` | every frame |
 | `on_physics(dt)` | 60 times a second, before physics moves bodies (use it for movement) |
 | `on_draw()` | every frame after `on_step`: the place for `DRAW_*` commands |
+| `on_draw_gui()` | every frame after `on_draw`: `DRAW_*` here are in screen space (the window's pixels, over everything, whatever the camera does), like GameMaker's Draw GUI |
 | `on_destroy()` | before the object is removed |
 | `on_key_pressed(key)` / `on_key_released(key)` | any key |
 | `on_press_<key>()` / `on_release_<key>()` | one key, e.g. `on_press_space()`, `on_press_a()`, `on_press_pad_a()` |
@@ -173,7 +174,9 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 | `PARENT(object)` | an object's parent, or NULL |
 | `NAME_OF(object)` | an object's name |
 | `PATH_OF(object)` | an object's full path |
-| `SPAWN(blueprint, x, y, z, parent, [values])` | adds an instance of a blueprint file; gives its id. A table last (`[hp: 5, speed: 300]`) sets those variables of its scripts (or properties) before its `on_create` |
+| `SPAWN(blueprint, x, y, z, parent, [values])` | adds an instance of a blueprint file; gives its id. A table last (`[hp: 5, speed: 300]`) sets those variables of its scripts (or properties) before its `on_create`, which runs before `SPAWN` gives back the id |
+| `OBJECTS_AT(x, y, precise)` | the 2D objects at a world point, top first (sprites by picture, labels by text, colliders and bodies by shape) |
+| `OBJECTS_IN(x, y, w, h)` | the 2D objects whose box overlaps a world rectangle, top first |
 | `DESTROY(object)` | removes an object (at the end of the frame); runs on_destroy |
 
 ### Events and timers
@@ -234,6 +237,10 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 |---|---|
 | `SAVE_DATA(name, value)` | keeps a value (a table, number, text...) on disk between runs |
 | `LOAD_DATA(name)` | a value kept with SAVE_DATA, or NULL |
+| `HAS_GLOBAL(name)` | TRUE once `GLOBAL name` has been made |
+| `GLOBAL_OR(name, fallback)` | `GLOBAL name`'s value, or the fallback when it hasn't been made |
+| `READ_FILE(file)` | a text file of the project as text (NULL if it can't be read) |
+| `READ_JSON(file)` | a JSON file of the project as tables and values (NULL if it can't be read) |
 | `DELETE_DATA(name)` | forgets a value kept with SAVE_DATA |
 | `REMEMBER(name, value)` | keeps a value while the game runs, across CHANGE_BLUEPRINT (lives, score, inventory) |
 | `RECALL(name)` | a value kept with REMEMBER, or NULL |
@@ -250,6 +257,17 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 | `DRAW_SPRITE(file, x, y, [options])` | draws a picture at its own size, like GameMaker's `draw_sprite_ext`: `frame`/`hframes`/`vframes` or `region: [x, y, w, h]`, `w`, `h`, `scale`, `scale_x`, `scale_y`, `rotation`, `pivot_x`, `pivot_y`, `color`, `alpha`, `layer`, `blend`, `flip_h`, `flip_v`, `brightness`, `hue`, `saturation`, `invert`, `shader`, `values`, `filter`, `lit` |
 | `PRELOAD(files...)` | gets pictures ready in the background (files, a table of them, or a folder) so they show without a pause the first time |
 | `IMAGE_SIZE(file)` | a picture's size: `[w:, h:]` |
+| `TEXT_SIZE(text, size, font, wrap)` | how big text is drawn: `[w:, h:]` |
+| `CLEAR_CANVAS(canvas, color)` | empties a Canvas2D or surface |
+| `SURFACE_CREATE(w, h)` | makes a picture to draw into (`target:`) that keeps what's drawn; gives its name, which `DRAW_SPRITE` and textures take like a file |
+| `SURFACE_FREE(surface)` | lets go of a surface |
+| `TO_SCREEN(x, y)` / `TO_WORLD(x, y)` | a 2D world point in screen space, and back: `[x:, y:]` |
+| `POST_SHADER(file, [a, b, c, d])` | a full-screen shader over the finished picture (`fn post(color, uv, time, values)`; NULL turns it off) |
+
+Every `DRAW_*` also takes `screen: TRUE` (drawn in the window's pixels over everything, as in
+`on_draw_gui`; `screen: FALSE` there draws in the world) and `target:` a Canvas2D (its name,
+path or id) or a surface, to draw into it instead: what's drawn into a canvas stays until
+`CLEAR_CANVAS`, in its own pixels.
 | `POINT_ON(object, x, y, precise)` | TRUE when a 2D world point is on an object (a Sprite2D's picture; precise: only its visible pixels) |
 
 Pictures load in the background: one that isn't ready yet is left out for a moment instead of
@@ -267,6 +285,8 @@ blueprint's sprites and labels by layer, in the order they were drawn.
 | `KEY_PRESSED(key)` | TRUE on the frame a key went down |
 | `KEY_RELEASED(key)` | TRUE on the frame a key went up |
 | `MOUSE_X()` | mouse x in game coordinates |
+| `MOUSE_SCREEN_X()` / `MOUSE_SCREEN_Y()` | the mouse in screen space (the window's pixels, whatever the camera does) |
+| `SET_CURSOR(file, x, y)` | a picture as the mouse pointer (x, y its hot spot); `"hidden"` hides it; NULL brings the normal one back |
 | `MOUSE_Y()` | mouse y in game coordinates |
 | `MOUSE_WHEEL()` | how far the wheel turned this frame |
 | `AXIS(name)` | a gamepad stick or trigger, -1 to 1: left_x, left_y, right_x, right_y, lt, rt |
@@ -280,7 +300,7 @@ blueprint's sprites and labels by layer, in the order they were drawn.
 
 | Command | |
 |---|---|
-| `CHANGE_BLUEPRINT(blueprint, fade, color)` | switches to another blueprint file; with fade (seconds) the screen fades to color (default black) and back |
+| `CHANGE_BLUEPRINT(blueprint, fade, color)` | switches to another blueprint file; with fade (seconds) the screen fades to color (default black) and back. Objects with `persistent` on come along (their variables kept, `on_create` not run again) |
 | `QUIT()` | stops the game |
 | `FULLSCREEN(on)` | switches the game window to full screen (TRUE) or back (FALSE); with no input, gives whether it is |
 | `WINDOW_TITLE(text)` | changes the game window's title |

@@ -128,6 +128,21 @@ pub(crate) fn to_json(v: &Value, depth: usize) -> Result<serde_json::Value, Stri
     })
 }
 
+/// Any JSON (READ_JSON): objects become named tables, arrays lists.
+pub(crate) fn plain_json(j: &serde_json::Value) -> Value {
+    match j {
+        serde_json::Value::Array(a) => list_table(a.iter().map(plain_json).collect()),
+        serde_json::Value::Object(o) => {
+            let mut t = jlb::value::Table::new();
+            for (k, v) in o {
+                t.named.insert(std::rc::Rc::from(k.as_str()), jlb::value::new_slot(plain_json(v)));
+            }
+            Value::new_table(t)
+        }
+        o => from_json(o),
+    }
+}
+
 pub(crate) fn from_json(j: &serde_json::Value) -> Value {
     match j {
         serde_json::Value::Null => Value::Null,
