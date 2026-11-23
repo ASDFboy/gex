@@ -496,14 +496,18 @@ impl EditorState {
         };
         let result = self.blueprint_text().and_then(|text| {
             let p = self.project.res_to_path(&res).ok_or("not a project path")?;
-            if let Some(d) = p.parent() {
-                std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+            // Not changed since it was opened or saved: the file is left exactly as it is (even
+            // when it's laid out differently from how GEX would write it, or was changed by
+            // something else meanwhile).
+            if text == self.blueprint_saved && p.is_file() {
+                return Ok((text, false));
             }
-            std::fs::write(&p, &text).map_err(|e| e.to_string())?;
-            Ok(text)
+            let wrote = gex_core::project::write_if_changed(&p, text.as_bytes()).map_err(|e| e.to_string())?;
+            Ok((text, wrote))
         });
         match result {
-            Ok(t) => {
+            Ok((_, false)) => self.status = format!("{} has no changes to save", res),
+            Ok((t, true)) => {
                 self.blueprint_saved = t;
                 self.status = format!("saved {}", res);
                 for (i, before) in users {
@@ -521,7 +525,8 @@ impl EditorState {
         }
     }
 
-    /// Saves every changed script and every open blueprint (the other tabs' too).
+    /// Saves every changed script and every changed open blueprint (the other tabs' too).
+    /// Only files whose contents change are written; the rest of the project isn't touched.
     pub fn save_all(&mut self) {
         self.save_blueprint();
         let dirty: Vec<String> = self.scripts.values().filter(|s| s.dirty()).map(|s| s.res.clone()).collect();
@@ -539,7 +544,7 @@ impl EditorState {
         };
         for (i, res, text) in unsaved {
             if let Some(p) = self.project.res_to_path(&res) {
-                if std::fs::write(&p, &text).is_ok() {
+                if gex_core::project::write_if_changed(&p, text.as_bytes()).is_ok() {
                     self.docs[i].blueprint_saved = text;
                 }
             }
@@ -1005,7 +1010,7 @@ impl EditorState {
         let f = self.asset_colors_file();
         let _ = std::fs::create_dir_all(f.parent().unwrap());
         if let Ok(t) = serde_json::to_string_pretty(&self.asset_colors) {
-            let _ = std::fs::write(f, t);
+            let _ = gex_core::project::write_if_changed(&f, t.as_bytes());
         }
     }
 
@@ -1325,11 +1330,13 @@ impl EditorState {
     pub fn save_script(&mut self, res: &str) {
         let Some(s) = self.scripts.get_mut(res) else { return };
         let Some(p) = self.project.res_to_path(res) else { return };
-        if let Some(d) = p.parent() {
-            let _ = std::fs::create_dir_all(d);
+        // Not changed since it was opened or saved: left as it is.
+        if !s.dirty() && p.is_file() {
+            self.status = format!("{} has no changes to save", res);
+            return;
         }
-        match std::fs::write(&p, &s.text) {
-            Ok(()) => {
+        match gex_core::project::write_if_changed(&p, s.text.as_bytes()) {
+            Ok(_) => {
                 s.saved = s.text.clone();
                 self.status = format!("saved {}", res);
                 if res.ends_with(".jlb") {

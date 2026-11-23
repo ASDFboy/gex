@@ -166,3 +166,20 @@ fn sprites_read_in_one_pass() {
     assert_eq!(s.values, Sprite::values_of(n));
     assert_eq!(s.shader, "res://s.wgsl");
 }
+
+#[test]
+fn write_if_changed_leaves_the_same_contents_alone() {
+    use crate::project::write_if_changed;
+    let dir = std::env::temp_dir().join(format!("gex-wic-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let f = dir.join("sub/a.txt");
+    assert!(write_if_changed(&f, b"one").unwrap(), "new file (and its folder) made");
+    let m = std::fs::metadata(&f).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert!(!write_if_changed(&f, b"one").unwrap());
+    assert_eq!(std::fs::metadata(&f).unwrap().modified().unwrap(), m, "not touched");
+    assert!(write_if_changed(&f, b"two").unwrap());
+    assert_eq!(std::fs::read(&f).unwrap(), b"two");
+    assert_eq!(std::fs::read_dir(dir.join("sub")).unwrap().count(), 1, "no .part file left behind");
+    let _ = std::fs::remove_dir_all(&dir);
+}

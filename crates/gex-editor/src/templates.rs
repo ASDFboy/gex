@@ -310,4 +310,61 @@ mod tests {
         assert_eq!(st.tree.objects[c2].num("width", 0.0), 99.0, "its own change is kept");
         assert!(!st.blueprint_text().unwrap().contains("Color((1.0, 0.5"), "no stale color saved as an override");
     }
+
+    #[test]
+    fn saving_everything_writes_only_what_changed() {
+        let dir = std::env::temp_dir().join(format!("gex-only-changed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        super::create_demo(&dir).unwrap();
+        // Laid out differently from how GEX writes it (by hand, another version, another computer).
+        let main = dir.join("blueprints/main.jblueprint");
+        let hand = format!("{}\n\n", std::fs::read_to_string(&main).unwrap().replace('\n', "\r\n"));
+        std::fs::write(&main, &hand).unwrap();
+        let snapshot = |d: &std::path::Path| {
+            let mut out = std::collections::BTreeMap::new();
+            let mut stack = vec![d.to_path_buf()];
+            while let Some(x) = stack.pop() {
+                for e in std::fs::read_dir(&x).unwrap().flatten() {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    if e.path().is_dir() {
+                        stack.push(e.path());
+                    } else {
+                        let m = e.metadata().unwrap().modified().unwrap();
+                        out.insert(e.path(), (std::fs::read(e.path()).unwrap(), m));
+                    }
+                }
+            }
+            out
+        };
+        let mut st = crate::state::EditorState::new(gex_core::project::Project::open(&dir).unwrap());
+        st.open_blueprint("res://blueprints/coin.jblueprint");
+        st.open_blueprint("res://blueprints/main.jblueprint");
+        st.open_script("res://scripts/player.jlb", None);
+        let before = snapshot(&dir);
+        st.save_all();
+        st.save_blueprint();
+        st.save_script("res://scripts/player.jlb");
+        let _ = st.project.save();
+        let now = snapshot(&dir);
+        let touched: Vec<_> = now.iter().filter(|(p, v)| before.get(*p) != Some(v)).map(|(p, _)| p.clone()).collect();
+        assert!(touched.is_empty() && now.len() == before.len(), "saving with nothing changed rewrote {:?}", touched);
+        assert_eq!(std::fs::read_to_string(&main).unwrap(), hand);
+
+        // One change: only that file is written.
+        let root = st.tree.root.unwrap();
+        st.tree.objects[root].props.insert("width".into(), gex_core::Variant::Num(123.0));
+        st.scripts.get_mut("res://scripts/player.jlb").unwrap().text.push_str("\n>> changed\n");
+        st.save_all();
+        let after = snapshot(&dir);
+        let changed: Vec<String> = after.iter().filter(|(p, v)| before.get(*p) != Some(v)).map(|(p, _)| p.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(changed, vec!["blueprints/main.jblueprint".to_string(), "scripts/player.jlb".to_string()]);
+        assert_eq!(after.len(), before.len(), "no files added or left behind");
+        // Saving again: nothing more.
+        st.save_all();
+        assert!(after == snapshot(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

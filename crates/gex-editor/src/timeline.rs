@@ -47,8 +47,7 @@ fn save(st: &mut EditorState, id: ObjectId, file: &AnimFile) {
         st.tree.objects[id].props.insert("clips".into(), Variant::Res(res.clone()));
     }
     if let Some(p) = st.project.res_to_path(&res) {
-        let _ = std::fs::create_dir_all(p.parent().unwrap());
-        if let Err(e) = std::fs::write(&p, file.to_text()) {
+        if let Err(e) = gex_core::project::write_if_changed(&p, file.to_text().as_bytes()) {
             st.status = format!("couldn't save {}: {}", res, e);
         }
     }

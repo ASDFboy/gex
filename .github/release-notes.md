@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.4.3:
+- Saving writes only the files whose contents changed. A blueprint, script or project settings that weren't changed are left exactly as they are, even when they're laid out differently from how GEX writes them, so a project synced with GitHub (or shared with Work together) sends only what you really changed, and saving can't put an old copy back over a file another computer changed. Files are replaced in one step, so a sync never picks up a half-written file.
+
 New in 0.4.2 (speed):
 - Pictures load in the background: a big one showing for the first time no longer freezes the game (it used to stall a frame for up to a tenth of a second or more). Pictures placed in a blueprint load as it starts; PRELOAD(files or a folder) loads others early.
 - Scripts' arithmetic is 2-3 times faster: fractions like 2.5 or 1/3 no longer use the big-number code (results are exactly the same).

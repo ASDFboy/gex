@@ -118,9 +118,16 @@ impl Project {
         config.migrate();
         Ok(config)
     }
+    /// Writes the settings, when they're different from what the file says (a file that says
+    /// the same, in other words, is left as it is).
     pub fn save(&self) -> Result<(), String> {
-        let text = ron::ser::to_string_pretty(&self.config, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string())?;
-        std::fs::write(self.dir.join(PROJECT_FILE), text).map_err(|e| e.to_string())
+        let pretty = |c: &ProjectConfig| ron::ser::to_string_pretty(c, ron::ser::PrettyConfig::new().struct_names(false)).map_err(|e| e.to_string());
+        let text = pretty(&self.config)?;
+        let same = Project::peek(&self.dir).ok().and_then(|c| pretty(&c).ok()).is_some_and(|t| t == text);
+        if same {
+            return Ok(());
+        }
+        write_if_changed(&self.dir.join(PROJECT_FILE), text.as_bytes()).map(|_| ()).map_err(|e| e.to_string())
     }
     /// A res:// path as a file on disk (None for other schemes or paths leaving the project).
     pub fn res_to_path(&self, res: &str) -> Option<PathBuf> {
@@ -140,6 +147,29 @@ impl Project {
         let p = self.res_to_path(res).ok_or_else(|| format!("{} isn't a project path", res))?;
         std::fs::read_to_string(&p).map_err(|e| e.to_string())
     }
+}
+
+/// Saves a project file only when what's in it would change (false: it already says that, and
+/// is left exactly as it is). So saving touches only what really changed: a synced project
+/// (GitHub, working together) sends just those files, and never rewrites one that another
+/// computer changed meanwhile with the same old contents. The new contents go in a hidden
+/// ".<name>.part" file beside it first, then replace it in one step, so nothing (a sync, the
+/// game) ever reads a half-written file.
+pub fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<bool> {
+    if std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == bytes.len() as u64) && std::fs::read(path).is_ok_and(|b| b == bytes) {
+        return Ok(false);
+    }
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{}.part", name));
+    if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_ok() {
+        return Ok(true);
+    }
+    // Couldn't replace it in one step (another program has it open): written in place.
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(path, bytes).map(|_| true)
 }
 
 /// Projects from before scenes were called blueprints: `.jscene` files become `.jblueprint`,
