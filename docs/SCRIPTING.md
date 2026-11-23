@@ -252,7 +252,7 @@ the events. F1 with the cursor on a command in a script opens that command's pag
 | `DRAW_RECT(x, y, w, h, color, filled, [options])` | draws a rectangle this frame (2D world) |
 | `DRAW_LINE(x1, y1, x2, y2, color)` | draws a line this frame |
 | `DRAW_CIRCLE(x, y, radius, color, filled, [options])` | draws a circle this frame |
-| `DRAW_TEXT(x, y, text, size, color, [options])` | draws text this frame (tags work); options `layer`, `font`, `align`, `valign`, `wrap`, `outline`, `outline_color`, `rotation`, `scale`, `alpha` |
+| `DRAW_TEXT(x, y, text, size, color, [options])` | draws text this frame (tags work); options `layer`, `font` (a font file, or an installed font's name like `"Times New Roman"`), `align`, `valign`, `wrap`, `outline`, `outline_color`, `rotation`, `scale`, `alpha` |
 | `DRAW_IMAGE(file, x, y, w, h, [options])` | draws an image this frame |
 | `DRAW_SPRITE(file, x, y, [options])` | draws a picture at its own size, like GameMaker's `draw_sprite_ext`: `frame`/`hframes`/`vframes` or `region: [x, y, w, h]`, `w`, `h`, `scale`, `scale_x`, `scale_y`, `rotation`, `pivot_x`, `pivot_y`, `color`, `alpha`, `layer`, `blend`, `flip_h`, `flip_v`, `brightness`, `hue`, `saturation`, `invert`, `shader`, `values`, `filter`, `lit` |
 | `PRELOAD(files...)` | gets pictures ready in the background (files, a table of them, or a folder) so they show without a pause the first time |

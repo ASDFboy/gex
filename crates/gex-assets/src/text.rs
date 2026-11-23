@@ -151,7 +151,13 @@ impl Fonts {
             return self.main.clone();
         }
         if !self.files.contains_key(path) {
-            let f = match vfs.read(path) {
+            // A name without a scheme ("Times New Roman") is a font installed on the computer.
+            let bytes = if path.contains("://") {
+                vfs.read(path)
+            } else {
+                system_font(path).and_then(|p| std::fs::read(&p).ok()).ok_or_else(|| format!("no font called {} is installed on this computer", path))
+            };
+            let f = match bytes {
                 Ok(b) => match FontArc::try_from_vec(b) {
                     Ok(f) => Some(f),
                     Err(e) => {
@@ -515,5 +521,129 @@ mod tests {
         let e = rasterize(&mut fonts, &vfs, "Hi", &st(1.0, 0.0, 2.0), &mut problems);
         assert!(e.rgba.chunks(4).any(|p| p[3] > 200 && p[0] < 30) && e.rgba.chunks(4).any(|p| p[0] > 220 && p[3] > 200));
         assert!(problems.is_empty());
+    }
+}
+
+/// Where fonts are installed on this computer.
+fn font_dirs() -> Vec<std::path::PathBuf> {
+    let mut d = Vec::new();
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from);
+    if cfg!(windows) {
+        let win = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+        d.push(win.join("Fonts"));
+        if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+            d.push(std::path::PathBuf::from(l).join("Microsoft").join("Windows").join("Fonts"));
+        }
+    } else if cfg!(target_os = "macos") {
+        d.push("/System/Library/Fonts".into());
+        d.push("/Library/Fonts".into());
+        if let Some(h) = &home {
+            d.push(h.join("Library/Fonts"));
+        }
+    } else {
+        d.push("/usr/share/fonts".into());
+        d.push("/usr/local/share/fonts".into());
+        if let Some(h) = &home {
+            d.push(h.join(".local/share/fonts"));
+            d.push(h.join(".fonts"));
+        }
+    }
+    d
+}
+
+/// The family and whether it's the plain (regular) style, from a font file's names (only its
+/// table list and names are read, not the whole file).
+fn font_names(path: &std::path::Path) -> Option<(String, bool)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    let n = u16::from_be_bytes([head[4], head[5]]) as usize;
+    let mut dir = vec![0u8; n.min(64) * 16];
+    f.read_exact(&mut dir).ok()?;
+    let rec = dir.chunks_exact(16).find(|r| &r[0..4] == b"name")?;
+    let off = u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]) as u64;
+    let len = (u32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]) as usize).min(1 << 20);
+    f.seek(SeekFrom::Start(off)).ok()?;
+    let mut data = vec![0u8; len];
+    f.read_exact(&mut data).ok()?;
+    let table = ttf_parser::name::Table::parse(&data)?;
+    let name = |id: u16| table.names.into_iter().filter(|n| n.name_id == id).find_map(|n| n.to_string());
+    let family = name(ttf_parser::name_id::TYPOGRAPHIC_FAMILY).or_else(|| name(ttf_parser::name_id::FAMILY))?;
+    let style = name(ttf_parser::name_id::TYPOGRAPHIC_SUBFAMILY).or_else(|| name(ttf_parser::name_id::SUBFAMILY)).unwrap_or_default().to_lowercase();
+    Some((family, matches!(style.as_str(), "regular" | "normal" | "book" | "roman" | "")))
+}
+
+/// The file of a font installed on this computer, by its family name ("Times New Roman"),
+/// its plain style. Metric-compatible stand-ins are used where it's missing (Liberation Serif
+/// for Times New Roman on Linux, say). Looked up once per name.
+pub fn system_font(family: &str) -> Option<std::path::PathBuf> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static FOUND: Mutex<Option<HashMap<String, Option<std::path::PathBuf>>>> = Mutex::new(None);
+    let key = family.trim().to_lowercase();
+    if let Some(v) = FOUND.lock().ok()?.get_or_insert_with(HashMap::new).get(&key) {
+        return v.clone();
+    }
+    let squash = |s: &str| s.to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>();
+    let mut files = Vec::new();
+    let mut stack = font_dirs();
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if matches!(p.extension().and_then(|x| x.to_str()).map(|x| x.to_lowercase()).as_deref(), Some("ttf" | "otf")) {
+                files.push(p);
+            }
+        }
+    }
+    let wanted: Vec<String> = std::iter::once(key.clone())
+        .chain(match key.as_str() {
+            "times new roman" | "times" | "serif" => vec!["times new roman", "liberation serif", "tinos", "dejavu serif"],
+            "arial" | "helvetica" | "sans serif" | "sans-serif" => vec!["arial", "liberation sans", "arimo", "dejavu sans"],
+            "courier new" | "courier" | "monospace" => vec!["courier new", "liberation mono", "cousine", "dejavu sans mono"],
+            _ => vec![],
+        }.into_iter().map(String::from))
+        .collect();
+    let mut found = None;
+    'search: for w in &wanted {
+        // Files named like the font first (times.ttf, timesnewroman.ttf...), then the rest.
+        let sq = squash(w);
+        let first = sq.chars().take(5).collect::<String>();
+        let mut order: Vec<&std::path::PathBuf> = files.iter().filter(|p| p.file_stem().is_some_and(|s| squash(&s.to_string_lossy()).starts_with(&first))).collect();
+        order.extend(files.iter().filter(|p| !p.file_stem().is_some_and(|s| squash(&s.to_string_lossy()).starts_with(&first))));
+        let mut fallback = None;
+        for p in order {
+            if let Some((fam, regular)) = font_names(p) {
+                if squash(&fam) == sq {
+                    if regular {
+                        found = Some(p.clone());
+                        break 'search;
+                    }
+                    fallback.get_or_insert(p.clone());
+                }
+            }
+        }
+        if fallback.is_some() {
+            found = fallback;
+            break;
+        }
+    }
+    FOUND.lock().ok()?.get_or_insert_with(HashMap::new).insert(key, found.clone());
+    found
+}
+
+#[cfg(test)]
+mod system_font_tests {
+    #[test]
+    fn installed_fonts_are_found_by_name() {
+        // On Linux with Liberation installed, Times New Roman's stand-in; elsewhere the real one.
+        if let Some(p) = super::system_font("Times New Roman") {
+            let n = p.file_name().unwrap().to_string_lossy().to_lowercase();
+            assert!(n.contains("times") || n.contains("liberationserif-regular") || n.contains("tinos"), "{}", n);
+        }
+        assert!(super::system_font("No Such Font Anywhere 123").is_none());
     }
 }

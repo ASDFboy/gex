@@ -256,7 +256,7 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
      "DEF on_draw() {\n\tDRAW_CIRCLE(x, y, 64, \"#66d9ef\", FALSE)\n}"),
     ("DRAW_TEXT", "Drawing",
      "Draws text for this frame at (x, y): DRAW_TEXT(x, y, text, size, color). size defaults to 16. Anything given as text is shown as it would PRINT, and tags work as in a Label2D: [color=red]..[/color], [size=24], [i], [u], [s], [bg=#000000].\n\n\
-      Options (a table last): layer, font (a .ttf/.otf), align (\"left\", \"center\", \"right\": which point of the text is at x), valign (\"top\", \"middle\", \"bottom\"), wrap (break lines longer than this many pixels), outline (pixels) and outline_color, rotation, scale, alpha.",
+      Options (a table last): layer, font (a .ttf/.otf of the project, or the name of a font installed on the computer like \"Times New Roman\"), align (\"left\", \"center\", \"right\": which point of the text is at x), valign (\"top\", \"middle\", \"bottom\"), wrap (break lines longer than this many pixels), outline (pixels) and outline_color, rotation, scale, alpha.",
      "DEF on_draw() {\n\tDRAW_TEXT(10, 10, \"Score: \" + GLOBAL.score, 24, \"#ffffff\")\n}"),
     ("DRAW_IMAGE", "Drawing",
      "Draws a picture for this frame: DRAW_IMAGE(file, x, y, w, h). w and h default to 64.",

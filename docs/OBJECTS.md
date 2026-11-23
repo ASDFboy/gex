@@ -100,7 +100,10 @@ the screen is a centered menu. They nest: a Column of Rows makes a settings scre
 of Rows a list. Hidden objects take no room.
 
 **Fonts.** Drop a `.ttf` or `.otf` into the project and onto a Label's, Button's, TextInput's or
-Label2D's `font`.
+Label2D's `font`. A Label2D (and DRAW_TEXT) can also name a font installed on the computer, like
+`Times New Roman` or `Arial`: nothing is copied into the project. Where it isn't installed, a
+look-alike is used if there is one (Liberation Serif for Times New Roman on Linux), else the
+built-in font.
 
 **Rich text.** Labels, buttons and Label2Ds understand tags: `[color=#ff8800]hot[/color]`,
 `[color=red]`, `[size=32]big[/size]`, `[i]italic[/i]`, `[u]underline[/u]`, `[s]struck[/s]`,

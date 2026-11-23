@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.5.1:
+- Label2D, DRAW_TEXT and TEXT_SIZE can use a font installed on the computer by its name (font: "Times New Roman"), with look-alikes where it's missing (Liberation Serif, Arimo...).
+
 New in 0.5.0:
 Drawing
 - on_draw_gui(), and screen: TRUE on any DRAW_*: drawing in the window's pixels over everything, whatever the camera does (GameMaker's Draw GUI). MOUSE_SCREEN_X/Y, TO_SCREEN and TO_WORLD go between the two.
