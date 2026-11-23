@@ -2,6 +2,10 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.5.5:
+- No more pop-in or pauses the first time a menu opens: when a game starts, every picture in the project loads in the background (as many as fit in about 768 MB of video memory) and its sprite shaders are built on another thread, so they're ready before they're needed. Pictures on screen still go first, and preloads wait while plenty is already waiting to upload, so memory doesn't pile up.
+- A picture something on screen is waiting for now jumps ahead of preloads and uploads faster.
+
 New in 0.5.4:
 - No more soft edges by default. With scale_mode fit, the game is drawn at the size it's shown instead of being drawn small and stretched, so sprites and text stay sharp in a big or full-screen window. scale_filter is now pixel and antialiasing (FXAA) is off unless a project turns them on.
 

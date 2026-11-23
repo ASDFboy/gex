@@ -173,8 +173,14 @@ struct Tex {
 }
 
 const NEVER: u64 = u64::MAX;
+
+/// What a game's warm-up thread hands over.
+enum Warm {
+    Picture(String),
+    Shader(String, wgpu::RenderPipeline),
+}
 /// Video memory 2D pictures may take before the ones not drawn for a while are let go.
-const PICTURE_BUDGET: u64 = 768 << 20;
+const PICTURE_BUDGET: u64 = 1024 << 20;
 
 struct Target {
     color: wgpu::Texture,
@@ -291,6 +297,9 @@ pub struct Renderer {
     custom: HashMap<String, Result<wgpu::RenderPipeline, String>>,
     /// Custom sprite shaders by file and blend.
     sprite_custom: HashMap<(String, Blend), Result<wgpu::RenderPipeline, String>>,
+    /// A game's warm-up (see start_warm): what it found, and the texture generation it's for.
+    warm: Option<std::sync::mpsc::Receiver<Warm>>,
+    warm_gen: u64,
     /// Fonts for 2D labels, and their text pictures by what they show.
     fonts: text::Fonts,
     texts: HashMap<String, TextTex>,
@@ -716,6 +725,8 @@ impl Renderer {
             mipmaps: true,
             problems: Vec::new(),
             sprite_custom: HashMap::new(),
+            warm: None,
+            warm_gen: u64::MAX,
             fonts: text::Fonts::default(),
             texts: HashMap::new(),
             frame_no: 0,
@@ -733,6 +744,8 @@ impl Renderer {
         self.decoded.clear();
         self.uploading = None;
         self.loader.clear();
+        self.loader.reset_backlog();
+        self.warm = None;
         self.generation += 1;
         self.texts.clear();
         self.fonts = text::Fonts::default();
@@ -792,9 +805,83 @@ impl Renderer {
                 }
             },
         };
-        let job = loader::Job { key: (path.to_string(), pixel), path: path.to_string(), src, mips: !pixel && self.mipmaps, generation: self.generation };
+        let job = loader::Job { key: (path.to_string(), pixel), path: path.to_string(), src, mips: !pixel && self.mipmaps, generation: self.generation, urgent };
         self.loader.ask(job, urgent);
         self.loading[i].insert(path.to_string(), urgent);
+    }
+
+    /// When a game starts, every picture in the project is got ready in the background (as many
+    /// as fit in most of PICTURE_BUDGET), and its sprite shaders are built: menus and things
+    /// shown later then appear at once, with no pause and nothing popping in, like GameMaker's
+    /// texture pages. Sizes are read from the files' headers and shaders built on a thread of
+    /// its own, so the game doesn't wait for any of it.
+    fn start_warm(&mut self, device: &wgpu::Device, vfs: &Vfs, sprite_pixel: bool) {
+        self.warm_gen = self.generation;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.warm = Some(rx);
+        let held: u64 = self.textures.iter().flat_map(|m| m.values()).filter_map(|t| t.as_ref().ok()).map(|t| t.bytes).sum();
+        let mut room = (PICTURE_BUDGET * 3 / 4).saturating_sub(held);
+        let mips = !sprite_pixel && self.mipmaps;
+        let root = vfs.project_dir.clone();
+        let (device, globals, tex) = (device.clone(), self.globals_layout.clone(), self.tex_layout.clone());
+        let _ = std::thread::Builder::new().name("warm-up".into()).spawn(move || {
+            let (mut pictures, mut shaders) = (Vec::new(), Vec::new());
+            let mut stack = vec![(root, String::from("res://"))];
+            while let Some((dir, res)) = stack.pop() {
+                let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+                let mut names: Vec<_> = rd.flatten().collect();
+                names.sort_by_key(|e| e.file_name());
+                for e in names {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    // Hidden folders (.git, .gex, .trash) and builds aren't the game's.
+                    if name.starts_with('.') || name == "target" {
+                        continue;
+                    }
+                    let r = format!("{}{}", res, name);
+                    if e.file_type().is_ok_and(|t| t.is_dir()) {
+                        stack.push((e.path(), r + "/"));
+                    } else if gex_assets::image_load::is_image(&r) {
+                        pictures.push((r, e.path()));
+                    } else if name.ends_with(".wgsl") {
+                        shaders.push((r, e.path()));
+                    }
+                }
+            }
+            for (r, path) in pictures {
+                let Some([w, h]) = gex_assets::image_load::file_image_size(&path) else { continue };
+                let bytes = w as u64 * h as u64 * 4 * if mips { 4 } else { 3 } / 3;
+                if bytes <= room {
+                    room -= bytes;
+                    if tx.send(Warm::Picture(r)).is_err() {
+                        return;
+                    }
+                }
+            }
+            for (r, path) in shaders {
+                let Ok(src) = std::fs::read_to_string(&path) else { continue };
+                if src.contains("fn sprite(") {
+                    if let Ok(p) = build_sprite_pipeline(&device, &globals, &tex, &r, &src, Blend::Normal) {
+                        if tx.send(Warm::Shader(r, p)).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Takes what the warm-up found: pictures to preload, shaders built.
+    fn take_warm(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vfs: &Vfs, sprite_pixel: bool) {
+        let Some(rx) = &self.warm else { return };
+        let got: Vec<Warm> = rx.try_iter().collect();
+        for w in got {
+            match w {
+                Warm::Picture(p) => self.request_texture(device, queue, vfs, &p, sprite_pixel, false),
+                Warm::Shader(p, pipe) => {
+                    self.sprite_custom.entry((p, Blend::Normal)).or_insert(Ok(pipe));
+                }
+            }
+        }
     }
 
     /// Pictures are still on their way (the caller should draw again soon).
@@ -807,24 +894,42 @@ impl Renderer {
         path.is_empty() || path.starts_with('@') || !self.loading[pixel as usize].contains_key(path)
     }
 
-    /// Uploads pictures the loader finished, about 8 MB a frame: a big one goes up in bands
-    /// of rows over a few frames (it's drawn once it's all there), so no frame stalls on it.
+    /// The next decoded picture leaves the line (its memory no longer counts as waiting).
+    fn decoded_done(&mut self) {
+        if let Some(d) = self.decoded.pop_front() {
+            self.loader.handed_back(d.bytes);
+        }
+    }
+
+    /// Uploads pictures the loader finished, about 8 MB a frame (more while something on screen
+    /// waits for one): a big one goes up in bands of rows over a few frames (it's drawn once
+    /// it's all there), so no frame stalls on it. Pictures needed now go before preloads.
     fn upload_decoded(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         while let Ok(d) = self.loader.done.try_recv() {
             self.decoded.push_back(d);
         }
-        let mut budget: usize = 8 << 20;
+        let urgent = |r: &Self, d: &loader::Done| r.loading[d.key.1 as usize].get(&d.key.0).copied().unwrap_or(false);
+        let mut budget: usize = if self.decoded.iter().any(|d| urgent(self, d)) { 24 << 20 } else { 8 << 20 };
         while budget > 0 {
+            // Not in the middle of one: a picture something is waiting for goes first.
+            if self.uploading.is_none() {
+                if let Some(i) = self.decoded.iter().position(|d| urgent(self, d)) {
+                    if i > 0 {
+                        let d = self.decoded.remove(i).unwrap();
+                        self.decoded.push_front(d);
+                    }
+                }
+            }
             let Some(d) = self.decoded.front_mut() else { break };
             if d.generation != self.generation {
-                self.decoded.pop_front();
+                self.decoded_done();
                 continue;
             }
             let (path, pixel) = (d.key.0.clone(), d.key.1);
             let i = pixel as usize;
             if !self.loading[i].contains_key(&path) {
                 // Loaded meanwhile some other way (a 3D texture waits for its picture).
-                self.decoded.pop_front();
+                self.decoded_done();
                 self.uploading = None;
                 continue;
             }
@@ -833,7 +938,7 @@ impl Renderer {
                 Err(e) => {
                     self.problems.push(format!("texture {}: {}", path, e));
                     let e = e.clone();
-                    self.decoded.pop_front();
+                    self.decoded_done();
                     self.loading[i].remove(&path);
                     self.textures[i].insert(path, Err(e));
                     continue;
@@ -880,7 +985,7 @@ impl Renderer {
             let (_, tex, _, _) = self.uploading.take().unwrap();
             let size = [dec.w, dec.h];
             let bytes: u64 = dec.levels.iter().map(|l| l.len() as u64).sum();
-            self.decoded.pop_front();
+            self.decoded_done();
             let view = tex.create_view(&Default::default());
             let sampler = if pixel { &self.nearest } else { &self.linear };
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -986,59 +1091,7 @@ impl Renderer {
         if path.is_empty() || self.sprite_custom.contains_key(&key) {
             return;
         }
-        let r = (|| -> Result<wgpu::RenderPipeline, String> {
-            let user = vfs.read_text(path)?;
-            let src = format!(
-                "{}\n// ---- {} ----\n{}\n\n@fragment\nfn fs_sprite_custom(o: SpriteOut) -> @location(0) vec4<f32> {{\n    let c = clamp(sprite(sprite_base(o), o.uv, o.world, g.post.z, o.values), vec4<f32>(0.0), vec4<f32>(1.0));\n    if (c.a < 0.004) {{\n        discard;\n    }}\n    return c;\n}}\n\n@fragment\nfn fs_sprite_custom_mul(o: SpriteOut) -> @location(0) vec4<f32> {{\n    let c = clamp(sprite(sprite_base(o), o.uv, o.world, g.post.z, o.values), vec4<f32>(0.0), vec4<f32>(1.0));\n    return vec4<f32>(c.rgb * c.a, c.a);\n}}\n",
-                include_str!("shaders.wgsl"),
-                path,
-                user
-            );
-            let module = wgpu::naga::front::wgsl::parse_str(&src).map_err(|e| e.emit_to_string(&src))?;
-            wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
-                .validate(&module)
-                .map_err(|e| e.emit_to_string(&src))?;
-            let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(path), source: wgpu::ShaderSource::Wgsl(src.into()) });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("gex sprite shader"),
-                bind_group_layouts: &[Some(&self.globals_layout), Some(&self.tex_layout)],
-                immediate_size: 0,
-            });
-            let sprite_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
-            let bufs = [
-                Some(wgpu::VertexBufferLayout { array_stride: 16, step_mode: wgpu::VertexStepMode::Vertex, attributes: &sprite_attrs }),
-                Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Instance>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &INSTANCE_ATTRS }),
-            ];
-            let (state, fs) = match blend {
-                Blend::Normal => (wgpu::BlendState::ALPHA_BLENDING, "fs_sprite_custom"),
-                Blend::Add => (
-                    wgpu::BlendState {
-                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-                    },
-                    "fs_sprite_custom",
-                ),
-                Blend::Multiply => (
-                    wgpu::BlendState {
-                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Dst, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
-                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
-                    },
-                    "fs_sprite_custom_mul",
-                ),
-            };
-            let targets = [Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend: Some(state), write_mask: wgpu::ColorWrites::ALL })];
-            Ok(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(path),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_sprite"), compilation_options: Default::default(), buffers: &bufs },
-                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
-                depth_stencil: Some(wgpu::DepthStencilState { format: DEPTH_FORMAT, depth_write_enabled: Some(false), depth_compare: Some(wgpu::CompareFunction::Always), stencil: Default::default(), bias: Default::default() }),
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState { module: &sm, entry_point: Some(fs), compilation_options: Default::default(), targets: &targets }),
-                multiview_mask: None,
-                cache: None,
-            }))
-        })();
+        let r = vfs.read_text(path).and_then(|user| build_sprite_pipeline(device, &self.globals_layout, &self.tex_layout, path, &user, blend));
         if let Err(e) = &r {
             self.problems.push(format!("shader {}: {}", path, e));
         }
@@ -1472,6 +1525,10 @@ impl Renderer {
         // A canvas not shown or drawn into for a minute (its object gone) goes.
         self.canvases.retain(|_, c| now - c.seen < 3600);
         self.upload_decoded(device, queue);
+        if list.warm && self.warm_gen != self.generation {
+            self.start_warm(device, vfs, sprite_pixel);
+        }
+        self.take_warm(device, queue, vfs, sprite_pixel);
         let mut last: (&str, bool) = ("", false);
         for s in &list.sprites {
             let px = s.pixel.unwrap_or(sprite_pixel);
@@ -2296,6 +2353,61 @@ fn make_linear(device: &wgpu::Device, anisotropy: u32) -> wgpu::Sampler {
 }
 
 /// Blocky 3D textures that still repeat across surfaces.
+/// A project's sprite shader (its fn sprite(...)) as a pipeline for one blend. Free of the
+/// renderer so the warm-up thread can build them too.
+fn build_sprite_pipeline(device: &wgpu::Device, globals_layout: &wgpu::BindGroupLayout, tex_layout: &wgpu::BindGroupLayout, path: &str, user: &str, blend: Blend) -> Result<wgpu::RenderPipeline, String> {
+    let src = format!(
+        "{}\n// ---- {} ----\n{}\n\n@fragment\nfn fs_sprite_custom(o: SpriteOut) -> @location(0) vec4<f32> {{\n    let c = clamp(sprite(sprite_base(o), o.uv, o.world, g.post.z, o.values), vec4<f32>(0.0), vec4<f32>(1.0));\n    if (c.a < 0.004) {{\n        discard;\n    }}\n    return c;\n}}\n\n@fragment\nfn fs_sprite_custom_mul(o: SpriteOut) -> @location(0) vec4<f32> {{\n    let c = clamp(sprite(sprite_base(o), o.uv, o.world, g.post.z, o.values), vec4<f32>(0.0), vec4<f32>(1.0));\n    return vec4<f32>(c.rgb * c.a, c.a);\n}}\n",
+        include_str!("shaders.wgsl"),
+        path,
+        user
+    );
+    let module = wgpu::naga::front::wgsl::parse_str(&src).map_err(|e| e.emit_to_string(&src))?;
+    wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+        .validate(&module)
+        .map_err(|e| e.emit_to_string(&src))?;
+    let sm = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some(path), source: wgpu::ShaderSource::Wgsl(src.into()) });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("gex sprite shader"),
+        bind_group_layouts: &[Some(globals_layout), Some(tex_layout)],
+        immediate_size: 0,
+    });
+    let sprite_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+    let bufs = [
+        Some(wgpu::VertexBufferLayout { array_stride: 16, step_mode: wgpu::VertexStepMode::Vertex, attributes: &sprite_attrs }),
+        Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<Instance>() as u64, step_mode: wgpu::VertexStepMode::Instance, attributes: &INSTANCE_ATTRS }),
+    ];
+    let (state, fs) = match blend {
+        Blend::Normal => (wgpu::BlendState::ALPHA_BLENDING, "fs_sprite_custom"),
+        Blend::Add => (
+            wgpu::BlendState {
+                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            },
+            "fs_sprite_custom",
+        ),
+        Blend::Multiply => (
+            wgpu::BlendState {
+                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Dst, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+                alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            },
+            "fs_sprite_custom_mul",
+        ),
+    };
+    let targets = [Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend: Some(state), write_mask: wgpu::ColorWrites::ALL })];
+    Ok(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(path),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState { module: &sm, entry_point: Some("vs_sprite"), compilation_options: Default::default(), buffers: &bufs },
+        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+        depth_stencil: Some(wgpu::DepthStencilState { format: DEPTH_FORMAT, depth_write_enabled: Some(false), depth_compare: Some(wgpu::CompareFunction::Always), stencil: Default::default(), bias: Default::default() }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState { module: &sm, entry_point: Some(fs), compilation_options: Default::default(), targets: &targets }),
+        multiview_mask: None,
+        cache: None,
+    }))
+}
+
 fn make_nearest_repeat(device: &wgpu::Device) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::Repeat,

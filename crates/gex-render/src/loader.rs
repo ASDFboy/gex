@@ -5,7 +5,12 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+
+/// Decoded pictures waiting to be uploaded may take this much memory before preloads wait
+/// (pictures needed now never wait).
+const BACKLOG: usize = 192 << 20;
 
 /// Where a job's bytes come from: a file the worker reads itself, or bytes read already.
 pub enum Src {
@@ -21,6 +26,8 @@ pub struct Job {
     pub mips: bool,
     /// The renderer's texture generation when asked (reloads start a new one).
     pub generation: u64,
+    /// Needed for this frame (not a preload).
+    pub urgent: bool,
 }
 
 /// A decoded picture: its size and its mip levels (largest first).
@@ -32,6 +39,8 @@ pub struct Decoded {
 
 pub struct Done {
     pub key: (String, bool),
+    /// Bytes of memory its levels take (counted in the loader's backlog until handed back).
+    pub bytes: usize,
     pub path: String,
     pub generation: u64,
     pub result: Result<Decoded, String>,
@@ -40,6 +49,8 @@ pub struct Done {
 struct Queue {
     jobs: Mutex<VecDeque<Job>>,
     ready: Condvar,
+    /// Bytes decoded and not uploaded yet.
+    backlog: AtomicUsize,
 }
 
 pub struct Loader {
@@ -49,7 +60,7 @@ pub struct Loader {
 
 impl Loader {
     pub fn new() -> Loader {
-        let queue = Arc::new(Queue { jobs: Mutex::new(VecDeque::new()), ready: Condvar::new() });
+        let queue = Arc::new(Queue { jobs: Mutex::new(VecDeque::new()), ready: Condvar::new(), backlog: AtomicUsize::new(0) });
         let (tx, done) = channel::<Done>();
         // Leave a core for the game and one for drawing.
         let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(2).clamp(1, 6);
@@ -61,7 +72,8 @@ impl Loader {
     }
 
     /// Asks for a picture: `urgent` ones (needed for this frame) go first in line.
-    pub fn ask(&self, job: Job, urgent: bool) {
+    pub fn ask(&self, mut job: Job, urgent: bool) {
+        job.urgent = urgent;
         let mut q = self.queue.jobs.lock().unwrap();
         if urgent {
             q.push_front(job);
@@ -75,16 +87,30 @@ impl Loader {
     pub fn hurry(&self, key: &(String, bool)) {
         let mut q = self.queue.jobs.lock().unwrap();
         if let Some(i) = q.iter().position(|j| &j.key == key) {
-            if i > 0 {
-                let j = q.remove(i).unwrap();
-                q.push_front(j);
-            }
+            let mut j = q.remove(i).unwrap();
+            j.urgent = true;
+            q.push_front(j);
+            self.queue.ready.notify_all();
+        }
+    }
+
+    /// A decoded picture was uploaded or dropped: its memory no longer counts.
+    pub fn handed_back(&self, bytes: usize) {
+        let was = self.queue.backlog.fetch_sub(bytes.min(self.queue.backlog.load(Ordering::Relaxed)), Ordering::Relaxed);
+        if was >= BACKLOG {
+            self.queue.ready.notify_all();
         }
     }
 
     /// Forgets pictures not started yet (a reload).
     pub fn clear(&self) {
         self.queue.jobs.lock().unwrap().clear();
+    }
+
+    /// Forgets the backlog too (everything decoded was dropped).
+    pub fn reset_backlog(&self) {
+        self.queue.backlog.store(0, Ordering::Relaxed);
+        self.queue.ready.notify_all();
     }
 }
 
@@ -93,10 +119,12 @@ fn work(q: Arc<Queue>, tx: Sender<Done>) {
         let job = {
             let mut jobs = q.jobs.lock().unwrap();
             loop {
-                if let Some(j) = jobs.pop_front() {
-                    break j;
+                // Preloads wait while plenty is decoded already (so they don't pile up in memory).
+                let full = q.backlog.load(Ordering::Relaxed) >= BACKLOG;
+                if jobs.front().is_some_and(|j| j.urgent || !full) {
+                    break jobs.pop_front().unwrap();
                 }
-                jobs = q.ready.wait(jobs).unwrap();
+                jobs = if full { q.ready.wait_timeout(jobs, std::time::Duration::from_millis(20)).unwrap().0 } else { q.ready.wait(jobs).unwrap() };
             }
         };
         let result = (|| -> Result<Decoded, String> {
@@ -107,7 +135,9 @@ fn work(q: Arc<Queue>, tx: Sender<Done>) {
             let img = gex_assets::decode_image(&job.path, &bytes)?;
             Ok(decoded(img.width, img.height, img.pixels, job.mips))
         })();
-        if tx.send(Done { key: job.key, path: job.path, generation: job.generation, result }).is_err() {
+        let bytes = result.as_ref().map(|d| d.levels.iter().map(|l| l.len()).sum()).unwrap_or(0);
+        q.backlog.fetch_add(bytes, Ordering::Relaxed);
+        if tx.send(Done { key: job.key, path: job.path, bytes, generation: job.generation, result }).is_err() {
             return;
         }
     }

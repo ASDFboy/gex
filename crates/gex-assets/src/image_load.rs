@@ -73,6 +73,12 @@ pub fn image_size(vfs: &Vfs, path: &str) -> Result<[u32; 2], String> {
     load_image(vfs, path).map(|i| [i.width, i.height])
 }
 
+/// A picture file's size in pixels from its header (None when it can't tell that way).
+pub fn file_image_size(path: &std::path::Path) -> Option<[u32; 2]> {
+    let (w, h) = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.into_dimensions().ok()?;
+    Some([w, h])
+}
+
 pub fn is_image(path: &str) -> bool {
     crate::formats::is_image(path)
 }

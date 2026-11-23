@@ -271,8 +271,11 @@ path or id) or a surface, to draw into it instead: what's drawn into a canvas st
 | `POINT_ON(object, x, y, precise)` | TRUE when a 2D world point is on an object (a Sprite2D's picture; precise: only its visible pixels) |
 
 Pictures load in the background: one that isn't ready yet is left out for a moment instead of
-the game stopping while it loads. Pictures placed in a blueprint start loading when it starts;
-`PRELOAD` starts others early.
+the game stopping while it loads. When a game starts, every picture in the project starts
+loading in the background (as many as fit in about 768 MB of video memory), and its sprite
+shaders are built, so menus and things shown later appear at once without a pause. Pictures
+placed in a blueprint, and what's on screen, go first; `PRELOAD` puts others ahead of the rest
+(useful for pictures from mounts, or games too big to fit).
 
 Drawings go on top (layer 1000) unless an option says `layer:`; then they go in among the
 blueprint's sprites and labels by layer, in the order they were drawn.

@@ -595,6 +595,9 @@ pub struct RenderList {
     /// Pictures the game will want soon (PRELOAD, and those placed in the blueprint):
     /// the renderer gets them ready in the background.
     pub preload: Vec<String>,
+    /// Drawn by a running game: the renderer gets the project's pictures and shaders ready
+    /// when it starts.
+    pub warm: bool,
     pub labels: Vec<Label>,
     pub meshes: Vec<MeshDraw>,
     pub lights: Vec<LightDraw>,

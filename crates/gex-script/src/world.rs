@@ -1711,6 +1711,7 @@ impl Game {
             gex_core::render::sort_by_layer(&mut list.sprites);
         }
         drop(st);
+        list.warm = true;
         // (Someone may be looking at the tree right now: then the preloads go with a later list.)
         if let Ok(mut st) = self.st.try_borrow_mut() {
             list.preload = std::mem::take(&mut st.preload);
