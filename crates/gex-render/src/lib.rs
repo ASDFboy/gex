@@ -237,6 +237,8 @@ fn is_canvas(key: &str) -> bool {
 /// frame it was last used in.
 struct TextTex {
     tex: Tex,
+    /// The same picture, sampled pixel for pixel.
+    tex_px: Tex,
     size: [u32; 2],
     scale: f32,
     pad: f32,
@@ -1099,7 +1101,13 @@ impl Renderer {
         let style = text::Style { font: &l.font, size: l.size, scale, color: base, align: l.anchor.x, wrap: l.wrap, outline: l.outline, outline_color: oc };
         let img = text::rasterize(&mut self.fonts, vfs, &l.text, &style, &mut self.problems);
         let tex = make_tex(device, queue, &self.tex_layout, &self.linear, img.w, img.h, &img.rgba, false, TEX_FORMAT);
-        self.texts.insert(key.clone(), TextTex { tex, size: [img.w, img.h], scale: img.scale, pad: img.pad, used: frame });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.tex_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&tex.view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.nearest) }],
+        });
+        let tex_px = Tex { bind, view: tex.view.clone(), size: tex.size, bytes: 0, used: std::cell::Cell::new(NEVER) };
+        self.texts.insert(key.clone(), TextTex { tex, tex_px, size: [img.w, img.h], scale: img.scale, pad: img.pad, used: frame });
         key
     }
 
@@ -1159,9 +1167,10 @@ impl Renderer {
             return None;
         }
         let k = l.model.x_axis.truncate().length().max(l.model.y_axis.truncate().length()).max(1e-4);
-        // Kept to steps (a quarter octave), so zooming doesn't make a new picture every frame.
+        // Made at the size it's shown (to a 64th), so each of its pixels is one on screen: as
+        // sharp as text in a browser. (Zooming makes a new picture now and then.)
         let want = (zoom * k).clamp(0.05, 16.0);
-        let mut scale = 2f32.powf((want.log2() * 4.0).round() / 4.0);
+        let mut scale = (want * 64.0).round() / 64.0;
         // At most 4096 pixels across.
         let longest = l.text.lines().map(|t| t.chars().count()).max().unwrap_or(1).max(1) as f32;
         if longest * l.size * 0.7 * scale > 4096.0 {
@@ -1183,7 +1192,8 @@ impl Renderer {
             color,
             texture: key,
             layer: l.layer,
-            pixel: Some(false),
+            // Upright and at its own size: drawn pixel for pixel (smoothing would blur it).
+            pixel: Some(l.model.x_axis.y.abs() < 1e-4 && (scale - want).abs() < 0.02),
             lit: false,
             ..Default::default()
         })
@@ -1233,7 +1243,7 @@ impl Renderer {
             return &self.glow;
         }
         if path.starts_with("@text:") {
-            return self.texts.get(path).map(|t| &t.tex).unwrap_or(&self.missing);
+            return self.texts.get(path).map(|t| if pixel { &t.tex_px } else { &t.tex }).unwrap_or(&self.missing);
         }
         if is_canvas(path) {
             return self.canvases.get(path).map(|c| &c.tex[pixel as usize]).unwrap_or(&self.missing);

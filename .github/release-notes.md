@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.5.2:
+- Text (Label2D, DRAW_TEXT) is drawn pixel for pixel at the size it's shown, as sharp as text in a browser: it used to be made at a nearby size and stretched, which blurred it.
+
 New in 0.5.1:
 - Label2D, DRAW_TEXT and TEXT_SIZE can use a font installed on the computer by its name (font: "Times New Roman"), with look-alikes where it's missing (Liberation Serif, Arimo...).
 
