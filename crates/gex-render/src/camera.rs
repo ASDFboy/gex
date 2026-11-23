@@ -115,7 +115,12 @@ impl GameView {
                 let s = (w / dw).min(h / dh);
                 GameView { render: design, rect: centered(if s >= 1.0 { s.floor() } else { s }) }
             }
-            _ => GameView { render: design, rect: centered((w / dw).min(h / dh)) },
+            // Drawn at the size it's shown (no blurry upscale): the 2D camera scales to fit.
+            _ => {
+                let r = centered((w / dw).min(h / dh));
+                let (rw, rh) = (r[2].round().max(1.0), r[3].round().max(1.0));
+                GameView { render: [rw as u32, rh as u32], rect: [r[0], r[1], rw, rh] }
+            }
         }
     }
 
@@ -242,7 +247,7 @@ mod game_view_tests {
     fn scale_modes() {
         // A 320×180 game on a 1920×1200 screen.
         let fit = GameView::new("fit", [1920, 1200], [320, 180]);
-        assert_eq!(fit.render, [320, 180]);
+        assert_eq!(fit.render, [1920, 1080], "fit draws at the shown size, not upscaled");
         assert_eq!(fit.rect, [0.0, 60.0, 1920.0, 1080.0]);
         let px = GameView::new("pixel", [1920, 1200], [320, 180]);
         assert_eq!(px.rect, [0.0, 60.0, 1920.0, 1080.0], "6× fits exactly");
@@ -253,6 +258,8 @@ mod game_view_tests {
         let ex = GameView::new("expand", [1920, 1200], [320, 180]);
         assert_eq!(ex.render, [1920, 1200]);
         // The middle of the screen is the middle of the game.
-        assert_eq!(fit.to_render(Vec2::new(960.0, 600.0)), Vec2::new(160.0, 90.0));
+        assert_eq!(fit.to_render(Vec2::new(960.0, 600.0)), Vec2::new(960.0, 540.0));
+        let st2 = GameView::new("stretch", [1920, 1200], [320, 180]);
+        assert_eq!(st2.to_render(Vec2::new(960.0, 600.0)), Vec2::new(160.0, 90.0));
     }
 }

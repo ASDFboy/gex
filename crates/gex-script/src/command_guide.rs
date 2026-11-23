@@ -365,7 +365,7 @@ pub const GUIDE: &[(&str, &str, &str, &str)] = &[
       fullscreen: TRUE fills the screen (same as FULLSCREEN).\n\
       resizable: whether the player can resize the window.\n\
       scale_mode: \"fit\" (keeps the shape, bars around it), \"stretch\" (fills, may squash), \"pixel\" (whole-number scaling for pixel art) or \"expand\" (draws at the window's size and shows more).\n\
-      scale_filter: \"smooth\" or \"pixel\" (sharp squares when scaled).\n\
+      scale_filter: \"pixel\" (default, sharp) or \"smooth\" (blends pixels when scaled).\n\
       bar_color: the color of the bars.\n\n\
       vsync is read when the game starts: change it, then SAVE_DISPLAY() keeps it for next time. Changes last until the game stops unless kept with SAVE_DISPLAY.",
      "SET_DISPLAY(\"width\", 1280)\nSET_DISPLAY(\"height\", 720)\nSET_DISPLAY(\"scale_mode\", \"pixel\")"),

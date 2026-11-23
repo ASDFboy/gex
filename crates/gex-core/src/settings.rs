@@ -215,7 +215,7 @@ settings! {
     /// settings work on top of these.
     Graphics {
         ("Picture", render_scale, f32, 1.0, 0.25, 2.0, [], "How many pixels are drawn for each pixel on screen: below 1 is faster and softer, above 1 is sharper (and slower)."),
-        ("Picture", antialiasing, String, "fxaa".into(), 0, 0, ["off", "fxaa"], "Smooths jagged edges: fxaa is a fast blur along edges; off keeps every pixel crisp."),
+        ("Picture", antialiasing, String, "off".into(), 0, 0, ["off", "fxaa"], "Smooths jagged edges: fxaa is a fast blur along edges; off keeps every pixel crisp."),
         ("Picture", fps_cap, u32, 0, 0, 1000, [], "The most frames drawn each second (0 = no limit beyond vsync). Lower saves power."),
         ("Textures", texture_filter, String, "smooth".into(), 0, 0, ["smooth", "pixel"], "3D textures: smooth blends between texels; pixel keeps them blocky (retro look)."),
         ("Textures", sprite_filter, String, "pixel".into(), 0, 0, ["pixel", "smooth"], "2D sprites and tiles: pixel keeps pixel art sharp; smooth blends (for painted art)."),
@@ -280,8 +280,8 @@ settings! {
         ("Window", fullscreen, bool, false, 0, 0, [], "Fills the whole screen (borderless). F11 or Alt+Enter switches while playing."),
         ("Window", resizable, bool, true, 0, 0, [], "The player can resize the window (the picture scales to fit, see scale_mode)."),
         ("Window", vsync, bool, true, 0, 0, [], "Waits for the screen to refresh before showing each frame: no tearing, frames capped to the screen's rate. Takes effect when the game starts (SAVE_DISPLAY keeps a change for next time)."),
-        ("Scaling", scale_mode, String, "fit".into(), 0, 0, ["fit", "stretch", "pixel", "expand"], "How the picture fills a window or screen that isn't the resolution's size. fit: scaled up as far as it goes keeping its shape, with bars filling the rest. stretch: fills everything, squashed if the shapes differ. pixel: scaled by whole numbers only (2×, 3×…) so pixel art stays even. expand: drawn at the window's own size, showing more of the world instead of scaling."),
-        ("Scaling", scale_filter, String, "smooth".into(), 0, 0, ["smooth", "pixel"], "When the picture is scaled: smooth blends neighbouring pixels; pixel keeps them sharp squares (pixel art)."),
+        ("Scaling", scale_mode, String, "fit".into(), 0, 0, ["fit", "stretch", "pixel", "expand"], "How the picture fills a window or screen that isn't the resolution's size. fit: as big as it goes keeping its shape, with bars filling the rest (drawn at that size, so it stays sharp). stretch: fills everything, squashed if the shapes differ. pixel: scaled by whole numbers only (2×, 3×…) so pixel art stays even. expand: drawn at the window's own size, showing more of the world instead of scaling."),
+        ("Scaling", scale_filter, String, "pixel".into(), 0, 0, ["smooth", "pixel"], "When the picture is scaled: smooth blends neighbouring pixels; pixel keeps them sharp squares (pixel art)."),
         ("Scaling", bar_color, [f32; 4], [0.0, 0.0, 0.0, 1.0], 0, 0, [], "The color of the bars around the picture (fit and pixel)."),
     }
 }

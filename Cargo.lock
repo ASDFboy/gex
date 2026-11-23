@@ -1722,7 +1722,7 @@ dependencies = [
 
 [[package]]
 name = "gex-assets"
-version = "0.5.2"
+version = "0.5.4"
 dependencies = [
  "ab_glyph",
  "dot_vox",
@@ -1744,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "gex-core"
-version = "0.5.2"
+version = "0.5.4"
 dependencies = [
  "glam 0.33.12",
  "ron",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "gex-editor"
-version = "0.5.2"
+version = "0.5.4"
 dependencies = [
  "chacha20poly1305",
  "editpe",
@@ -1780,7 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "gex-render"
-version = "0.5.2"
+version = "0.5.4"
 dependencies = [
  "bytemuck",
  "egui-wgpu",
@@ -1792,7 +1792,7 @@ dependencies = [
 
 [[package]]
 name = "gex-script"
-version = "0.5.2"
+version = "0.5.4"
 dependencies = [
  "gex-assets",
  "gex-core",

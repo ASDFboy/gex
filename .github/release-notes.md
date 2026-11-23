@@ -2,6 +2,9 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.5.4:
+- No more soft edges by default. With scale_mode fit, the game is drawn at the size it's shown instead of being drawn small and stretched, so sprites and text stay sharp in a big or full-screen window. scale_filter is now pixel and antialiasing (FXAA) is off unless a project turns them on.
+
 New in 0.5.3:
 - Open scripts and blueprints changed by another program (another editor, files copied in) are noticed: read again when they have no unsaved changes, and never written over with the old copy. With unsaved changes, yours are kept and the other version goes to .trash.
 

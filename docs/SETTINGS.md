@@ -50,8 +50,8 @@ exported game starts with them next time (playing in the editor always uses the 
 
 | Setting | Default | What it does |
 |---|---|---|
-| `scale_mode` | `"fit"` | How the picture fills a window or screen that isn't the resolution's size. fit: scaled up as far as it goes keeping its shape, with bars filling the rest. stretch: fills everything, squashed if the shapes differ. pixel: scaled by whole numbers only (2×, 3×…) so pixel art stays even. expand: drawn at the window's own size, showing more of the world instead of scaling. (fit, stretch, pixel, expand) |
-| `scale_filter` | `"smooth"` | When the picture is scaled: smooth blends neighbouring pixels; pixel keeps them sharp squares (pixel art). (smooth, pixel) |
+| `scale_mode` | `"fit"` | How the picture fills a window or screen that isn't the resolution's size. fit: as big as it goes keeping its shape, with bars filling the rest (drawn at that size, so it stays sharp). stretch: fills everything, squashed if the shapes differ. pixel: scaled by whole numbers only (2×, 3×…) so pixel art stays even. expand: drawn at the window's own size, showing more of the world instead of scaling. (fit, stretch, pixel, expand) |
+| `scale_filter` | `"pixel"` | When the picture is scaled: smooth blends neighbouring pixels; pixel keeps them sharp squares (pixel art). (smooth, pixel) |
 | `bar_color` | `[0.0, 0.0, 0.0, 1.0]` | The color of the bars around the picture (fit and pixel). |
 
 ## Graphics
@@ -61,7 +61,7 @@ exported game starts with them next time (playing in the editor always uses the 
 | Setting | Default | What it does |
 |---|---|---|
 | `render_scale` | `1.0` | How many pixels are drawn for each pixel on screen: below 1 is faster and softer, above 1 is sharper (and slower). (0.25 to 2.0) |
-| `antialiasing` | `"fxaa"` | Smooths jagged edges: fxaa is a fast blur along edges; off keeps every pixel crisp. One of: off, fxaa. |
+| `antialiasing` | `"off"` | Smooths jagged edges: fxaa is a fast blur along edges; off keeps every pixel crisp. One of: off, fxaa. |
 | `fps_cap` | `0` | The most frames drawn each second (0 = no limit beyond vsync). Lower saves power. (0 to 1000) |
 
 ### Textures
