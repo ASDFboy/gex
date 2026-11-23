@@ -1513,3 +1513,54 @@ fn drawn_sprites_take_layers_and_options() {
     assert_eq!(s.pivot, glam::Vec2::new(0.5, 0.0));
     assert!(list.labels.iter().any(|l| l.layer == 2.0 && l.anchor.x == 0.5));
 }
+
+/// The things kept from frame to frame (which objects have which events, objects by kind,
+/// `self` tables, pictures, saves) follow objects being made, removed and changed, scripts
+/// reloading, and the move to another blueprint.
+#[test]
+fn kept_lookups_follow_changes() {
+    let main = r#"(root: (name: "Root", kind: Some(Object2D), scripts: ["res://r.jlb"], children: [
+        (name: "Old", kind: Some(Sprite2D), scripts: ["res://t.jlb"]),
+    ]))"#;
+    let thing = r#"(root: (name: "Thing", kind: Some(Sprite2D), scripts: ["res://t.jlb"], props: {"width": Num(20.0), "height": Num(20.0)}))"#;
+    let fx = r#"(root: (name: "Fx", kind: Some(Particles2D)))"#;
+    let next = r#"(root: (name: "Next", kind: Some(Object2D), scripts: ["res://n.jlb"]))"#;
+    let r = "frame = 0\nDEF on_step(dt) {\n    GLOBAL frame += 1\n    IF frame == 2 {\n        DESTROY(\"Old\")\n        SPAWN(\"res://thing.jblueprint\", 100, 100, [hp: 1/3])\n        SPAWN(\"res://fx.jblueprint\", 0, 0)\n    }\n    IF frame == 4 { SET(\"Thing\", \"mark\", 0.3) }\n    IF frame == 5 { SET(\"Thing\", \"mark\", 1.3) }\n    IF frame == 6 { EMIT(\"ping\") }\n    IF frame == 7 {\n        SAVE_DATA(\"k\", [v: 0.1 + 0.2])\n        GLOBAL carried = 3/4\n        CHANGE_BLUEPRINT(\"res://next.jblueprint\")\n    }\n}\n";
+    let t = "hp = 0\npings = 0\nDEF on_create() {\n    self.third = hp * 3\n}\nDEF on_step(dt) {\n    self.seen_mark = GET(NULL, \"mark\")\n    self.exact = GET(NULL, \"mark\") == 1.3 | self.mark == 0.3\n}\nDEF on_ping() {\n    GLOBAL pings += 1\n    self.pings = pings\n}\nDEF on_mouse_enter() {\n    self.entered = TRUE\n}\n";
+    let n = "DEF on_create() {\n    self.v = LOAD_DATA(\"k\").v == 0.3\n    self.carried = GLOBAL.carried\n}\n";
+    let p = project("kept", &[("main.jblueprint", main), ("thing.jblueprint", thing), ("fx.jblueprint", fx), ("next.jblueprint", next), ("r.jlb", r), ("t.jlb", t), ("n.jlb", n)]);
+    let mut g = Game::from_blueprint(p.clone(), "res://main.jblueprint", None).unwrap();
+    let step = |g: &mut Game, mouse: [f32; 2]| {
+        g.frame(1.0 / 60.0, HashSet::new(), mouse, HashSet::new());
+        let e = errors_of(g);
+        assert!(e.is_empty(), "{:#?}", e);
+    };
+    for _ in 0..3 {
+        step(&mut g, [0.0, 0.0]);
+    }
+    assert!(g.tree().find_named("Old").is_none());
+    assert_eq!(prop_of(&g, "Thing", "third"), Some(Variant::Num(1.0)), "1/3 handed over exactly");
+    // Made this frame: drawn, its particles too, and the mouse finds it.
+    let list = g.render_list();
+    assert!(list.sprites.iter().any(|s| s.size.x == 20.0), "the new sprite is drawn");
+    step(&mut g, [100.0, 100.0]);
+    assert_eq!(prop_of(&g, "Thing", "entered"), Some(Variant::Bool(true)));
+    assert_eq!(prop_of(&g, "Thing", "seen_mark"), Some(Variant::Num(0.3)));
+    assert_eq!(prop_of(&g, "Thing", "exact"), Some(Variant::Bool(true)));
+    step(&mut g, [100.0, 100.0]);
+    assert_eq!(prop_of(&g, "Thing", "seen_mark"), Some(Variant::Num(1.3)), "a changed value reaches self");
+    // A script reloaded with an event it didn't have.
+    std::fs::write(p.dir.join("t.jlb"), format!("{}DEF on_draw() {{\n    self.drew = TRUE\n}}\n", t)).unwrap();
+    assert_eq!(g.reload_script("res://t.jlb"), 1);
+    step(&mut g, [0.0, 0.0]);
+    assert_eq!(prop_of(&g, "Thing", "pings"), Some(Variant::Num(1.0)), "only the living Thing got it");
+    assert_eq!(prop_of(&g, "Thing", "drew"), Some(Variant::Bool(true)), "an event added by reloading runs");
+    step(&mut g, [0.0, 0.0]);
+    let to = g.st.borrow_mut().change_blueprint.take().expect("asked to change blueprint");
+    let tree = gex_core::blueprint::load(&p.read_text(&to).unwrap(), &|x: &str| p.read_text(x)).unwrap();
+    let mut g2 = Game::new(p, tree, None);
+    g2.carry_over(&mut g);
+    step(&mut g2, [0.0, 0.0]);
+    assert_eq!(prop_of(&g2, "Next", "v"), Some(Variant::Bool(true)), "a save made just before is there, and 0.3 is still 0.3");
+    assert_eq!(prop_of(&g2, "Next", "carried"), Some(Variant::Num(0.75)));
+}

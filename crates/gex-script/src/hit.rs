@@ -126,10 +126,8 @@ pub fn point_on(st: &mut WorldState, id: ObjectId, p: Vec2, precise: bool) -> bo
             }
         }
         ObjectKind::Label2D => {
-            let size = n.num("size", 16.0) as f32;
-            let lines = n.text("text").lines().count().max(1) as f32;
-            let longest = n.text("text").lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
-            let (bw, bh) = (longest * size * 0.55, lines * size * 1.2);
+            let b = gex_core::render::label_box(n.text("text"), n.num("size", 16.0) as f32, n.num("wrap_width", 0.0) as f32);
+            let (bw, bh) = (b.x, b.y);
             let a = gex_core::render::label_anchor(n);
             let x0 = -a.x * bw;
             let y0 = -a.y * bh;

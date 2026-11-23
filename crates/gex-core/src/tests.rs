@@ -183,3 +183,14 @@ fn write_if_changed_leaves_the_same_contents_alone() {
     assert_eq!(std::fs::read_dir(dir.join("sub")).unwrap().count(), 1, "no .part file left behind");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn label_boxes_skip_tags_and_wrap() {
+    use crate::render::label_box;
+    let plain = label_box("hello", 20.0, 0.0);
+    assert_eq!(label_box("[color=#ff0000]hello[/color]", 20.0, 0.0), plain);
+    assert_eq!(label_box("a [x] c", 10.0, 0.0).x, 7.0 * 5.5, "brackets that aren't tags take room");
+    let wrapped = label_box(&"word ".repeat(20), 10.0, 100.0);
+    assert_eq!(wrapped.x, 100.0);
+    assert!(wrapped.y > 10.0 * 1.2 * 4.0);
+}

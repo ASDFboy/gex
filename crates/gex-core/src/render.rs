@@ -42,7 +42,6 @@ impl Blend {
     }
 }
 
-/// An object's own texture filtering: None follows the project's setting.
 /// A Sprite2D's pivot (see Sprite::pivot): pivot_x / pivot_y when it's centered (the
 /// default; 0.5, 0.5 is the middle), its top-left corner when `centered` is off. Collider2D
 /// boxes are always centered.
@@ -56,6 +55,7 @@ pub fn pivot_of(n: &crate::Object) -> Vec2 {
     Vec2::new(n.num("pivot_x", 0.5) as f32, n.num("pivot_y", 0.5) as f32)
 }
 
+/// An object's own texture filtering: None follows the project's setting.
 pub fn filter_of(n: &crate::Object) -> Option<bool> {
     match n.text("filter") {
         "pixel" => Some(true),
@@ -351,6 +351,40 @@ pub struct Label {
     /// An outline around the letters: its width in game pixels (0 = none) and color.
     pub outline: f32,
     pub outline_color: [f32; 4],
+}
+
+/// About how big a label's text block is (for clicking on it): style tags like [color=..]
+/// take no room, and lines longer than `wrap` (when it's above 0) wrap.
+pub fn label_box(text: &str, size: f32, wrap: f32) -> Vec2 {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        plain.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let tag = after.find(']').map(|c| &after[..c]);
+        let name = tag.map(|t| t.trim_start_matches('/').split('=').next().unwrap_or("").trim().to_ascii_lowercase());
+        match (tag, name.as_deref()) {
+            (Some(t), Some("color" | "bg" | "size" | "i" | "u" | "s")) => rest = &after[t.len() + 1..],
+            _ => {
+                plain.push('[');
+                rest = after;
+            }
+        }
+    }
+    plain.push_str(rest);
+    let char_w = size * 0.55;
+    let (mut lines, mut widest) = (0.0f32, 0.0f32);
+    for l in plain.split('\n') {
+        let w = l.chars().count() as f32 * char_w;
+        if wrap > 0.0 && w > wrap {
+            lines += (w / wrap).ceil();
+            widest = widest.max(wrap);
+        } else {
+            lines += 1.0;
+            widest = widest.max(w);
+        }
+    }
+    Vec2::new(widest, lines.max(1.0) * size * 1.2)
 }
 
 /// A Label2D's anchor (see Label::anchor), from its align and valign.

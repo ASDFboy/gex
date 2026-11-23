@@ -18,15 +18,34 @@ pub fn value_id(v: &Value) -> Option<ObjectId> {
     Some(ObjectId::from(KeyData::from_ffi(n as u64)))
 }
 
+/// A number kept as a plain float (a property, a save) back as a .jlb number: one that is a
+/// short decimal comes back exact, as the script wrote it (0.3 is 0.3 again, so `== 0.3`
+/// holds after SET/GET or SAVE_DATA/LOAD_DATA); anything else stays approximate.
+pub fn decimal_num(x: f64) -> Value {
+    if x.fract() != 0.0 && x.abs() < 1e9 {
+        let mut p = 1.0f64;
+        for _ in 0..9 {
+            p *= 10.0;
+            let n = (x * p).round();
+            if n.abs() < 9.0e15 && n / p == x {
+                if let Ok(v) = jlb::number::Number::int(n as i64).div(&jlb::number::Number::int(p as i64)) {
+                    return Value::Num(v);
+                }
+            }
+        }
+    }
+    num(x)
+}
+
 pub fn to_value(v: &Variant) -> Value {
     match v {
         Variant::Null => Value::Null,
         Variant::Bool(b) => Value::Bool(*b),
-        Variant::Num(n) => num(*n),
+        Variant::Num(n) => decimal_num(*n),
         Variant::Text(s) | Variant::Res(s) => Value::text(s),
         Variant::Color(c) => named_table(vec![("r", num(c[0] as f64)), ("g", num(c[1] as f64)), ("b", num(c[2] as f64)), ("a", num(c[3] as f64))]),
-        Variant::Vec2(p) => named_table(vec![("x", num(p[0])), ("y", num(p[1]))]),
-        Variant::Vec3(p) => named_table(vec![("x", num(p[0])), ("y", num(p[1])), ("z", num(p[2]))]),
+        Variant::Vec2(p) => named_table(vec![("x", decimal_num(p[0])), ("y", decimal_num(p[1]))]),
+        Variant::Vec3(p) => named_table(vec![("x", decimal_num(p[0])), ("y", decimal_num(p[1])), ("z", decimal_num(p[2]))]),
         Variant::List(l) => list_table(l.iter().map(to_value).collect()),
     }
 }

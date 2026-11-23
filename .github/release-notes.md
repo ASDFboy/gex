@@ -2,6 +2,11 @@
 
 **Exporting for Linux:** put `gex-linux` in a `players` folder next to `GEX.exe`.
 
+New in 0.4.4 (checking today's changes together):
+- A short decimal read back from a property or a save is exact again: SET(obj, "speed", 0.3) then GET, or SAVE_DATA then LOAD_DATA, gives 0.3, so `== 0.3` holds (it used to come back as a near miss).
+- Clicking a Label2D (on_clicked, POINT_ON, and picking it in the editor) uses its real block: [color=...] tags take no room and wrap_width wraps it. The editor picks labels and sprites by layer, as they're drawn.
+- A new test runs objects being made and removed, a script reloading with a new event, SET, saves and a blueprint change together, so the lookups GEX now keeps between frames are checked against all of them.
+
 New in 0.4.3:
 - Saving writes only the files whose contents changed. A blueprint, script or project settings that weren't changed are left exactly as they are, even when they're laid out differently from how GEX writes them, so a project synced with GitHub (or shared with Work together) sends only what you really changed, and saving can't put an old copy back over a file another computer changed. Files are replaced in one step, so a sync never picks up a half-written file.
 

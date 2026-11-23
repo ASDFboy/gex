@@ -132,7 +132,7 @@ pub(crate) fn from_json(j: &serde_json::Value) -> Value {
     match j {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => num(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::Number(n) => crate::convert::decimal_num(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::String(s) => Value::text(s),
         serde_json::Value::Array(a) => list_table(a.iter().map(from_json).collect()),
         serde_json::Value::Object(o) => {

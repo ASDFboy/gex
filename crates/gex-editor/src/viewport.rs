@@ -312,22 +312,28 @@ fn pick(st: &EditorState, list: &RenderList, cams: &Cameras, screen: Vec2) -> Op
             return Some(u.object);
         }
     }
-    // Labels, then sprites from the top layer down, then point-like objects.
-    for l in list.labels.iter().rev() {
-        let lines = l.text.lines().count().max(1) as f32;
-        let longest = l.text.lines().map(|t| t.chars().count()).max().unwrap_or(0) as f32;
-        let size = Vec2::new(longest * l.size * 0.55, lines * l.size * 1.2);
+    // Sprites and labels from the top layer down (labels are drawn among the sprites), then
+    // point-like objects.
+    let label_hit = |l: &gex_core::render::Label| {
+        let size = gex_core::render::label_box(&l.text, l.size, l.wrap);
         let local = l.model.inverse().transform_point3(w.extend(0.0)).truncate() + l.anchor * size;
-        if local.x >= 0.0 && local.y >= 0.0 && local.x <= size.x && local.y <= size.y {
-            return Some(l.object);
-        }
-    }
+        local.x >= 0.0 && local.y >= 0.0 && local.x <= size.x && local.y <= size.y
+    };
+    let mut labels = list.labels.iter().rev().filter(|l| !l.text.is_empty()).peekable();
     for s in list.sprites.iter().rev() {
+        while let Some(l) = labels.next_if(|l| l.layer >= s.layer) {
+            if label_hit(l) {
+                return Some(l.object);
+            }
+        }
         let off = -s.pivot * s.size;
         let local = s.model.inverse().transform_point3(w.extend(0.0)).truncate() - off;
         if local.x >= 0.0 && local.y >= 0.0 && local.x <= s.size.x && local.y <= s.size.y {
             return Some(s.object);
         }
+    }
+    if let Some(l) = labels.find(|l| label_hit(l)) {
+        return Some(l.object);
     }
     for c in &list.colliders {
         let local = c.model.inverse().transform_point3(w.extend(0.0)).truncate();
